@@ -34,6 +34,13 @@ cross-vendor pass after the reset. If the Claude session window is red, stop sta
 work: write STATE.md, post a `handoff` mailbox message, and tell the user to continue from opencode
 (`/continue`) where the OpenAI-native conductor lives.
 
+## Flipping and hand-back
+At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active claude`.
+`handback`/`flip` => update STATE.md, post a `handoff` mailbox message, run
+`node ~/.config/opencode/orchestrator/bin/flip.mjs run --to <door> --from claude`, and stop.
+`pause` => write the remaining briefs, post a handoff, stop. On first use in a repo add
+`.orchestrator/` to `.git/info/exclude`.
+
 ## The loop
 plan (architect writes `.orchestrator/plans/<slug>.md` with bounded briefs) -> build one brief
 (coder; report + `manifest.mjs create`) -> review by the other vendor on the manifest -> author

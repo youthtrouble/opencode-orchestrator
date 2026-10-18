@@ -19,7 +19,7 @@ import { post } from "../lib/mailbox.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { opts, positional } = parseArgs(process.argv.slice(2), {
-  valueKeys: ["brief", "harness", "lane", "model", "effort", "sandbox", "permission-mode", "allowed-tools", "resume", "breadth", "cwd", "max-turns", "timeout-min", "log-path", "run-id"],
+  valueKeys: ["brief", "harness", "lane", "model", "effort", "sandbox", "permission-mode", "allowed-tools", "resume", "breadth", "cwd", "max-turns", "timeout-min", "log-path", "run-id", "agent"],
   flagKeys: ["detach", "force", "help"],
 });
 const cmd = positional[0];
@@ -57,7 +57,7 @@ const brief = path.resolve(root, opts.brief);
 if (!fs.existsSync(brief) || !brief.endsWith(".md")) { console.error("brief must be an existing .md file"); process.exit(2); }
 const lane = laneOf();
 const harness = opts.harness;
-if (!["codex", "claude"].includes(harness)) { console.error("harness must be codex or claude"); process.exit(2); }
+if (!["codex", "claude", "opencode"].includes(harness)) { console.error("harness must be codex, claude or opencode"); process.exit(2); }
 
 if (opts.detach) {
   fs.mkdirSync(logsDir, { recursive: true });
@@ -88,15 +88,17 @@ const preamble = [
   `Finally post a release message: node ~/.config/opencode/orchestrator/bin/mailbox.mjs post --from ${lane} --to coordinator --kind release --subject "${lane} released" --ref .orchestrator/reports/${lane}.md --ref .orchestrator/manifests/${lane}.json --body "<3-line summary>"`,
   `If blocked, post kind blocked instead and stop. Be honest: unrun checks are "not run", unmet criteria mean "partial". Never approve your own work, never bypass permissions, never touch another lane's files.`,
 ].join("\n");
-const prompt = `${preamble}\n\n--- BRIEF ---\n${fs.readFileSync(brief, "utf8")}`;
+const prompt = lane === "conductor" ? fs.readFileSync(brief, "utf8") : `${preamble}\n\n--- BRIEF ---\n${fs.readFileSync(brief, "utf8")}`;
 
-const bridge = path.join(HERE, harness === "codex" ? "codex-exec.mjs" : "claude-exec.mjs");
+const bridge = path.join(HERE, harness === "codex" ? "codex-exec.mjs" : harness === "opencode" ? "opencode-exec.mjs" : "claude-exec.mjs");
 const bridgeArgs = [bridge, "--cwd", root, "--timeout-min", opts["timeout-min"] || "120"];
 if (opts.model) bridgeArgs.push("--model", opts.model);
 if (opts.effort) bridgeArgs.push("--effort", opts.effort);
 if (opts.resume) bridgeArgs.push("--resume", opts.resume);
 if (opts.force) bridgeArgs.push("--force");
+if (opts.agent && harness !== "codex") bridgeArgs.push("--agent", opts.agent);
 if (harness === "codex") bridgeArgs.push("--sandbox", opts.sandbox || "workspace-write");
+else if (harness === "opencode") { /* opencode-exec takes agent/resume only */ }
 else { bridgeArgs.push("--permission-mode", opts["permission-mode"] || "auto"); if (opts["allowed-tools"]) bridgeArgs.push("--allowed-tools", opts["allowed-tools"]); if (opts["max-turns"]) bridgeArgs.push("--max-turns", opts["max-turns"]); }
 
 let child; let code = 1; let output = "";

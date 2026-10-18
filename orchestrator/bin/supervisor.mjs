@@ -124,6 +124,24 @@ function tickAll(state) {
     state.lanes[lane].next_check_at = iso(now + obs.interval);
     fs.appendFileSync(LOG, `${iso(now)} ${ev.id} ${state.events[ev.id].status} ${JSON.stringify(results)}\n`);
   }
+  // Conductor flip / hand-back: once a minute, when the project has a conductor lane or has flipped before.
+  const flipFile = path.join(dir, "flip.json");
+  const conductorLane = readJson(path.join(workersDir, "conductor.json"), null);
+  if ((conductorLane || fs.existsSync(flipFile)) && now - (state.last_flip_check || 0) >= 60) {
+    state.last_flip_check = now;
+    const flip = readJson(flipFile, null);
+    const activeDoor = conductorLane && !["finished", "failed", "interrupted", "deferred"].includes(conductorLane.status) && alive(conductorLane.pid)
+      ? (conductorLane.harness === "claude" ? "claude" : "opencode") : (flip?.to || (config.home || "opencode"));
+    const idle = !conductorLane || !alive(conductorLane.pid);
+    if (idle) {
+      const d = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "decide", "--active", activeDoor, "--cwd", root], { encoding: "utf8" });
+      let decision = null; try { decision = JSON.parse(d.stdout.trim().split("\n").pop()); } catch { /* usage unavailable */ }
+      if (decision && (decision.action === "flip" || decision.action === "handback")) {
+        const r = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "run", "--to", decision.to, "--from", activeDoor, "--reason", decision.reason, "--cwd", root], { encoding: "utf8" });
+        fs.appendFileSync(LOG, `${iso(now)} flip ${activeDoor}->${decision.to} ${decision.action}: ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);
+      }
+    }
+  }
   state.checked_at = iso(now);
   state.pid = process.pid;
   state.status = "running";

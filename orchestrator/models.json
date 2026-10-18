@@ -200,5 +200,12 @@
       "hard": "medium"
     },
     "native_redirect_max_size": "medium"
+  },
+  "conductor": {
+    "$comment": "Which front door owns a project by default and how hand-back works. Flips happen only when the active conductor's own vendor is red (forced) or, for the away conductor, at a brief boundary once the home vendor is stably green again.",
+    "home": "opencode",
+    "return_policy": "boundary",
+    "green_grace_minutes": 10,
+    "flip_cooldown_minutes": 10
   }
 }

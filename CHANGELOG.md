@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-10-18
+
+- Conductor flip: `orchestrator/bin/flip.mjs` (decide/run/status) with a tested policy
+  (`lib/flip.mjs`): forced flip when the active conductor's vendor is red, hand-back to the home
+  door at brief boundaries once it is stably green, cooldown, pause when both are red.
+- Plugin flips the opencode conductor to the Claude door on usage-limit errors; the supervisor
+  evaluates flips once a minute when a project has a conductor lane or has flipped before.
+- `opencode-exec.mjs` bridge and `worker.mjs --harness opencode --agent` so either conductor can
+  run headless as the `conductor` worker lane.
+- `.orchestrator/` is added to `.git/info/exclude` on first flip/use.
+
 ## 0.2.0 — 2026-10-18
 
 - Effort policy by task size (`effort_policy` in `orchestrator/models.json`); `orch_delegate` takes

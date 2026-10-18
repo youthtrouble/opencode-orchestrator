@@ -50,6 +50,19 @@ Escalate after a failure or a review finding, not pre-emptively. Native subagent
 model's default effort; large/hard work is routed through the CLI bridges so the policy effort
 applies. Review your own effort choices in `/retro`.
 
+## Two front doors and flipping
+
+The project is driven by one conductor at a time: the opencode conductor (OpenAI-native) or the
+Claude Code conductor (`claude --agent conductor`, Anthropic-native). Both use the same
+`.orchestrator/` state. `models.json` names the home door (default opencode).
+- At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active <door>`.
+  `flip`/`handback` => update STATE.md, post a `handoff`, run `flip.mjs run --to <door> --from <you>`,
+  and stop. `stay` => continue. `pause` => write the remaining briefs and stop.
+- A conductor whose own provider dies is flipped automatically (plugin hook or supervisor); the
+  away conductor hands back at the first boundary after the home vendor is stably green.
+- First use in a repo: `.orchestrator/` is added to `.git/info/exclude` (`flip.mjs run` does this;
+  do it yourself otherwise). Commit `plans/` or `reviews/` into the repo only deliberately.
+
 ## Budget rules
 
 - Red window: do not start work on that vendor; route to the other, or schedule after reset. Amber:

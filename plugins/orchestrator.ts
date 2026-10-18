@@ -292,8 +292,33 @@ export default {
         /* usage unavailable: do not block */
       }
     });
+    // When the conductor's own provider is exhausted, flip the project to the Claude door (headless worker lane)
+    // instead of retrying into a red window. Cooldown and the lane lock prevent double flips.
+    const LIMIT_RE = /usage_limit|usage limit|rate_limit|subscription_sharing/i;
+    let lastFlipAttempt = 0;
+    async function flipToClaude(cwd: string, reason: string) {
+      if (Date.now() - lastFlipAttempt < 10 * 60 * 1000) return;
+      lastFlipAttempt = Date.now();
+      try {
+        const d = await run(NODE, [path.join(BIN, "flip.mjs"), "decide", "--active", "opencode", "--cwd", cwd], { cwd, timeoutMs: 60000 });
+        const decision = lastJson(d.stdout) as any;
+        if (decision?.action === "flip") await run(NODE, [path.join(BIN, "flip.mjs"), "run", "--to", "claude", "--from", "opencode", "--reason", reason, "--cwd", cwd], { cwd, timeoutMs: 60000 });
+      } catch { /* best effort */ }
+    }
+    await ctx.session.hook("retry", async (e: any) => {
+      const msg = String(e.error?.message || e.error?.name || "");
+      if (!LIMIT_RE.test(msg)) return;
+      refreshSoon();
+      if (String(e.agent) === "conductor") {
+        e.decision = { retry: false };
+        await flipToClaude(ctx.location?.directory || process.cwd(), `opencode conductor hit a usage limit: ${msg.slice(0, 80)}`);
+      }
+    });
     await ctx.tool.hook("execute.after", async (e: any) => {
-      if (e.status === "error" && /usage_limit|rate_limit|subscription_sharing/i.test(String(e.error?.message || e.error || ""))) refreshSoon();
+      if (e.status === "error" && LIMIT_RE.test(String(e.error?.message || e.error || ""))) {
+        refreshSoon();
+        if (e.tool === "subagent" && String(e.agent) === "conductor") await flipToClaude(ctx.location?.directory || process.cwd(), "native subagent hit the OpenAI usage limit");
+      }
     });
 
     // ---- 3. Keep native agent models in sync with models.json ----------------------------

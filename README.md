@@ -230,6 +230,23 @@ Relevant scripts include `usage`, `claude-exec`, `codex-exec`, `worker`, `superv
 `manifest` and `doctor`; read their source headers for arguments. The presence of a tool does not
 mean its external CLI path has passed end-to-end verification.
 
+## Flipping between the two doors
+
+One conductor drives a project at a time. `models.json` -> `conductor.home` names the default door
+(opencode). Rules:
+
+| Situation at a brief boundary | Active conductor |
+|---|---|
+| its own vendor is red | flips to the other door (forced; also triggered automatically when its model dies on a usage-limit error) |
+| it is the away door and home is stably green (green for `green_grace_minutes` after the reset) | hands back home |
+| it is the away door, home still red | keeps going |
+| both red | writes the remaining briefs and pauses; the supervisor re-dispatches after the first reset |
+
+`flip.mjs run` posts a `handoff`, records `.orchestrator/flip.json`, and starts the other door's
+conductor headless as worker lane `conductor` (lane lock = single driver). A headless conductor
+cannot ask you questions; they land in the mailbox as `question` messages. Flips never happen
+mid-brief: a slice finishes where it started, and hand-back is delayed by at most one brief.
+
 ## Background workers and supervisor
 
 Write a bounded project brief first. From the conductor, `worker_start` accepts `brief`, `harness`
