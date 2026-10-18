@@ -67,7 +67,15 @@ if (cmd === "run") {
   if (opts.resume) args.push("--resume", opts.resume);
   if (opts.force) args.push("--force");
   const r = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
-  console.log(JSON.stringify({ flipped: r.status === 0, to, from, launcher: (r.stdout || r.stderr || "").trim().slice(0, 400) }));
+  const out = (r.stdout || r.stderr || "").trim();
+  if (r.status !== 0 && /lane locked/.test(out)) {
+    // The caller is usually the active conductor itself, still holding the lane lock. Record a pending
+    // launch; the supervisor starts the target door as soon as the lock is released.
+    fs.writeFileSync(FLIP, JSON.stringify({ ...record, pending_launch: { to, from, reason: opts.reason || null, resume: opts.resume || null, at: new Date().toISOString() } }, null, 2) + "\n");
+    console.log(JSON.stringify({ flipped: false, pending: true, to, from, note: "lane locked by the current conductor; supervisor will launch after release" }));
+    process.exit(0);
+  }
+  console.log(JSON.stringify({ flipped: r.status === 0, to, from, launcher: out.slice(0, 400) }));
   process.exit(r.status === 0 ? 0 : 1);
 }
 console.error("commands: decide | run | pause | status"); process.exit(2);

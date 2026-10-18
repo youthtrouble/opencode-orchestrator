@@ -140,7 +140,16 @@ function tickAll(state) {
     const activeDoor = conductorLane && !["finished", "failed", "interrupted", "deferred"].includes(conductorLane.status) && alive(conductorLane.pid)
       ? (conductorLane.harness === "claude" ? "claude" : "opencode") : (flip?.to || (config.home || "opencode"));
     const idle = !conductorLane || !alive(conductorLane.pid);
-    if (idle) {
+    const lockFree = !fs.existsSync(path.join(workersDir, "conductor.lock"));
+    if (idle && lockFree && flip?.pending_launch) {
+      // A hand-off recorded while the previous conductor still held the lane: launch the target now.
+      const pl = flip.pending_launch;
+      const args = [path.join(HERE, "flip.mjs"), "run", "--to", pl.to, "--from", pl.from || activeDoor, "--reason", pl.reason || "pending launch", "--cwd", root];
+      if (pl.resume) args.push("--resume", pl.resume);
+      const r = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+      fs.appendFileSync(LOG, `${iso(now)} pending launch ${pl.from}->${pl.to}: ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);
+      state.last_relaunch_at = now;
+    } else if (idle) {
       const d = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "decide", "--active", activeDoor, "--cwd", root], { encoding: "utf8" });
       let decision = null; try { decision = JSON.parse(d.stdout.trim().split("\n").pop()); } catch { /* usage unavailable */ }
       // Relaunch rules for an idle conductor: flip/handback launch the target door; a paused project
