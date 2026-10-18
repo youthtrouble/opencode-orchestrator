@@ -31,10 +31,13 @@ export function vendorPostures(usage, registry, now = Date.now()) {
     const weekly = postureFromPct(c.weekly.pct, th);
     const fableWin = c.weekly_by_model?.fable;
     const fable = fableWin ? postureFromPct(fableWin.pct, th) : "unknown";
+    // 5-hour window is primary; weekly only blocks when red (long-horizon signal, not a steering one).
+    const weeklyBlock = weekly === "red" ? "red" : "green";
     out.anthropic = {
       available: true,
-      overall: worst(session, weekly === "unknown" ? "green" : weekly),
-      frontier: worst(session, weekly === "unknown" ? "green" : weekly, fable === "unknown" ? "green" : fable),
+      overall: worst(session, weeklyBlock),
+      frontier: worst(session, weeklyBlock, fable === "unknown" ? "green" : fable),
+      headroom: c.session.pct === null || c.session.pct === undefined ? null : 100 - c.session.pct,
       windows: { session, weekly, fable },
       resets_soon: sessionSoon,
       detail: c,
@@ -48,7 +51,8 @@ export function vendorPostures(usage, registry, now = Date.now()) {
     const fiveSoon = (minutesUntil(x.five_hour.resets_at, now) ?? 1e9) <= th.soon_minutes;
     const five = postureFromPct(x.five_hour.pct, th, { locked: Boolean(x.rate_limit_reached) });
     const weekly = postureFromPct(x.weekly.pct, th);
-    out.openai = { available: true, overall: worst(five, weekly), frontier: worst(five, weekly), windows: { five_hour: five, weekly }, resets_soon: fiveSoon, detail: x };
+    const weeklyBlockO = weekly === "red" ? "red" : "green";
+    out.openai = { available: true, overall: worst(five, weeklyBlockO), frontier: worst(five, weeklyBlockO), headroom: x.five_hour.pct === null || x.five_hour.pct === undefined ? null : 100 - x.five_hour.pct, windows: { five_hour: five, weekly }, resets_soon: fiveSoon, detail: x };
   } else {
     out.openai = { available: false, overall: "unknown", frontier: "unknown", windows: {}, detail: x || null };
   }
@@ -77,30 +81,43 @@ export function resolveRoles(usage, registry, { now = Date.now(), channels = {} 
   const roles = {};
   const reasons = [];
 
-  const pickFrom = (prefs, { coderVendor } = {}) => {
+  const margin = registry.thresholds?.balance_margin ?? 15;
+  const BALANCED = new Set(["coder", "verifier", "researcher", "explorer", "utility"]);
+  const pickFrom = (prefs, { coderVendor, role } = {}) => {
+    const candidates = [];
     for (const pref of prefs) {
       let [vendor, tier] = pref.split(".");
       if (vendor === "cross") vendor = coderVendor === "anthropic" ? "openai" : "anthropic";
       if (vendor === "same") vendor = coderVendor;
       const isFrontier = tier === "frontier";
-      if (usable(postures, vendor, isFrontier)) return tierEntry(registry, vendor, tier);
+      if (usable(postures, vendor, isFrontier)) candidates.push(tierEntry(registry, vendor, tier));
     }
-    return null;
+    if (!candidates.length) return null;
+    // Balance equivalent tiers across vendors by 5-hour headroom (the vendor with clearly more room wins).
+    if (BALANCED.has(role) && candidates.length > 1) {
+      const first = candidates[0];
+      const alt = candidates.find((c) => c.vendor !== first.vendor && c.tier === first.tier) || candidates.find((c) => c.vendor !== first.vendor);
+      const h = (v) => postures[v]?.headroom ?? -1;
+      if (alt && h(alt.vendor) - h(first.vendor) > margin) return { ...alt, balanced: true };
+    }
+    return candidates[0];
   };
 
   // planner and coder first; reviewer depends on coder's vendor (cross-vendor review).
-  roles.planner = pickFrom(registry.roles.planner.prefer);
-  roles.coder = pickFrom(registry.roles.coder.prefer);
+  roles.planner = pickFrom(registry.roles.planner.prefer, { role: "planner" });
+  roles.coder = pickFrom(registry.roles.coder.prefer, { role: "coder" });
   const coderVendor = roles.coder?.vendor || "anthropic";
-  roles.reviewer = pickFrom(registry.roles.reviewer.prefer, { coderVendor });
+  roles.reviewer = pickFrom(registry.roles.reviewer.prefer, { coderVendor, role: "reviewer" });
   if (roles.reviewer) roles.reviewer.cross_vendor = roles.reviewer.vendor !== coderVendor;
-  for (const r of ["verifier", "researcher", "explorer", "utility"]) roles[r] = pickFrom(registry.roles[r].prefer);
+  for (const r of ["verifier", "researcher", "explorer", "utility"]) roles[r] = pickFrom(registry.roles[r].prefer, { role: r });
 
   // Explain the interesting decisions.
   const a = postures.anthropic, o = postures.openai;
   if (a.available && a.windows.fable === "red") reasons.push("Fable weekly cap is red: planning routed away from Fable until it resets.");
   if (a.available && a.windows.fable === "amber") reasons.push("Fable weekly cap is amber: routine planning goes to Opus 5.5; only size=hard delegations use Fable.");
   if (a.available && a.overall === "red") reasons.push("Claude session/weekly is red: Anthropic roles failed over to OpenAI.");
+  if (roles.coder?.balanced) reasons.push(`Coder balanced to ${roles.coder.vendor}: it has more 5-hour headroom (Claude ${100 - (a.headroom ?? 0)}% vs Codex ${100 - (o.headroom ?? 0)}% used).`);
+  if ((a.available && a.windows.weekly === "amber") || (o.available && o.windows.weekly === "amber")) reasons.push("A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.");
   if (o.available && o.overall === "red") reasons.push("Codex window is red: OpenAI roles failed over to Anthropic.");
   if (!a.available) reasons.push("Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.");
   if (!o.available) reasons.push("Codex usage unknown (app-server unreachable or not logged in): treating OpenAI as unavailable for automatic routing.");
@@ -130,7 +147,7 @@ export function summarizeForPrompt(resolved, usage) {
   else lines.push(`Codex usage: unavailable (${x?.error || "no data"}).`);
   lines.push("Routing now:");
   for (const [role, r] of Object.entries(resolved.roles)) {
-    lines.push(r ? `  ${role}: ${r.model}${r.variant ? "#" + r.variant : ""}${r.effort ? " (effort " + r.effort + ")" : ""} via ${r.via}${r.cross_vendor === false ? " [same-vendor review: cross vendor unavailable]" : ""}` : `  ${role}: PAUSED`);
+    lines.push(r ? `  ${role}: ${r.model}${r.variant ? "#" + r.variant : ""}${r.effort ? " (effort " + r.effort + ")" : ""} via ${r.via}${r.cross_vendor === false ? " [same-vendor review: cross vendor unavailable]" : ""}${r.balanced ? " [balanced by headroom]" : ""}` : `  ${role}: PAUSED`);
   }
   for (const reason of resolved.reasons) lines.push(`  note: ${reason}`);
   return lines.join("\n");

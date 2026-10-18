@@ -81,8 +81,11 @@ At a HUMAN gate while headless (push, deploy, spend, product question): post the
 
 ## Budget rules
 
-- Red window: do not start work on that vendor; route to the other, or schedule after reset. Amber:
-  avoid frontier tiers and big batches. Green: normal.
+- The 5-hour window drives routing. Red 5-hour: do not start work on that vendor; route to the other
+  or schedule after reset. Amber 5-hour: avoid frontier tiers and big batches. Weekly caps are shown for
+  planning and block a vendor only when red.
+- Coding and verification are balanced across vendors by 5-hour headroom: Opus 5.5 and GPT-6.1 Sol are
+  both first-class coders; the one with clearly more room gets the slice. Follow the routing table.
 - Fable has its own weekly cap: spend it on genuinely hard planning and root-cause work, not routine plans.
 - Prefer finishing a slice over starting a new one when a reset is near.
 - If your OWN model returns a usage-limit error, stop starting new work: write `.orchestrator/STATE.md`

@@ -18,10 +18,10 @@ test("green everywhere: Fable plans, Opus codes, OpenAI reviews (cross-vendor)",
   assert.equal(r.roles.reviewer.via, "opencode");
 });
 
-test("Fable weekly red: planning leaves Fable but Opus still codes", () => {
+test("Fable weekly red: planning leaves Fable; coding follows 5-hour headroom", () => {
   const r = resolveRoles({ claude: claude(40, 90), codex: codex(20, 5) }, registry);
   assert.equal(r.roles.planner.model, "anthropic/claude-opus-5-5");
-  assert.equal(r.roles.coder.model, "anthropic/claude-opus-5-5");
+  assert.equal(r.roles.coder.vendor, "openai"); // 80 vs 60 headroom
   assert.match(r.reasons.join(" "), /Fable weekly cap is red/);
 });
 
@@ -70,4 +70,19 @@ test("frontier tiers need a GREEN frontier posture: amber Fable routes routine p
   const r = resolveRoles({ claude: claude(30, 70), codex: codex(10, 5) }, registry);
   assert.equal(r.roles.planner.model, "anthropic/claude-opus-5-5");
   assert.match(r.reasons.join(" "), /Fable weekly cap is amber/);
+});
+
+test("5-hour window steers; an amber weekly does not block or demote a vendor", () => {
+  const x = codex(10, 70); // weekly amber
+  const r = resolveRoles({ claude: claude(50, 10), codex: x }, registry, { channels: { openai: true } });
+  assert.equal(r.roles.coder.vendor, "openai");
+  assert.equal(r.postures.openai.overall, "green");
+});
+test("coder is balanced to the vendor with clearly more 5-hour headroom", () => {
+  assert.equal(resolveRoles({ claude: claude(60, 10), codex: codex(10, 10) }, registry).roles.coder.vendor, "openai");
+  assert.equal(resolveRoles({ claude: claude(20, 10), codex: codex(25, 10) }, registry).roles.coder.vendor, "anthropic"); // within margin: registry order
+  assert.equal(resolveRoles({ claude: claude(10, 10), codex: codex(70, 10) }, registry).roles.coder.vendor, "anthropic");
+});
+test("a red weekly still blocks the vendor", () => {
+  assert.equal(resolveRoles({ claude: claude(10, 10), codex: codex(5, 95) }, registry).roles.reviewer.vendor, "anthropic");
 });
