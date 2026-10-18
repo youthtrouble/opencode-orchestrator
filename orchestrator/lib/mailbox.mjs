@@ -26,7 +26,18 @@ export function post(projectRoot, { from, to = "*", kind = "note", subject, body
   return msg;
 }
 
+// Accepts a full id or any unique prefix (list prints 8-char prefixes).
+export function resolveId(projectRoot, idOrPrefix) {
+  const msgs = readJsonl(path.join(mailboxDir(projectRoot), "messages.jsonl"));
+  const exact = msgs.find((m) => m.id === idOrPrefix);
+  if (exact) return exact.id;
+  const matches = msgs.filter((m) => m.id.startsWith(idOrPrefix));
+  if (matches.length === 1) return matches[0].id;
+  throw new Error(matches.length ? `ambiguous message id prefix ${idOrPrefix}` : `no message with id ${idOrPrefix}`);
+}
+
 export function ack(projectRoot, { id, by, note = "" }) {
+  id = resolveId(projectRoot, id);
   const entry = { id, by, at: new Date().toISOString(), note };
   appendJsonl(path.join(mailboxDir(projectRoot), "acks.jsonl"), entry);
   return entry;

@@ -68,7 +68,7 @@ rl.on("line", (line) => {
   } else if (ev.type === "result") {
     result.ok = !ev.is_error; result.final_message = ev.result || ""; result.usage = ev.usage || null; result.model_usage = ev.modelUsage || null;
     result.cost_usd = ev.total_cost_usd ?? null; result.num_turns = ev.num_turns ?? null; result.permission_denials = ev.permission_denials || []; result.structured_output = ev.structured_output ?? null;
-    if (ev.is_error) result.errors.push(ev.subtype || "error");
+    if (ev.is_error) result.errors.push(ev.subtype && ev.subtype !== "success" ? ev.subtype : (ev.result || "error").slice(0, 200));
   }
 });
 const code = await new Promise((resolve) => child.on("close", resolve));
