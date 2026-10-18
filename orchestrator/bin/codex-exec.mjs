@@ -1,0 +1,86 @@
+#!/usr/bin/env node
+// Delegate a bounded task to the Codex CLI on the ChatGPT subscription and get a structured result.
+//
+//   codex-exec.mjs [--model gpt-6.1-sol] [--effort low|medium|high|xhigh|max|ultra]
+//                  [--sandbox read-only|workspace-write|danger-full-access] [--cwd DIR]
+//                  [--resume THREAD_ID] [--schema FILE] [--timeout-min 60] [--force] [--quiet]
+//                  [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+//
+// Prints one JSON object on stdout: { ok, thread_id, final_message, usage, files_changed, commands,
+// duration_ms, record } and streams progress lines to stderr. Exit codes: 0 ok, 1 turn failed,
+// 75 budget gate refused, 2 usage error.
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import readline from "node:readline";
+import { parseArgs, readPrompt, writeRunRecord } from "../lib/run-record.mjs";
+import { budgetGate } from "../lib/budget.mjs";
+import { getUsage } from "../lib/usage.mjs";
+
+const { opts, positional } = parseArgs(process.argv.slice(2), {
+  valueKeys: ["model", "effort", "sandbox", "cwd", "resume", "schema", "timeout-min", "prompt", "prompt-file", "add-dir"],
+  flagKeys: ["force", "quiet", "ephemeral", "help"],
+});
+if (opts.help) { console.log(fs.readFileSync(new URL(import.meta.url)).toString().split("\n").slice(1, 12).join("\n")); process.exit(0); }
+
+let prompt;
+try { prompt = readPrompt(opts, positional); } catch (e) { console.error(e.message); process.exit(2); }
+const cwd = path.resolve(opts.cwd || process.cwd());
+const model = opts.model || "gpt-6.1-sol";
+const effort = opts.effort || "high";
+const sandbox = opts.sandbox || "workspace-write";
+const timeoutMs = Number(opts["timeout-min"] || 60) * 60 * 1000;
+const log = (s) => { if (!opts.quiet) console.error(`[codex] ${s}`); };
+
+const gate = await budgetGate("openai", { force: Boolean(opts.force), frontier: model.includes("astra") });
+if (!gate.allowed) { console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
+
+const args = ["exec", "--json", "--skip-git-repo-check", "-C", cwd, "-s", sandbox, "-c", `model_reasoning_effort="${effort}"`];
+if (opts.resume) args.push("resume", opts.resume); else args.push("-m", model);
+if (opts.schema) args.push("--output-schema", path.resolve(opts.schema));
+if (opts["add-dir"]) args.push("--add-dir", path.resolve(opts["add-dir"]));
+if (opts.ephemeral) args.push("--ephemeral");
+if (sandbox === "workspace-write") args.push("--approve-for-me");
+args.push("-");
+
+const started = Date.now();
+const startedIso = new Date(started).toISOString();
+log(`start model=${opts.resume ? "(resumed)" : model} effort=${effort} sandbox=${sandbox} cwd=${cwd}`);
+const child = spawn("codex", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+child.stdin.end(prompt);
+let stderrBuf = "";
+child.stderr.on("data", (c) => { stderrBuf += c; });
+const timer = setTimeout(() => { log("timeout; killing"); child.kill("SIGTERM"); }, timeoutMs);
+
+const result = { ok: false, harness: "codex", thread_id: opts.resume || null, model, effort, sandbox, cwd, started_at: startedIso, final_message: "", usage: null, files_changed: [], commands: [], errors: [] };
+const rl = readline.createInterface({ input: child.stdout });
+rl.on("line", (line) => {
+  let ev; try { ev = JSON.parse(line); } catch { return; }
+  switch (ev.type) {
+    case "thread.started": result.thread_id = ev.thread_id; log(`thread ${ev.thread_id}`); break;
+    case "item.completed": {
+      const it = ev.item || {};
+      if (it.type === "agent_message") { result.final_message = it.text || result.final_message; log(`message: ${(it.text || "").slice(0, 160).replace(/\n/g, " ")}`); }
+      else if (it.type === "command_execution") { result.commands.push({ command: it.command, exit_code: it.exit_code }); log(`ran: ${(it.command || "").slice(0, 120)} -> ${it.exit_code}`); }
+      else if (it.type === "file_change") { for (const c of it.changes || []) { result.files_changed.push({ path: c.path, kind: c.kind }); } log(`files: ${(it.changes || []).map((c) => c.path).join(", ")}`); }
+      else if (it.type === "error") { result.errors.push(it.message); log(`error: ${it.message}`); }
+      else if (it.type === "reasoning") { log(`thinking: ${(it.text || "").slice(0, 100).replace(/\n/g, " ")}`); }
+      break;
+    }
+    case "turn.completed": result.usage = ev.usage || null; result.ok = true; break;
+    case "turn.failed": result.errors.push(ev.error?.message || JSON.stringify(ev.error || ev)); result.ok = false; break;
+    default: break;
+  }
+});
+
+const code = await new Promise((resolve) => child.on("close", resolve));
+clearTimeout(timer);
+result.exit_code = code;
+result.duration_ms = Date.now() - started;
+if (code !== 0 && result.errors.length === 0) result.errors.push(`codex exited ${code}: ${stderrBuf.trim().split("\n").slice(-3).join(" | ")}`);
+if (code !== 0) result.ok = false;
+result.record = writeRunRecord(cwd, { ...result, prompt_sha256: (await import("node:crypto")).createHash("sha256").update(prompt).digest("hex"), prompt_head: prompt.slice(0, 400) });
+getUsage({ refresh: true }).catch(() => {});
+log(`done ok=${result.ok} in ${Math.round(result.duration_ms / 1000)}s; record ${result.record}`);
+console.log(JSON.stringify(result));
+process.exit(result.ok ? 0 : 1);

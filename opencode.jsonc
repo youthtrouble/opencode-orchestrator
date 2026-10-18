@@ -1,0 +1,43 @@
+{
+  // Global opencode config: the orchestrator layer. See ~/.config/opencode/orchestrator/README.md
+  "$schema": "https://opencode.ai/config.json",
+
+  // Native default: OpenAI via "Sign in with ChatGPT" (opencode auth login openai --method chatgpt-token-sharing).
+  // Anthropic models are NOT native here (Anthropic blocks subscription OAuth outside Claude Code);
+  // they are reached through the orch_delegate tool -> Claude subscription via Claude Code.
+  "model": "openai/gpt-6.1-sol#high",
+  "default_agent": "conductor",
+  "update": "notify",
+  "share": "disabled",
+  "snapshots": true,
+  "compaction": { "auto": true, "keep": { "tokens": 20000 } },
+
+  // Cheap models for housekeeping; built-in agents retargeted. models.json is the source of truth
+  // (the plugin re-applies it at startup), these are the static fallbacks if the plugin is off.
+  "agents": {
+    "title":      { "model": "openai/gpt-6-luna" },
+    "summary":    { "model": "openai/gpt-6-luna" },
+    "compaction": { "model": "openai/gpt-6-luna" },
+    "explore":    { "model": "openai/gpt-6-luna" },
+    "general":    { "model": "openai/gpt-6.1-sol#medium" },
+    "plan":       { "model": "openai/gpt-6.1-sol#xhigh" },
+    "build":      { "model": "openai/gpt-6.1-sol#high" }
+  },
+
+  // Guard rails that apply to every agent (ordered; later rules win).
+  "permissions": [
+    { "action": "shell", "resource": "git push*",              "effect": "ask" },
+    { "action": "shell", "resource": "git push --force*",      "effect": "deny" },
+    { "action": "shell", "resource": "rm -rf *",               "effect": "ask" },
+    { "action": "shell", "resource": "sudo *",                 "effect": "ask" },
+    { "action": "shell", "resource": "*deploy*",               "effect": "ask" },
+    { "action": "shell", "resource": "npm publish*",           "effect": "ask" },
+    { "action": "shell", "resource": "terraform apply*",       "effect": "ask" },
+    { "action": "shell", "resource": "kubectl apply*",         "effect": "ask" },
+    { "action": "read",  "resource": "*.env",                  "effect": "ask" },
+    { "action": "read",  "resource": "*.env.*",                "effect": "ask" },
+    { "action": "read",  "resource": "*.env.example",          "effect": "allow" }
+  ],
+
+  "plugins": ["*"]  // plugins/*.ts in this directory are auto-discovered
+}
