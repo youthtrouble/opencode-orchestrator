@@ -13,10 +13,14 @@ import (
 // it exists for the parity harness only.
 var commands = map[string]cli.Command{
 	"version":   cli.Version,
+	"usage":     cli.Usage,
+	"routing":   cli.Routing,
+	"budget":    cli.Budget,
+	"effort":    cli.Effort,
 	"json-echo": cli.JSONEcho,
 }
 
-const usage = "usage: orch <command> [args]\ncommands: version"
+const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort"
 
 func main() {
 	os.Exit(run(os.Args[1:], cli.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}))

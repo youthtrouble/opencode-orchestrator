@@ -4,8 +4,18 @@
 port is incremental (plan: `.orchestrator/plans/go-port.md`); until it is complete the JS runtime
 stays the default and both share the same `.orchestrator/` state.
 
-Implemented so far: `orch version`. The hidden `orch json-echo [--indent N]` exists for the
-parity harness.
+Implemented so far (the rest of `bin/*.mjs` is still JS-only):
+
+| Command | Replaces | Behaviour |
+|---|---|---|
+| `orch version` | — | Release number plus VCS revision. |
+| `orch usage [--refresh] [--json]` | `bin/usage.mjs` | Byte-identical output; reads and writes the same usage cache, so either runtime can read what the other wrote. A failed vendor reading (a 429 from the Claude usage endpoint, a codex error) is replaced by the last good cached one, marked `last_good_at` (when it was read) and `read_error`, if the cache was written less than 30 minutes ago. The window rolls: each failed refresh rewrites the cache, so refreshes that keep failing less than 30 minutes apart keep a reading of any age (as in the JS); check `last_good_at`. |
+| `orch routing [--refresh \| --cached] [--json]` | `getRouting()` in `lib/usage.mjs` | The routing prompt text, or `{usage, registry, channels, resolved, prompt}` with `--json`. `--cached` never collects and exits 3 when there is no cache; bad flags exit 2. |
+| `orch budget gate --vendor anthropic\|openai [--force] [--frontier]` | `budgetGate()` in `lib/budget.mjs` | Compact `{allowed, level, resets_at, note}`; exit 0 whether or not the work is allowed, 2 on bad flags or an unknown vendor. |
+| `orch effort --role ROLE [--size SIZE]` | `effortFor()` in `lib/routing.mjs` | The effort-policy value as plain text, or `null`; exit 2 on bad flags or without `--role`. |
+
+The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
+`orch` yet.
 
 ## Build
 
@@ -37,7 +47,8 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 ```sh
 cd go
 go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
-./parity/run.sh --only json   # one parity group; ./parity/run.sh runs them all
+go vet -tags parity ./parity
+./parity/run.sh --only json,usage   # chosen parity groups; ./parity/run.sh runs them all
 ```
 
 `.github/workflows/go.yml` runs build, vet, gofmt, tests and JSON parity on macOS and Linux
@@ -49,12 +60,22 @@ when it is available; fixed byte expectations run even without Node.
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
 project directory containing `.git/`, with an environment of only `HOME`, `PATH`, `ORCH_HOME` and
-`ORCH_REGISTRY`. `PATH` is `parity/fakes` (stand-ins for `claude`, `codex`, `opencode` that fail
-unless a case scripts them), then the directories of `node` and `sqlite3`. Exit codes, stdout,
+`ORCH_REGISTRY`. `PATH` is `parity/fakes` (stand-ins for `claude`, `codex`, `opencode` and `security` that
+fail unless a case scripts them, so no case reads the real keychain or calls a real endpoint), then the directories of `node` and `sqlite3`. Exit codes, stdout,
 stderr and every file under the project `.orchestrator/` and the HOME state dir must match.
 
-Groups: `json` (JSON.stringify compatibility over `testdata/json/*.json` and the checkout's
-`models.json`, compact and indent 2).
+Groups:
+
+- `json`: JSON.stringify compatibility over `testdata/json/*.json` and the checkout's
+  `models.json`, compact and indent 2.
+- `usage`: `orch usage` against `bin/usage.mjs` over the cache fixtures in
+  `testdata/usage/parity-caches.json` and over channel sources (sqlite, `opencode auth list`,
+  `auth.json`); re-collection through the scripted codex app-server fake, including the
+  last-good cases; the cache round trip in both directions; and `routing`, `budget gate` and
+  `effort` against the JS functions they replace. Only `generated_at` is normalised, and only
+  when a collection happened.
+
+`ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 
 ## JSON compatibility
 
@@ -71,9 +92,28 @@ its malformed-sequence grouping is not a claim of Node Buffer decoding parity. `
 `MarshalIndent` reject invalid UTF-8 Go strings, object keys and indentation with
 `jsjson.ErrInvalidUTF8`, returning no JSON bytes. Decode raw text at its input boundary first.
 
+## Usage feeds
+
+`internal/usage` mirrors `lib/usage.mjs`, `lib/claude-usage.mjs` and `lib/codex-appserver.mjs`.
+`internal/budget` mirrors `lib/budget.mjs`. External programs are found on `PATH`, as in the JS:
+`security` (macOS keychain, 30 s timeout), `sqlite3` and `opencode` (channel detection), and
+`codex app-server` (JSON-RPC, 20 s). The Claude usage request sends Node's fetch headers. Known
+JS defects are mirrored on purpose. They are listed in the S3 report, together with the
+malformed-input cases that are not mirrored.
+
+Two lifecycle details deliberately differ from the JS without changing any output or cache byte.
+A `codex app-server` child that ignores SIGTERM is killed after a 1 s grace and reaped before
+`orch` returns; the JS only sends SIGTERM. The cache is written through a temp file unique to the
+writer (`usage.json.<pid>.<n>.tmp`, then renamed) rather than the JS's shared `usage.json.tmp`.
+Concurrent `orch` refreshes therefore cannot clobber each other's or the JS's temp file. Two JS
+writers still can.
+
 ## Fixture provenance
 
 `testdata/json/*.golden` are generated by `node testdata/json/gen.mjs` (last run with Node
 v26.5.1) from the `*.json` inputs beside them: `<name>.compact.golden` is
 `JSON.stringify(JSON.parse(input))` and `<name>.indent2.golden` the same with indent 2, without a
 trailing newline. Regenerate after adding an input and commit inputs and goldens together.
+
+`testdata/usage/*.golden` are generated by `node testdata/usage/gen.mjs` through the JS
+normalizers, from the redacted feed recordings beside them (no tokens, no account identifiers).

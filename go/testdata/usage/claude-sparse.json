@@ -1,0 +1,10 @@
+{
+  "five_hour": { "utilization": 99, "resets_at": "2026-10-18T23:00:00+00:00" },
+  "limits": [
+    { "kind": "session", "group": "session", "percent": null, "resets_at": null },
+    { "kind": "weekly", "group": "weekly", "percent": 35, "severity": "normal", "resets_at": "2026-10-24T00:00:00+00:00", "scope": null },
+    { "kind": "weekly_scoped", "group": "weekly", "percent": 12, "scope": { "model": { "id": "claude-OPUS", "display_name": null } } },
+    { "kind": "weekly_scoped", "group": "weekly", "percent": 3, "scope": { "model": {} }, "is_active": false },
+    { "kind": "weekly_scoped", "group": "weekly", "percent": 4, "scope": { "surface": "web" } }
+  ]
+}

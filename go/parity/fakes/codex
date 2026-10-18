@@ -1,5 +1,21 @@
 #!/bin/sh
 # Parity fake. It sits first on PATH so no parity case can reach the real CLI. A case that
 # needs this CLI must script it; reaching this unscripted fake is a test failure.
+#
+# Scripted `codex app-server`: when $HOME/fake-codex/ exists, every stdin line is appended to
+# $HOME/fake-log/codex-app-server.jsonl and the n-th line is answered with the contents of
+# $HOME/fake-codex/<n>, if present. Shell builtins only: PATH holds no coreutils.
+script="$HOME/fake-codex"
+if [ "$1" = app-server ] && [ -d "$script" ]; then
+  n=0
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$HOME/fake-log/codex-app-server.jsonl"
+    n=$((n + 1))
+    if [ -f "$script/$n" ]; then
+      while IFS= read -r reply; do printf '%s\n' "$reply"; done < "$script/$n"
+    fi
+  done
+  exit 0
+fi
 echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
 exit 97

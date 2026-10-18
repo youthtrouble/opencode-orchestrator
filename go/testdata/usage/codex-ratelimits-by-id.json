@@ -1,0 +1,12 @@
+{
+  "rateLimitsByLimitId": {
+    "codex": {
+      "primary": { "usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1792369219.9876 },
+      "secondary": null,
+      "planType": "pro",
+      "rateLimitReachedType": "primary",
+      "credits": null
+    }
+  },
+  "rateLimitResetCredits": {}
+}

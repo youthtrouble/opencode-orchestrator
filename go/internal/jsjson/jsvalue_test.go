@@ -144,3 +144,17 @@ func TestRoundIsMathRound(t *testing.T) {
 		}
 	}
 }
+
+func TestISOStringIsToISOString(t *testing.T) {
+	cases := map[int64]string{
+		0:             "1970-01-01T00:00:00.000Z",
+		1792369219000: "2026-10-19T00:20:19.000Z",
+		1792369219104: "2026-10-19T00:20:19.104Z",
+	}
+	for ms, want := range cases {
+		local := time.UnixMilli(ms).In(time.FixedZone("UTC+5", 5*3600))
+		if got := ISOString(local); got != want {
+			t.Errorf("ISOString(%d) = %q, want %q", ms, got, want)
+		}
+	}
+}

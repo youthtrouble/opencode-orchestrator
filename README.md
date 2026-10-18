@@ -337,6 +337,7 @@ checkout/
     bin/, lib/                 CLI adapters, usage, routing and coordination
     tests/                     fast runtime unit tests (doctor runs these)
   tests/install.test.mjs        separate installer integration matrix
+  go/                          Go port (`orch`), in progress; see "Go runtime (in progress)"
   install.sh, uninstall.sh     reversible config management
 ```
 
@@ -442,6 +443,17 @@ fast unit-test set, not omitted from release verification:
 node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 ```
+
+## Go runtime (in progress)
+
+`go/` holds `orch`, a static Go binary that will replace `orchestrator/bin/*.mjs` one script at a
+time. The JS runtime stays the default: the plugin, the commands and the bridges do not call
+`orch` yet. Both runtimes share the same state, including the usage cache, so the two can run on
+the same machine. Implemented so far: `orch version`, `orch usage [--refresh] [--json]` (output
+byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), and the
+plugin-facing `orch routing`, `orch budget gate` and `orch effort`. The other scripts are not
+ported. [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity
+harness that diffs every implemented command against the JS.
 
 ## Design notes
 

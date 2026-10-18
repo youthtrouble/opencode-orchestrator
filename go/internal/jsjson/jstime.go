@@ -47,3 +47,10 @@ func ParseDate(s string) (ms int64, ok bool) {
 func Round(x float64) float64 {
 	return math.Floor(x + 0.5)
 }
+
+// ISOString is Date.prototype.toISOString: UTC, always three fraction digits, e.g.
+// "2026-10-18T19:39:19.104Z". Years outside 0-9999, which JS writes with six digits and a
+// sign, do not occur in orchestrator data and are not modelled.
+func ISOString(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}

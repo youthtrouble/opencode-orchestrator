@@ -1,0 +1,5 @@
+{
+  "five_hour": { "utilization": 41.5, "resets_at": "2026-10-18T23:39:59.731402+00:00", "locked_reason": "rate_limited" },
+  "seven_day": { "utilization": 12.49, "resets_at": "2026-10-25T02:59:59+00:00" },
+  "extra_usage": { "is_enabled": true }
+}

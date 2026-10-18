@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Go port (`go/`, not yet used by the plugin or commands): `orch usage [--refresh] [--json]`
+  produces output byte-identical to `bin/usage.mjs` and shares its usage cache in both directions,
+  including keeping the last good reading when a refresh fails within 30 minutes of the last
+  cache write. The window rolls, as in the JS: repeated failures keep the reading, aged by
+  `last_good_at`. Also adds the plugin-facing `orch routing [--refresh | --cached] [--json]`,
+  `orch budget gate --vendor V [--force] [--frontier]` and `orch effort --role R [--size S]`.
+  The `usage` parity group compares all four against the JS.
+
 ## 0.4.1 — 2026-10-18
 
 - `kickoff.mjs` (preflight + door selection + launch, pause when both red) and `watch.mjs` (single dashboard).

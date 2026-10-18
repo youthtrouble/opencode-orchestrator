@@ -1,0 +1,4 @@
+#!/bin/sh
+# Parity fake for macOS `security`: there is never a keychain entry (exit 44, "item not
+# found"), so no parity case can read a real Claude token or reach the usage endpoint.
+exit 44

@@ -20,6 +20,7 @@ import (
 func TestParity(t *testing.T) {
 	h := newHarness(t)
 	t.Run("json", h.testJSON)
+	t.Run("usage", h.testUsage)
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
@@ -78,15 +79,20 @@ func newHarness(t *testing.T) *harness {
 	return &harness{orchBin: orchBin, orchJS: orchJS, node: node, fakesDir: fakesDir, path: strings.Join(searchPath, ":")}
 }
 
-// invocation is one parity case: the same input given to each runtime.
+// invocation is one parity case: the same input given to each runtime. seed, when set,
+// prepares each runtime's fresh sandbox identically before the run; normalize, when set,
+// rewrites stdout, stderr and file contents of both before comparing (for values that
+// legitimately differ between runs, such as a fresh timestamp).
 type invocation struct {
-	js    []string
-	orch  []string
-	stdin []byte
+	js        []string
+	orch      []string
+	stdin     []byte
+	seed      func(t *testing.T, sb sandbox)
+	normalize func(string) string
 }
 
 // outcome is everything a run can be compared on. files maps paths relative to the sandbox
-// (project .orchestrator/ and the HOME state dir) to their contents.
+// (project .orchestrator/, the HOME state dir and the fakes' logs) to their contents.
 type outcome struct {
 	exitCode int
 	stdout   string
@@ -97,8 +103,18 @@ type outcome struct {
 // comparePair runs each runtime in its own fresh sandbox and reports every difference.
 func (h *harness) comparePair(t *testing.T, inv invocation) {
 	t.Helper()
-	js := h.runInSandbox(t, inv.js, inv.stdin)
-	orch := h.runInSandbox(t, inv.orch, inv.stdin)
+	run := func(argv []string) outcome {
+		sb := h.newSandbox(t)
+		if inv.seed != nil {
+			inv.seed(t, sb)
+		}
+		return h.run(t, sb, argv, inv.stdin).normalized(inv.normalize)
+	}
+	compareOutcomes(t, run(inv.js), run(inv.orch))
+}
+
+func compareOutcomes(t *testing.T, js, orch outcome) {
+	t.Helper()
 	if js.exitCode != orch.exitCode {
 		t.Errorf("exit code: js %d, orch %d", js.exitCode, orch.exitCode)
 	}
@@ -122,18 +138,40 @@ func (h *harness) comparePair(t *testing.T, inv invocation) {
 	}
 }
 
-// runInSandbox runs argv with a fresh temp HOME and a fresh project (with .git/) as the
-// working directory, and an environment holding nothing but what section 5.1 of the plan allows.
-func (h *harness) runInSandbox(t *testing.T, argv []string, stdin []byte) outcome {
+func (o outcome) normalized(normalize func(string) string) outcome {
+	if normalize == nil {
+		return o
+	}
+	files := map[string]string{}
+	for name, content := range o.files {
+		files[name] = normalize(content)
+	}
+	return outcome{exitCode: o.exitCode, stdout: normalize(o.stdout), stderr: normalize(o.stderr), files: files}
+}
+
+// sandbox is a fresh temp HOME and a fresh project (with .git/), the working directory.
+type sandbox struct {
+	home    string
+	project string
+}
+
+func (h *harness) newSandbox(t *testing.T) sandbox {
 	t.Helper()
-	home, project := t.TempDir(), t.TempDir()
-	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+	sb := sandbox{home: t.TempDir(), project: t.TempDir()}
+	if err := os.Mkdir(filepath.Join(sb.project, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return sb
+}
+
+// run runs argv in the sandbox with an environment holding nothing but what section 5.1 of
+// the plan allows, then collects the files it may have written.
+func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte) outcome {
+	t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = project
+	cmd.Dir = sb.project
 	cmd.Env = []string{
-		"HOME=" + home,
+		"HOME=" + sb.home,
 		"PATH=" + h.path,
 		"ORCH_HOME=" + h.orchJS,
 		"ORCH_REGISTRY=" + filepath.Join(h.orchJS, "models.json"),
@@ -150,8 +188,9 @@ func (h *harness) runInSandbox(t *testing.T, argv []string, stdin []byte) outcom
 		exitCode = exitErr.ExitCode()
 	}
 	files := map[string]string{}
-	collectFiles(t, filepath.Join(project, ".orchestrator"), "project", files)
-	collectFiles(t, filepath.Join(home, ".local", "state", "opencode", "orchestrator"), "state", files)
+	collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", files)
+	collectFiles(t, filepath.Join(sb.home, ".local", "state", "opencode", "orchestrator"), "state", files)
+	collectFiles(t, filepath.Join(sb.home, "fake-log"), "fakelog", files)
 	return outcome{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String(), files: files}
 }
 

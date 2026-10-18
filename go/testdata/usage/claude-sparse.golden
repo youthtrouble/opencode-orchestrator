@@ -1,0 +1,27 @@
+{
+  "ok": true,
+  "source": "opencode-auth",
+  "plan": null,
+  "tier": null,
+  "session": {
+    "pct": 99,
+    "resets_at": "2026-10-18T23:00:00+00:00",
+    "severity": null
+  },
+  "weekly": {
+    "pct": 35,
+    "resets_at": "2026-10-24T00:00:00+00:00",
+    "severity": "normal"
+  },
+  "weekly_by_model": {
+    "claude-opus": {
+      "pct": 12
+    },
+    "model": {
+      "pct": 3,
+      "active": false
+    }
+  },
+  "extra_usage_enabled": false,
+  "locked_reason": null
+}

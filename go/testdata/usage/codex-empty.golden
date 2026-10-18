@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "plan": null,
+  "five_hour": {
+    "pct": null,
+    "resets_at": null,
+    "window_mins": null
+  },
+  "weekly": {
+    "pct": null,
+    "resets_at": null,
+    "window_mins": null
+  },
+  "rate_limit_reached": null,
+  "ordinary_usage_allowed": null,
+  "reset_credits_available": 0,
+  "credits": null
+}

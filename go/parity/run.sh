@@ -1,7 +1,8 @@
 #!/bin/sh
 # Builds orch and runs the parity harness against the JS runtime in this checkout.
 #   parity/run.sh               every group
-#   parity/run.sh --only json   one group (TestParity/<group>)
+#   parity/run.sh --only json   one group (TestParity/<group>); --only json,usage for several
+#   ORCH_JS=/path/to/orchestrator parity/run.sh   compare against another JS tree (default: this checkout's)
 set -eu
 
 module_dir=$(cd "$(dirname "$0")/.." && pwd)
@@ -26,11 +27,11 @@ cd "$module_dir"
 CGO_ENABLED=0 go build -trimpath -o bin/orch ./cmd/orch
 
 ORCH_BIN="$module_dir/bin/orch"
-ORCH_JS="$repo_dir/orchestrator"
+ORCH_JS="${ORCH_JS:-$repo_dir/orchestrator}"
 export ORCH_BIN ORCH_JS
 
 pattern='^TestParity$'
 if [ -n "$group" ]; then
-  pattern="^TestParity\$/^${group}\$"
+  pattern="^TestParity\$/^($(echo "$group" | tr , '|'))\$"
 fi
 exec go test -tags parity -count=1 -v ./parity -run "$pattern"

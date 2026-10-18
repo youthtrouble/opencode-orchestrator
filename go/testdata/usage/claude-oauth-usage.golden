@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "source": "claude-code-keychain",
+  "plan": "team",
+  "tier": "default_claude_max_5x",
+  "session": {
+    "pct": 58,
+    "resets_at": "2026-10-18T23:39:59.731402+00:00",
+    "severity": "normal"
+  },
+  "weekly": {
+    "pct": null,
+    "resets_at": null,
+    "severity": null
+  },
+  "weekly_by_model": {
+    "fable": {
+      "pct": 82,
+      "resets_at": "2026-10-25T02:59:59.731592+00:00",
+      "severity": "warning",
+      "active": true
+    }
+  },
+  "extra_usage_enabled": false,
+  "locked_reason": null
+}

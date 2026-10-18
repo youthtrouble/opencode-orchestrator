@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "plan": "pro",
+  "five_hour": {
+    "pct": 100,
+    "resets_at": "2026-10-19T00:20:19.987Z",
+    "window_mins": 300
+  },
+  "weekly": {
+    "pct": null,
+    "resets_at": null,
+    "window_mins": null
+  },
+  "rate_limit_reached": "primary",
+  "ordinary_usage_allowed": null,
+  "reset_credits_available": 0,
+  "credits": null
+}

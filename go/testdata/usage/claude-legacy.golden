@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "source": "claude-code-credentials-file",
+  "plan": "pro",
+  "tier": null,
+  "session": {
+    "pct": 42,
+    "resets_at": "2026-10-18T23:39:59.731402+00:00",
+    "severity": null
+  },
+  "weekly": {
+    "pct": 12,
+    "resets_at": "2026-10-25T02:59:59+00:00",
+    "severity": null
+  },
+  "weekly_by_model": {},
+  "extra_usage_enabled": true,
+  "locked_reason": "rate_limited"
+}

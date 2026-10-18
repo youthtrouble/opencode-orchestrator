@@ -1,5 +1,12 @@
 #!/bin/sh
 # Parity fake. It sits first on PATH so no parity case can reach the real CLI. A case that
-# needs this CLI must script it; reaching this unscripted fake is a test failure.
+# needs this CLI must script it; reaching this unscripted fake is a test failure, except where
+# a case relies on the CLI failing (the usage group's auth.json fallback).
+#
+# Scripted `opencode auth list`: prints $HOME/fake-opencode/auth-list.txt when it exists.
+if [ "$1 $2" = "auth list" ] && [ -f "$HOME/fake-opencode/auth-list.txt" ]; then
+  while IFS= read -r line; do printf '%s\n' "$line"; done < "$HOME/fake-opencode/auth-list.txt"
+  exit 0
+fi
 echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
 exit 97
