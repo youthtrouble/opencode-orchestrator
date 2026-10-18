@@ -32,6 +32,8 @@ the plan section verbatim if it matters. Keep to one bounded unit.
 for writes and `read-only` otherwise. Efforts: low|medium|high|xhigh|max|ultra (ultra spawns Codex
 subagents; expensive). Fast mode costs 2.5x usage; never enable it automatically.
 
+If a Codex run returns `reason: tool_host_unavailable` (its code-mode host timed out), wait about 60 s and retry once; if it fails again, use the same-vendor fallback, mark `cross_vendor: false`, and record an incident. Do not treat a Codex turn with zero commands as a completed review.
+
 ## Claude-specific
 `claude -p` with `--permission-mode acceptEdits` for writes, `plan` for read-only; `--effort`;
 `--max-turns`; `--resume <session>`. `--bare` ignores OAuth (API key only), so never use it on the

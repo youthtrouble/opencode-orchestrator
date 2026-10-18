@@ -80,6 +80,13 @@ result.exit_code = code;
 result.duration_ms = Date.now() - started;
 if (code !== 0 && result.errors.length === 0) result.errors.push(`codex exited ${code}: ${stderrBuf.trim().split("\n").slice(-3).join(" | ")}`);
 if (code !== 0) result.ok = false;
+// A "completed" turn in which Codex ran nothing and explains that its tools failed is a tool-host outage,
+// not a result. Codex reports these as prose, so detect them here and make the failure visible.
+const NOOP_RE = /timed out negotiating with the code-mode host|could not run|unable to (run|execute)|tool (host|calls?) (failed|unavailable)|no tool/i;
+if (result.ok && result.commands.length === 0 && result.files_changed.length === 0 && NOOP_RE.test(result.final_message || "")) {
+  result.ok = false; result.reason = "tool_host_unavailable"; result.errors.push("codex completed the turn without executing any tool; its message reports tool-host failure (retry after ~60s)");
+  try { incident({ component: "bridge", kind: "crash", summary: "codex turn completed with zero tool calls; code-mode host timeout reported in prose", detail: (result.final_message || "").slice(0, 400), context: { model, thread_id: result.thread_id }, project: cwd }); } catch { /* ignore */ }
+}
 result.record = writeRunRecord(cwd, { ...result, prompt_sha256: (await import("node:crypto")).createHash("sha256").update(prompt).digest("hex"), prompt_head: prompt.slice(0, 400) });
 getUsage({ refresh: true }).catch(() => {});
 log(`done ok=${result.ok} in ${Math.round(result.duration_ms / 1000)}s; record ${result.record}`);
