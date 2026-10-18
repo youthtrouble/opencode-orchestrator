@@ -45,6 +45,7 @@ At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs d
 `handback`/`flip` => update STATE.md, post a `handoff` mailbox message, run
 `node ~/.config/opencode/orchestrator/bin/flip.mjs run --to <door> --from claude`, and stop.
 `pause` => write the remaining briefs, post a handoff, stop. Then run `node ~/.config/opencode/orchestrator/bin/flip.mjs pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `supervisor.mjs start` running). On first use in a repo add
+At a HUMAN gate while headless (push, deploy, spend, product question): post the `question` to the mailbox, run `node ~/.config/opencode/orchestrator/bin/flip.mjs gate --active <door> --reason "..." --question <id>`, and stop. Never use `pause` for a human gate; pause is for budgets only.
 `.orchestrator/` to `.git/info/exclude`.
 
 ## Incidents

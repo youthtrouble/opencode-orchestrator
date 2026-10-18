@@ -64,6 +64,7 @@ Claude Code conductor (`claude --agent conductor`, Anthropic-native). Both use t
 - At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active <door>`.
   `flip`/`handback` => update STATE.md, post a `handoff`, run `flip.mjs run --to <door> --from <you>`,
   and stop. `stay` => continue. `pause` => write the remaining briefs and stop. Then run `node ~/.config/opencode/orchestrator/bin/flip.mjs pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `supervisor.mjs start` running).
+At a HUMAN gate while headless (push, deploy, spend, product question): post the `question` to the mailbox, run `node ~/.config/opencode/orchestrator/bin/flip.mjs gate --active <door> --reason "..." --question <id>`, and stop. Never use `pause` for a human gate; pause is for budgets only.
 - A conductor whose own provider dies is flipped automatically (plugin hook or supervisor); the
   away conductor hands back at the first boundary after the home vendor is stably green.
 - First use in a repo: `.orchestrator/` is added to `.git/info/exclude` (`flip.mjs run` does this;

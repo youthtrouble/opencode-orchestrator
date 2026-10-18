@@ -141,7 +141,11 @@ function tickAll(state) {
       ? (conductorLane.harness === "claude" ? "claude" : "opencode") : (flip?.to || (config.home || "opencode"));
     const idle = !conductorLane || !alive(conductorLane.pid);
     const lockFree = !fs.existsSync(path.join(workersDir, "conductor.lock"));
-    if (idle && lockFree && flip?.pending_launch) {
+    if (flip?.awaiting_human) {
+      if (!state.awaiting_human_logged) { fs.appendFileSync(LOG, `${iso(now)} conductor awaiting human: ${flip.awaiting_human.reason}; no relaunch until cleared\n`); state.awaiting_human_logged = true; }
+    } else if (state.awaiting_human_logged) { state.awaiting_human_logged = false; }
+    if (flip?.awaiting_human) { /* human gate: do nothing */ }
+    else if (idle && lockFree && flip?.pending_launch) {
       // A hand-off recorded while the previous conductor still held the lane: launch the target now.
       const pl = flip.pending_launch;
       const args = [path.join(HERE, "flip.mjs"), "run", "--to", pl.to, "--from", pl.from || activeDoor, "--reason", pl.reason || "pending launch", "--cwd", root];

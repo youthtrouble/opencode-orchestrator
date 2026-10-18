@@ -255,7 +255,7 @@ One conductor drives a project at a time. `models.json` -> `conductor.home` name
 | it is the away door, home still red | keeps going |
 | both red | writes the remaining briefs, runs `flip.mjs pause`, stops; the supervisor (if running) relaunches automatically: the home door if it comes back first, otherwise the other door |
 
-`flip.mjs run` posts a `handoff`, records `.orchestrator/flip.json`, and starts the other door's
+A headless conductor that reaches a human gate (push, deploy, spend, product question) records it with `flip.mjs gate`; the supervisor leaves it alone until a human clears it (`flip.mjs gate --clear`, `kickoff`, or a flip). `flip.mjs run` posts a `handoff`, records `.orchestrator/flip.json`, and starts the other door's
 conductor headless as worker lane `conductor` (lane lock = single driver). A headless conductor
 cannot ask you questions; they land in the mailbox as `question` messages. Flips never happen
 mid-brief: a slice finishes where it started, and hand-back is delayed by at most one brief.
