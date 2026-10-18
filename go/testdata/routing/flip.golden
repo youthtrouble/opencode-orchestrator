@@ -1,0 +1,72 @@
+[
+  {
+    "action": "stay",
+    "to": "opencode",
+    "reason": "home door with headroom"
+  },
+  {
+    "action": "handback",
+    "to": "opencode",
+    "reason": "home door opencode is stably green again"
+  },
+  {
+    "action": "stay",
+    "to": "claude",
+    "reason": "cooldown after a recent flip"
+  },
+  {
+    "action": "handback",
+    "to": "opencode",
+    "reason": "home door opencode is stably green again"
+  },
+  {
+    "action": "stay",
+    "to": "claude",
+    "reason": "home door opencode not stably green yet"
+  },
+  {
+    "action": "flip",
+    "to": "opencode",
+    "reason": "anthropic is red; openai has headroom"
+  },
+  {
+    "action": "flip",
+    "to": "claude",
+    "reason": "openai is red; anthropic has headroom"
+  },
+  {
+    "action": "pause",
+    "to": null,
+    "reason": "both vendors red or unknown; wait for the nearest reset"
+  },
+  {
+    "action": "flip",
+    "to": "opencode",
+    "reason": "anthropic is red; openai has headroom"
+  },
+  {
+    "action": "pause",
+    "to": null,
+    "reason": "both vendors red or unknown; wait for the nearest reset"
+  },
+  {
+    "action": "pause",
+    "to": null,
+    "reason": "both vendors red or unknown; wait for the nearest reset"
+  },
+  {
+    "action": "flip",
+    "to": "opencode",
+    "reason": "undefined is red; openai has headroom"
+  },
+  {
+    "action": "stay",
+    "to": "claude",
+    "reason": "home door opencode not stably green yet"
+  },
+  {
+    "action": "flip",
+    "to": "opencode",
+    "reason": "anthropic is red; openai has headroom"
+  }
+]

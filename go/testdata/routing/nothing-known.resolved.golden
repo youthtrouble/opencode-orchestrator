@@ -1,0 +1,35 @@
+{
+  "postures": {
+    "anthropic": {
+      "available": false,
+      "overall": "unknown",
+      "frontier": "unknown",
+      "windows": {},
+      "detail": null
+    },
+    "openai": {
+      "available": false,
+      "overall": "unknown",
+      "frontier": "unknown",
+      "windows": {},
+      "detail": {
+        "ok": false
+      }
+    }
+  },
+  "roles": {
+    "planner": null,
+    "coder": null,
+    "reviewer": null,
+    "verifier": null,
+    "researcher": null,
+    "explorer": null,
+    "utility": null
+  },
+  "reasons": [
+    "Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.",
+    "Codex usage unknown (app-server unreachable or not logged in): treating OpenAI as unavailable for automatic routing.",
+    "Both vendors are red or unavailable: pause heavy work; wait for the nearest reset."
+  ],
+  "paused": true
+}

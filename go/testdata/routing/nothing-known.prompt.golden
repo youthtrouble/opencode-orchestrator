@@ -1,0 +1,13 @@
+Claude usage: unavailable (no data).
+Codex usage: unavailable (no data).
+Routing now:
+  planner: PAUSED
+  coder: PAUSED
+  reviewer: PAUSED
+  verifier: PAUSED
+  researcher: PAUSED
+  explorer: PAUSED
+  utility: PAUSED
+  note: Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.
+  note: Codex usage unknown (app-server unreachable or not logged in): treating OpenAI as unavailable for automatic routing.
+  note: Both vendors are red or unavailable: pause heavy work; wait for the nearest reset.

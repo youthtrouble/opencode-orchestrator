@@ -1,0 +1,208 @@
+{
+  "$comment": "Inputs for the routing, flip and supervise goldens. gen.mjs runs the JS on them; the Go tests run the port on the same inputs. All times are fixed relative to now.",
+  "now": "2026-10-18T12:00:00.000Z",
+  "routing": [
+    {
+      "name": "green-openai-native",
+      "channels": { "openai": true },
+      "usage": {
+        "generated_at": "2026-10-18T11:59:00.000Z",
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": null, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 30, "resets_at": "2026-10-18T22:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z", "window_mins": 300 }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z", "window_mins": 10080 }, "rate_limit_reached": null, "ordinary_usage_allowed": true, "reset_credits_available": 0, "credits": null }
+      }
+    },
+    {
+      "name": "fable-amber-microseconds",
+      "channels": { "anthropic": true, "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "max", "session": { "pct": 33.5, "resets_at": "2026-10-18T12:15:59.707347+00:00" }, "weekly": { "pct": 41, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 70, "resets_at": "2026-10-20T00:00:00+00:00" } } },
+        "codex": { "ok": true, "plan": "pro", "five_hour": { "pct": 61, "resets_at": "2026-10-18T12:30:00.000Z", "window_mins": 300 }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z", "window_mins": 10080 } }
+      }
+    },
+    {
+      "name": "fable-red",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 40, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": null, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 90, "resets_at": "2026-10-18T22:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "claude-session-red-same-vendor-review",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 95, "resets_at": "2026-10-18T12:05:00.000Z" }, "weekly": { "pct": null, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 50, "resets_at": "2026-10-18T22:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "codex-rate-limited",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 40, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 40, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "primary" }
+      }
+    },
+    {
+      "name": "both-red-paused",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 99, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 99, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": { "fable": { "pct": 99, "resets_at": "2026-10-18T22:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 99, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 99, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "claude-unknown-codex-weekly-unknown",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": false, "error": "no token" },
+        "codex": { "ok": true, "plan": null, "five_hour": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": null, "resets_at": null } }
+      }
+    },
+    {
+      "name": "nothing-known",
+      "channels": {},
+      "usage": {
+        "codex": { "ok": false }
+      }
+    },
+    {
+      "name": "claude-locked-epoch-reset-sparse-fable",
+      "channels": { "anthropic": true },
+      "usage": {
+        "claude": { "ok": true, "locked_reason": "session limit", "session": { "pct": null, "resets_at": 1792328400 }, "weekly": { "pct": 7, "resets_at": null }, "weekly_by_model": { "fable": { "pct": null } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 0, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 0.25, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "codex-weekly-unknown",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 30, "resets_at": "2026-10-18T22:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z", "window_mins": 300 }, "weekly": { "pct": null, "resets_at": null, "window_mins": null } }
+      }
+    },
+    {
+      "name": "claude-no-session-reset",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "", "session": { "pct": 70, "resets_at": null }, "weekly": { "pct": 86, "resets_at": "2026-10-23T00:00:00.000Z" } },
+        "codex": { "ok": 1, "five_hour": { "pct": 85, "resets_at": "2026-10-18T12:20:00.000Z" }, "weekly": { "pct": 1, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "first-usable-vendor-lacks-tier",
+      "channels": { "openai": true },
+      "registry": {
+        "$comment": "Minimal registry: anthropic has no frontier tier, so the planner pauses although openai.frontier is usable (pickFrom stops at the first usable vendor); utility's same.strong has no coder vendor.",
+        "thresholds": { "amber": 60, "red": 85, "soon_minutes": 20 },
+        "vendors": {
+          "anthropic": { "cli": "claude", "tiers": { "strong": { "opencode": "anthropic/opus", "cli": "opus", "effort": "high", "context": 200000, "note": "strong only" } } },
+          "openai": { "cli": "codex", "tiers": { "frontier": { "opencode": "openai/astra", "cli": "astra", "variant": "max", "effort": "xhigh", "context": 272000, "note": "frontier" }, "strong": { "opencode": "openai/sol", "cli": "sol" } } }
+        },
+        "roles": {
+          "planner": { "prefer": ["anthropic.frontier", "openai.frontier"] },
+          "coder": { "prefer": ["anthropic.strong", "openai.strong"] },
+          "reviewer": { "prefer": ["cross.strong", "same.strong"] },
+          "verifier": { "prefer": ["openai.missing", "anthropic.strong"] },
+          "researcher": { "prefer": ["openai.strong"] },
+          "explorer": { "prefer": [] },
+          "utility": { "prefer": ["same.strong", "cross.strong"] }
+        }
+      },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 30, "resets_at": "2026-10-18T22:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    }
+  ],
+  "flip": [
+    { "routing": "green-openai-native", "active": "opencode", "last_flip_at": null },
+    { "routing": "green-openai-native", "active": "claude", "last_flip_at": null },
+    { "routing": "green-openai-native", "active": "claude", "last_flip_at": "2026-10-18T11:55:00.000Z" },
+    { "routing": "green-openai-native", "active": "claude", "last_flip_at": "2026-10-18T11:00:00.000Z" },
+    { "routing": "fable-amber-microseconds", "active": "claude", "last_flip_at": null },
+    { "routing": "claude-session-red-same-vendor-review", "active": "claude", "last_flip_at": "2026-10-18T11:59:00.000Z" },
+    { "routing": "codex-rate-limited", "active": "opencode", "last_flip_at": null },
+    { "routing": "both-red-paused", "active": "opencode", "last_flip_at": null },
+    { "routing": "claude-unknown-codex-weekly-unknown", "active": "claude", "last_flip_at": null },
+    { "routing": "nothing-known", "active": "claude", "last_flip_at": null },
+    { "routing": "codex-rate-limited", "active": "bogus", "last_flip_at": null },
+    { "routing": "green-openai-native", "active": "bogus", "last_flip_at": null },
+    { "routing": "codex-weekly-unknown", "active": "claude", "last_flip_at": null },
+    { "routing": "claude-locked-epoch-reset-sparse-fable", "active": "claude", "last_flip_at": null }
+  ],
+  "supervise": [
+    {
+      "name": "running-check-due",
+      "now_sec": 1800000300, "alive": true, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "B-01", "run_id": "run1", "status": "running", "pid": 1, "breadth": "standard", "started_at": "2027-01-15T08:00:00.000Z", "last_progress_at": "2027-01-15T08:00:00.000Z" },
+      "state": { "run": "run1", "next_check": 1800000300 }, "acks": {}
+    },
+    {
+      "name": "quiet-focused",
+      "now_sec": 1800002000, "alive": true, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "B-02", "run_id": "run2", "status": "starting", "pid": 2, "breadth": "focused", "updated_at": "2027-01-15T08:00:00.000Z" },
+      "state": { "run": "run2" }, "acks": {}
+    },
+    {
+      "name": "finished-without-run-id",
+      "now_sec": 1800000010, "alive": false, "lock_present": false, "project_root": "/Users/someone/project with space",
+      "worker": { "lane": "1", "status": "finished", "pid": 4242, "breadth": "unknown-breadth" },
+      "state": {}, "acks": {}
+    },
+    {
+      "name": "stale-lock",
+      "now_sec": 1800000010, "alive": false, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "conductor", "run_id": "run3", "status": "failed", "pid": 3, "breadth": "broad" },
+      "state": {}, "acks": {}
+    },
+    {
+      "name": "process-exited",
+      "now_sec": 1800000010, "alive": false, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "B-03", "run_id": "run4", "status": "running", "pid": 5, "started_at": "not a date" },
+      "state": {}, "acks": {}
+    },
+    {
+      "name": "re-arm-intent",
+      "now_sec": 1800000050, "alive": true, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "B-04", "run_id": "run5", "status": "running", "pid": 6, "last_progress_at": "2027-01-15T08:00:00.000Z" },
+      "state": { "run": "run5", "next_check": 1800000300, "events": { "run5:check:1": { "status": "queued" }, "run5:quiet:9:0": { "status": "intent_persisted", "reason": "quiet" } } },
+      "acks": { "run5:check:1": true }
+    },
+    {
+      "name": "acked-terminal-event-stays-silent",
+      "now_sec": 1800000010, "alive": false, "lock_present": false, "project_root": "/tmp/project",
+      "worker": { "lane": "B-06", "run_id": "run7", "status": "finished", "pid": 8 },
+      "state": { "events": { "run7:finished": { "status": "delivery_failed", "retry_after": 1 } } },
+      "acks": { "run7:finished": true }
+    },
+    {
+      "name": "delivery-failed-retry-pending-numeric-lane",
+      "now_sec": 1800000010, "alive": false, "lock_present": false, "project_root": "/tmp/project",
+      "worker": { "lane": 7, "run_id": "run8", "status": "failed", "pid": 9 },
+      "state": { "events": { "run8:failed": { "status": "delivery_failed", "retry_after": 1800000011 } } },
+      "acks": {}
+    },
+    {
+      "name": "delivery-failed-retry-due-no-lane",
+      "now_sec": 1800000010, "alive": false, "lock_present": false, "project_root": "/tmp/project",
+      "worker": { "status": "interrupted", "pid": 10 },
+      "state": { "events": { "10:undefined:interrupted": { "status": "delivery_failed", "retry_after": 1800000010 } } },
+      "acks": {}
+    },
+    {
+      "name": "quiet-bucket-2-after-failed-check",
+      "now_sec": 1800004000, "alive": true, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "B-07", "run_id": "run10", "status": "running", "pid": 11, "breadth": "broad", "last_progress_at": "2027-01-15T08:00:00.000Z" },
+      "state": { "run": "run10", "next_check": 1800000600, "events": { "run10:quiet:1800000000:1": { "status": "queued" }, "run10:check:1800000600": { "status": "delivery_failed" } } },
+      "acks": { "run10:quiet:1800000000:1": true }
+    },
+    {
+      "name": "finishing-silent",
+      "now_sec": 1800000010, "alive": true, "lock_present": true, "project_root": "/tmp/project",
+      "worker": { "lane": "B-05", "run_id": "run6", "status": "deferred", "pid": 7 },
+      "state": {}, "acks": {}
+    }
+  ]
+}

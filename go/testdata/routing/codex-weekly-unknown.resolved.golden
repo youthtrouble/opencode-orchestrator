@@ -1,0 +1,146 @@
+{
+  "postures": {
+    "anthropic": {
+      "available": true,
+      "overall": "green",
+      "frontier": "green",
+      "windows": {
+        "session": "green",
+        "weekly": "green",
+        "fable": "green"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "team",
+        "session": {
+          "pct": 20,
+          "resets_at": "2026-10-18T14:00:00.000Z"
+        },
+        "weekly": {
+          "pct": 10,
+          "resets_at": null
+        },
+        "weekly_by_model": {
+          "fable": {
+            "pct": 30,
+            "resets_at": "2026-10-18T22:00:00.000Z"
+          }
+        }
+      }
+    },
+    "openai": {
+      "available": true,
+      "overall": "unknown",
+      "frontier": "unknown",
+      "windows": {
+        "five_hour": "green",
+        "weekly": "unknown"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "plus",
+        "five_hour": {
+          "pct": 20,
+          "resets_at": "2026-10-18T14:00:00.000Z",
+          "window_mins": 300
+        },
+        "weekly": {
+          "pct": null,
+          "resets_at": null,
+          "window_mins": null
+        }
+      }
+    }
+  },
+  "roles": {
+    "planner": {
+      "vendor": "anthropic",
+      "tier": "frontier",
+      "model": "anthropic/claude-fable-5-1",
+      "cli_model": "claude-fable-5-1",
+      "cli": "claude",
+      "variant": "high",
+      "effort": null,
+      "context": 1000000,
+      "note": "Fable 5.1: deepest reasoning; has its own weekly cap. Use for planning/architecture/hard debugging only.",
+      "via": "claude-cli"
+    },
+    "coder": {
+      "vendor": "anthropic",
+      "tier": "strong",
+      "model": "anthropic/claude-opus-5-5",
+      "cli_model": "claude-opus-5-5",
+      "cli": "claude",
+      "variant": "medium",
+      "effort": null,
+      "context": 1000000,
+      "note": "Opus 5.5: Anthropic's recommended default; the everyday writer. Clean, maintainable code. Default coder. Default effort medium; we run high for implementation.",
+      "via": "claude-cli"
+    },
+    "reviewer": {
+      "vendor": "openai",
+      "tier": "mid",
+      "model": "openai/gpt-6.1-sol",
+      "cli_model": "gpt-6.1-sol",
+      "cli": "codex",
+      "variant": null,
+      "effort": "medium",
+      "context": 500000,
+      "note": "Same model, medium effort: code review of Anthropic-written code (cross-vendor review).",
+      "cross_vendor": true,
+      "via": "opencode"
+    },
+    "verifier": {
+      "vendor": "anthropic",
+      "tier": "mid",
+      "model": "anthropic/claude-sonnet-5-5",
+      "cli_model": "claude-sonnet-5-5",
+      "cli": "claude",
+      "variant": "medium",
+      "effort": null,
+      "context": 1000000,
+      "note": "Sonnet 5.5: reviews, verification, research, test writing.",
+      "via": "claude-cli"
+    },
+    "researcher": {
+      "vendor": "anthropic",
+      "tier": "mid",
+      "model": "anthropic/claude-sonnet-5-5",
+      "cli_model": "claude-sonnet-5-5",
+      "cli": "claude",
+      "variant": "medium",
+      "effort": null,
+      "context": 1000000,
+      "note": "Sonnet 5.5: reviews, verification, research, test writing.",
+      "via": "claude-cli"
+    },
+    "explorer": {
+      "vendor": "anthropic",
+      "tier": "cheap",
+      "model": "anthropic/claude-haiku-5-5",
+      "cli_model": "claude-haiku-5-5",
+      "cli": "claude",
+      "variant": null,
+      "effort": null,
+      "context": 1000000,
+      "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated.",
+      "via": "claude-cli"
+    },
+    "utility": {
+      "vendor": "anthropic",
+      "tier": "cheap",
+      "model": "anthropic/claude-haiku-5-5",
+      "cli_model": "claude-haiku-5-5",
+      "cli": "claude",
+      "variant": null,
+      "effort": null,
+      "context": 1000000,
+      "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated.",
+      "via": "claude-cli"
+    }
+  },
+  "reasons": [],
+  "paused": false
+}

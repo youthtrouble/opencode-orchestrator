@@ -1,0 +1,111 @@
+{
+  "postures": {
+    "anthropic": {
+      "available": true,
+      "overall": "green",
+      "frontier": "green",
+      "windows": {
+        "session": "green",
+        "weekly": "green",
+        "fable": "green"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "team",
+        "session": {
+          "pct": 20,
+          "resets_at": "2026-10-18T14:00:00.000Z"
+        },
+        "weekly": {
+          "pct": 10,
+          "resets_at": null
+        },
+        "weekly_by_model": {
+          "fable": {
+            "pct": 30,
+            "resets_at": "2026-10-18T22:00:00.000Z"
+          }
+        }
+      }
+    },
+    "openai": {
+      "available": true,
+      "overall": "green",
+      "frontier": "green",
+      "windows": {
+        "five_hour": "green",
+        "weekly": "green"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "plus",
+        "five_hour": {
+          "pct": 20,
+          "resets_at": "2026-10-18T14:00:00.000Z"
+        },
+        "weekly": {
+          "pct": 5,
+          "resets_at": "2026-10-22T03:20:00.000Z"
+        }
+      }
+    }
+  },
+  "roles": {
+    "planner": null,
+    "coder": {
+      "vendor": "anthropic",
+      "tier": "strong",
+      "model": "anthropic/opus",
+      "cli_model": "opus",
+      "cli": "claude",
+      "variant": null,
+      "effort": "high",
+      "context": 200000,
+      "note": "strong only",
+      "via": "claude-cli"
+    },
+    "reviewer": {
+      "vendor": "openai",
+      "tier": "strong",
+      "model": "openai/sol",
+      "cli_model": "sol",
+      "cli": "codex",
+      "variant": null,
+      "effort": null,
+      "context": null,
+      "note": "",
+      "cross_vendor": true,
+      "via": "opencode"
+    },
+    "verifier": null,
+    "researcher": {
+      "vendor": "openai",
+      "tier": "strong",
+      "model": "openai/sol",
+      "cli_model": "sol",
+      "cli": "codex",
+      "variant": null,
+      "effort": null,
+      "context": null,
+      "note": "",
+      "via": "opencode"
+    },
+    "explorer": null,
+    "utility": {
+      "vendor": "anthropic",
+      "tier": "strong",
+      "model": "anthropic/opus",
+      "cli_model": "opus",
+      "cli": "claude",
+      "variant": null,
+      "effort": "high",
+      "context": 200000,
+      "note": "strong only",
+      "via": "claude-cli"
+    }
+  },
+  "reasons": [],
+  "paused": false
+}

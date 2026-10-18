@@ -1,0 +1,179 @@
+[
+  {
+    "observation": {
+      "run": "run1",
+      "lane": "B-01",
+      "phase": "running",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000000,
+      "quiet": false,
+      "quiet_for": 300
+    },
+    "event": {
+      "id": "run1:check:1800000300",
+      "reason": "check"
+    },
+    "reminder": "Orchestrator supervisor event run1:check:1800000300: worker lane \"B-01\" is running (check; standard cadence). Read /tmp/project/.orchestrator/workers/B-01.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event run1:check:1800000300. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run2",
+      "lane": "B-02",
+      "phase": "running",
+      "breadth": "focused",
+      "interval": 120,
+      "progress_at": 1800000000,
+      "quiet": true,
+      "quiet_for": 2000
+    },
+    "event": {
+      "id": "run2:quiet:1800000000:1",
+      "reason": "quiet"
+    },
+    "reminder": "Orchestrator supervisor event run2:quiet:1800000000:1: worker lane \"B-02\" is running (quiet; focused cadence). Read /tmp/project/.orchestrator/workers/B-02.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event run2:quiet:1800000000:1. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "4242:1",
+      "lane": "1",
+      "phase": "finished",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": {
+      "id": "4242:1:finished",
+      "reason": "finished"
+    },
+    "reminder": "Orchestrator supervisor event 4242:1:finished: worker lane \"1\" is finished (finished; standard cadence). Read /Users/someone/project with space/.orchestrator/workers/1.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event 4242:1:finished. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run3",
+      "lane": "conductor",
+      "phase": "stale_lock",
+      "breadth": "broad",
+      "interval": 600,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": {
+      "id": "run3:stale_lock",
+      "reason": "stale_lock"
+    },
+    "reminder": "Orchestrator supervisor event run3:stale_lock: worker lane \"conductor\" is stale_lock (stale_lock; broad cadence). Read /tmp/project/.orchestrator/workers/conductor.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event run3:stale_lock. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run4",
+      "lane": "B-03",
+      "phase": "process_exited",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": {
+      "id": "run4:process_exited",
+      "reason": "process_exited"
+    },
+    "reminder": "Orchestrator supervisor event run4:process_exited: worker lane \"B-03\" is process_exited (process_exited; standard cadence). Read /tmp/project/.orchestrator/workers/B-03.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event run4:process_exited. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run5",
+      "lane": "B-04",
+      "phase": "running",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000000,
+      "quiet": false,
+      "quiet_for": 50
+    },
+    "event": {
+      "id": "run5:quiet:9:0",
+      "reason": "quiet"
+    },
+    "reminder": "Orchestrator supervisor event run5:quiet:9:0: worker lane \"B-04\" is running (quiet; standard cadence). Read /tmp/project/.orchestrator/workers/B-04.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event run5:quiet:9:0. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run7",
+      "lane": "B-06",
+      "phase": "finished",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": null,
+    "reminder": null
+  },
+  {
+    "observation": {
+      "run": "run8",
+      "lane": 7,
+      "phase": "failed",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": null,
+    "reminder": null
+  },
+  {
+    "observation": {
+      "run": "10:undefined",
+      "phase": "interrupted",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": {
+      "id": "10:undefined:interrupted",
+      "reason": "interrupted"
+    },
+    "reminder": "Orchestrator supervisor event 10:undefined:interrupted: worker lane \"undefined\" is interrupted (interrupted; standard cadence). Read /tmp/project/.orchestrator/workers/undefined.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event 10:undefined:interrupted. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run10",
+      "lane": "B-07",
+      "phase": "running",
+      "breadth": "broad",
+      "interval": 600,
+      "progress_at": 1800000000,
+      "quiet": true,
+      "quiet_for": 4000
+    },
+    "event": {
+      "id": "run10:quiet:1800000000:2",
+      "reason": "quiet"
+    },
+    "reminder": "Orchestrator supervisor event run10:quiet:1800000000:2: worker lane \"B-07\" is running (quiet; broad cadence). Read /tmp/project/.orchestrator/workers/B-07.json, the mailbox (node ~/.config/opencode/orchestrator/bin/mailbox.mjs list --unacked-by coordinator) and any released report. Acknowledge receipt with: node ~/.config/opencode/orchestrator/bin/supervisor.mjs ack --event run10:quiet:1800000000:2. Receipt is not acceptance. Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck."
+  },
+  {
+    "observation": {
+      "run": "run6",
+      "lane": "B-05",
+      "phase": "finishing",
+      "breadth": "standard",
+      "interval": 300,
+      "progress_at": 1800000010,
+      "quiet": false,
+      "quiet_for": 0
+    },
+    "event": null,
+    "reminder": null
+  }
+]

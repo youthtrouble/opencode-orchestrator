@@ -1,0 +1,14 @@
+Claude (team): session 99% [red] resets 2026-10-18T14:00:00.000Z; weekly 99%; Fable weekly 99% [red] resets 2026-10-18T22:00:00.000Z.
+Codex (plus): 5h 99% [red] resets 2026-10-18T14:00:00.000Z; weekly 99% [red] resets 2026-10-22T03:20:00.000Z.
+Routing now:
+  planner: PAUSED
+  coder: PAUSED
+  reviewer: PAUSED
+  verifier: PAUSED
+  researcher: PAUSED
+  explorer: PAUSED
+  utility: PAUSED
+  note: Fable weekly cap is red: planning routed away from Fable until it resets.
+  note: Claude session/weekly is red: Anthropic roles failed over to OpenAI.
+  note: Codex window is red: OpenAI roles failed over to Anthropic.
+  note: Both vendors are red or unavailable: pause heavy work; wait for the nearest reset.

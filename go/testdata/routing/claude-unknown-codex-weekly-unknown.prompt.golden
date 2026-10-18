@@ -1,0 +1,11 @@
+Claude usage: unavailable (no token).
+Codex (subscription): 5h 10% [green] resets 2026-10-18T14:00:00.000Z; weekly null% [unknown] resets null.
+Routing now:
+  planner: openai/gpt-6-astra (effort high) via codex-cli
+  coder: openai/gpt-6.1-sol (effort medium) via codex-cli
+  reviewer: openai/gpt-6.1-sol (effort medium) via codex-cli [same-vendor review: cross vendor unavailable]
+  verifier: openai/gpt-6-luna (effort low) via codex-cli
+  researcher: openai/gpt-6-luna (effort low) via codex-cli
+  explorer: openai/gpt-6-luna (effort low) via codex-cli
+  utility: openai/gpt-6-luna (effort low) via codex-cli
+  note: Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.

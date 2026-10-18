@@ -1,0 +1,63 @@
+{
+  "postures": {
+    "anthropic": {
+      "available": true,
+      "overall": "red",
+      "frontier": "red",
+      "windows": {
+        "session": "amber",
+        "weekly": "red",
+        "fable": "unknown"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "",
+        "session": {
+          "pct": 70,
+          "resets_at": null
+        },
+        "weekly": {
+          "pct": 86,
+          "resets_at": "2026-10-23T00:00:00.000Z"
+        }
+      }
+    },
+    "openai": {
+      "available": true,
+      "overall": "red",
+      "frontier": "red",
+      "windows": {
+        "five_hour": "red",
+        "weekly": "green"
+      },
+      "resets_soon": true,
+      "detail": {
+        "ok": 1,
+        "five_hour": {
+          "pct": 85,
+          "resets_at": "2026-10-18T12:20:00.000Z"
+        },
+        "weekly": {
+          "pct": 1,
+          "resets_at": "2026-10-22T03:20:00.000Z"
+        }
+      }
+    }
+  },
+  "roles": {
+    "planner": null,
+    "coder": null,
+    "reviewer": null,
+    "verifier": null,
+    "researcher": null,
+    "explorer": null,
+    "utility": null
+  },
+  "reasons": [
+    "Claude session/weekly is red: Anthropic roles failed over to OpenAI.",
+    "Codex window is red: OpenAI roles failed over to Anthropic.",
+    "Both vendors are red or unavailable: pause heavy work; wait for the nearest reset."
+  ],
+  "paused": true
+}
