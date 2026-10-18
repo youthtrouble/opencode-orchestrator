@@ -86,3 +86,10 @@ test("coder is balanced to the vendor with clearly more 5-hour headroom", () => 
 test("a red weekly still blocks the vendor", () => {
   assert.equal(resolveRoles({ claude: claude(10, 10), codex: codex(5, 95) }, registry).roles.reviewer.vendor, "anthropic");
 });
+
+test("a preference naming a tier missing from the registry is skipped, not a crash", () => {
+  const reg = JSON.parse(JSON.stringify(registry));
+  reg.roles.coder.prefer = ["anthropic.nonexistent", "openai.strong", "anthropic.strong"];
+  const r = resolveRoles({ claude: claude(10, 10), codex: codex(60, 10) }, reg);
+  assert.equal(r.roles.coder.vendor, "anthropic");
+});

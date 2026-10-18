@@ -90,7 +90,7 @@ export function resolveRoles(usage, registry, { now = Date.now(), channels = {} 
       if (vendor === "cross") vendor = coderVendor === "anthropic" ? "openai" : "anthropic";
       if (vendor === "same") vendor = coderVendor;
       const isFrontier = tier === "frontier";
-      if (usable(postures, vendor, isFrontier)) candidates.push(tierEntry(registry, vendor, tier));
+      if (usable(postures, vendor, isFrontier)) { const entry = tierEntry(registry, vendor, tier); if (entry) candidates.push(entry); }
     }
     if (!candidates.length) return null;
     // Balance equivalent tiers across vendors by 5-hour headroom (the vendor with clearly more room wins).
