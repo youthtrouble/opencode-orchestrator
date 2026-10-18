@@ -20,7 +20,7 @@ test("green everywhere: Fable plans, Opus codes, OpenAI reviews (cross-vendor)",
 
 test("Fable weekly red: planning leaves Fable but Opus still codes", () => {
   const r = resolveRoles({ claude: claude(40, 90), codex: codex(20, 5) }, registry);
-  assert.equal(r.roles.planner.model, "openai/gpt-6-astra");
+  assert.equal(r.roles.planner.model, "anthropic/claude-opus-5-5");
   assert.equal(r.roles.coder.model, "anthropic/claude-opus-5-5");
   assert.match(r.reasons.join(" "), /Fable weekly cap is red/);
 });
@@ -64,4 +64,10 @@ test("effort scales with task size and defaults to medium-size policy", async ()
   assert.equal(effortFor(registry, "planner", "hard"), "max");
   assert.equal(effortFor(registry, "reviewer", undefined), "medium");
   assert.equal(effortFor(registry, "verifier", "large"), "medium");
+});
+
+test("frontier tiers need a GREEN frontier posture: amber Fable routes routine planning to Opus", () => {
+  const r = resolveRoles({ claude: claude(30, 70), codex: codex(10, 5) }, registry);
+  assert.equal(r.roles.planner.model, "anthropic/claude-opus-5-5");
+  assert.match(r.reasons.join(" "), /Fable weekly cap is amber/);
 });

@@ -63,11 +63,13 @@ function tierEntry(registry, vendor, tier) {
 }
 
 // A vendor is "usable" for a role unless red (or unknown when the other vendor is known-good).
+// Frontier tiers draw on weekly caps (Fable has its own); they are used only while that posture is GREEN.
+// Amber frontier means: route routine planning to the strong tier; `size: hard` may still force frontier (delegate tool).
 function usable(postures, vendor, isFrontier) {
   const p = postures[vendor];
   if (!p || !p.available) return false;
-  const level = isFrontier ? p.frontier : p.overall;
-  return level !== "red";
+  if (isFrontier) return p.frontier === "green";
+  return p.overall !== "red";
 }
 
 export function resolveRoles(usage, registry, { now = Date.now(), channels = {} } = {}) {
@@ -97,7 +99,7 @@ export function resolveRoles(usage, registry, { now = Date.now(), channels = {} 
   // Explain the interesting decisions.
   const a = postures.anthropic, o = postures.openai;
   if (a.available && a.windows.fable === "red") reasons.push("Fable weekly cap is red: planning routed away from Fable until it resets.");
-  if (a.available && a.windows.fable === "amber") reasons.push("Fable weekly cap is amber: use Fable only for genuinely hard planning; Opus 5.5 for routine plans.");
+  if (a.available && a.windows.fable === "amber") reasons.push("Fable weekly cap is amber: routine planning goes to Opus 5.5; only size=hard delegations use Fable.");
   if (a.available && a.overall === "red") reasons.push("Claude session/weekly is red: Anthropic roles failed over to OpenAI.");
   if (o.available && o.overall === "red") reasons.push("Codex window is red: OpenAI roles failed over to Anthropic.");
   if (!a.available) reasons.push("Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.");

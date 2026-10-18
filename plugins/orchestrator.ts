@@ -124,6 +124,13 @@ export default {
           const size = input.size || r.registry.effort_policy?.default_size || "medium";
           const policyEffort = effortFor(r.registry, input.role, size);
           const bigTask = size === "large" || size === "hard";
+          // size=hard planning may use a frontier tier even when its weekly posture is amber (never red).
+          if (!harness && input.role === "planner" && size === "hard" && role && role.tier !== "frontier") {
+            for (const vendor of ["anthropic", "openai"]) {
+              const p = r.resolved.postures[vendor];
+              if (p?.available && p.frontier !== "red") { const t = r.registry.vendors[vendor].tiers.frontier; role = { vendor, tier: "frontier", model: t.opencode, cli_model: t.cli, variant: t.variant, effort: t.effort, via: r.channels[vendor] ? "opencode" : `${r.registry.vendors[vendor].cli}-cli` }; break; }
+            }
+          }
           if (!harness) {
             if (!role) return { content: `All vendors are red or unavailable for role ${input.role}. ${r.resolved.reasons.join(" ")} Wait for the nearest reset or pass force=true.` };
             // Native subagents have a fixed effort; large/hard tasks go through the CLI so the policy effort applies.

@@ -87,10 +87,9 @@
   },
   "roles": {
     "planner": {
-      "purpose": "Deep, tireless, meticulous planning and architecture. Thinks; does not write product code.",
+      "purpose": "Deep, tireless, meticulous planning and architecture. Thinks; does not write product code. Fable only while its weekly posture is green (or size=hard); otherwise Opus 5.5 high. GPT-6 Astra is reached only by size=hard when Fable is unavailable.",
       "prefer": [
         "anthropic.frontier",
-        "openai.frontier",
         "anthropic.strong",
         "openai.strong"
       ]
