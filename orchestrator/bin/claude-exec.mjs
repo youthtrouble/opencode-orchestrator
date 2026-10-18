@@ -76,6 +76,13 @@ clearTimeout(timer);
 result.exit_code = code; result.duration_ms = Date.now() - started;
 if (code !== 0 && result.errors.length === 0) result.errors.push(`claude exited ${code}: ${stderrBuf.trim().split("\n").slice(-3).join(" | ")}`);
 if (code !== 0) result.ok = false;
+const LIMIT_TEXT = /hit your (session|usage|weekly) limit|usage limit reached|rate limit/i;
+if (!result.ok && LIMIT_TEXT.test(result.final_message || "")) {
+  result.reason = "budget_red"; result.errors = ["usage_limit"];
+  try { const { getUsage } = await import("../lib/usage.mjs"); const u = await getUsage({ refresh: true }); result.resets_at = u.claude?.session?.resets_at || null; } catch { /* unknown reset */ }
+  try { incident({ component: "bridge", kind: "limit", summary: "claude run ended on a session-limit message", context: { model: result.model, resets_at: result.resets_at || null }, project: cwd }); } catch { /* ignore */ }
+  console.log(JSON.stringify(result)); process.exit(75);
+}
 result.record = writeRunRecord(cwd, { ...result, prompt_sha256: crypto.createHash("sha256").update(prompt).digest("hex"), prompt_head: prompt.slice(0, 400) });
 getUsage({ refresh: true }).catch(() => {});
 log(`done ok=${result.ok} turns=${result.num_turns} in ${Math.round(result.duration_ms / 1000)}s; record ${result.record}`);

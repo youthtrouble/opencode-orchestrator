@@ -146,10 +146,14 @@ function tickAll(state) {
       // Relaunch rules for an idle conductor: flip/handback launch the target door; a paused project
       // (both vendors were red) relaunches its own door as soon as decide no longer says pause.
       const paused = Boolean(flip?.paused);
+      const laneNeedsRestart = conductorLane && ["failed", "deferred", "interrupted"].includes(conductorLane.status) && !conductorLane.redispatched_at;
+      const cooled = now - (state.last_relaunch_at || 0) >= 600; // one relaunch attempt per 10 minutes
       let target = null;
       if (decision && (decision.action === "flip" || decision.action === "handback")) target = decision.to;
-      else if (decision && decision.action === "stay" && paused) target = activeDoor;
+      else if (decision && decision.action === "stay" && (paused || laneNeedsRestart)) target = activeDoor;
+      if (target && !cooled) target = null;
       if (target) {
+        state.last_relaunch_at = now;
         const r = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "run", "--to", target, "--from", activeDoor, "--reason", `${decision.action}: ${decision.reason}`, "--cwd", root], { encoding: "utf8" });
         try { incident({ component: "flip", kind: "flip", summary: `conductor ${decision.action} ${activeDoor}->${target}`, detail: decision.reason, project: root }); } catch { /* never block */ }
         fs.appendFileSync(LOG, `${iso(now)} relaunch ${activeDoor}->${target} (${decision.action}${paused ? ", was paused" : ""}): ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);

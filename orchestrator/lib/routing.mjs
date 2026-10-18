@@ -1,10 +1,11 @@
 // Budget-aware role -> model routing. Pure functions; no I/O.
 
-export function postureFromPct(pct, thresholds, { resetsSoon = false, locked = false } = {}) {
+// Posture is computed from the raw percentage only. An imminent reset never makes a window look
+// greener: that rule once launched a conductor into a window with 2% left (incident 2026-10-18).
+export function postureFromPct(pct, thresholds, { locked = false } = {}) {
   if (locked) return "red";
   if (pct === null || pct === undefined) return "unknown";
-  let level = pct >= thresholds.red ? 2 : pct >= thresholds.amber ? 1 : 0;
-  if (resetsSoon && level > 0) level -= 1;
+  const level = pct >= thresholds.red ? 2 : pct >= thresholds.amber ? 1 : 0;
   return ["green", "amber", "red"][level];
 }
 
@@ -26,7 +27,7 @@ export function vendorPostures(usage, registry, now = Date.now()) {
   const c = usage.claude;
   if (c?.ok) {
     const sessionSoon = (minutesUntil(c.session.resets_at, now) ?? 1e9) <= th.soon_minutes;
-    const session = postureFromPct(c.session.pct, th, { resetsSoon: sessionSoon, locked: Boolean(c.locked_reason) });
+    const session = postureFromPct(c.session.pct, th, { locked: Boolean(c.locked_reason) });
     const weekly = postureFromPct(c.weekly.pct, th);
     const fableWin = c.weekly_by_model?.fable;
     const fable = fableWin ? postureFromPct(fableWin.pct, th) : "unknown";
@@ -35,6 +36,7 @@ export function vendorPostures(usage, registry, now = Date.now()) {
       overall: worst(session, weekly === "unknown" ? "green" : weekly),
       frontier: worst(session, weekly === "unknown" ? "green" : weekly, fable === "unknown" ? "green" : fable),
       windows: { session, weekly, fable },
+      resets_soon: sessionSoon,
       detail: c,
     };
   } else {
@@ -44,9 +46,9 @@ export function vendorPostures(usage, registry, now = Date.now()) {
   const x = usage.codex;
   if (x?.ok) {
     const fiveSoon = (minutesUntil(x.five_hour.resets_at, now) ?? 1e9) <= th.soon_minutes;
-    const five = postureFromPct(x.five_hour.pct, th, { resetsSoon: fiveSoon, locked: Boolean(x.rate_limit_reached) });
+    const five = postureFromPct(x.five_hour.pct, th, { locked: Boolean(x.rate_limit_reached) });
     const weekly = postureFromPct(x.weekly.pct, th);
-    out.openai = { available: true, overall: worst(five, weekly), frontier: worst(five, weekly), windows: { five_hour: five, weekly }, detail: x };
+    out.openai = { available: true, overall: worst(five, weekly), frontier: worst(five, weekly), windows: { five_hour: five, weekly }, resets_soon: fiveSoon, detail: x };
   } else {
     out.openai = { available: false, overall: "unknown", frontier: "unknown", windows: {}, detail: x || null };
   }

@@ -44,10 +44,11 @@ test("both red: paused", () => {
   assert.equal(r.paused, true);
 });
 
-test("a red session window that resets within 20 minutes is treated as amber", () => {
+test("a red session window stays red even if it resets within 20 minutes (only a flag is set)", () => {
   const c = claude(90, 10); c.session.resets_at = soon(5);
   const p = vendorPostures({ claude: c, codex: codex(1, 1) }, registry);
-  assert.equal(p.anthropic.windows.session, "amber");
+  assert.equal(p.anthropic.windows.session, "red");
+  assert.equal(p.anthropic.resets_soon, true);
 });
 
 test("unknown Claude usage does not crash and routes to OpenAI", () => {
