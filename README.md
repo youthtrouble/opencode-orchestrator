@@ -21,6 +21,26 @@ There are two front doors over the same project state:
 
 When one vendor's window is exhausted, continue from the other door with `/continue`.
 
+## Daily operations (cheat sheet)
+
+All paths assume the default install (`~/.config/opencode/orchestrator/bin`, abbreviated `$ORCH` below:
+`ORCH=~/.config/opencode/orchestrator/bin`).
+
+| You want to | Command |
+|---|---|
+| Start a run (picks the door by budget; use `--unattended` before leaving) | `node $ORCH/kickoff.mjs --brief .orchestrator/briefs/<brief>.md [--brief <side>.md] [--headless] [--unattended]` |
+| One live screen: budgets, routing, lanes, flip, mailbox, questions | `node $ORCH/watch.mjs --follow` |
+| See questions waiting for you | `node $ORCH/mailbox.mjs inbox` |
+| Answer one | `node $ORCH/mailbox.mjs reply <id> "your answer"` |
+| Budgets and routing right now | `node $ORCH/usage.mjs --refresh` |
+| What the conductor may do without asking | `node $ORCH/policy.mjs show` / `policy.mjs unattended` / `policy.mjs set release=auto` |
+| Release a human gate (after you acted) | `node $ORCH/flip.mjs gate --clear` |
+| Flip state / force a door | `node $ORCH/flip.mjs status` / `flip.mjs run --to claude` |
+| Workers and supervisor | `node $ORCH/worker.mjs status` · `supervisor.mjs start|status|stop` |
+| Take the wheel interactively (stop the headless lane first) | `node $ORCH/worker.mjs stop --lane conductor` then `claude --agent conductor` or `opencode` + `/continue` |
+| What went wrong lately (orchestrator defects) | `node $ORCH/incident.mjs report` |
+| Health check | `node $ORCH/doctor.mjs` |
+
 ## Requirements
 
 - macOS or Linux, Bash 3.2+, Node 22+, Git, opencode v2, Claude Code and Codex on `PATH`.

@@ -62,6 +62,12 @@ When the orchestrator itself misbehaves (tool/contract mismatch, misroute, budge
 or the human corrects the workflow), record it:
 `node ~/.config/opencode/orchestrator/bin/incident.mjs record --component <c> --kind <k> --summary "..."`.
 
+## Keep the README current
+A slice that changes how a person operates the project (commands, flags, layout, install, behaviour,
+policy) updates `README.md` and `CHANGELOG.md` in the same slice, before it is pushed. At every
+inflection point (a milestone done, a run finished, a batch of fixes) re-read the README top to bottom
+and fix what is stale. Documentation drift is a review finding.
+
 ## The loop
 plan (architect writes `.orchestrator/plans/<slug>.md` with bounded briefs) -> build one brief
 (coder; report + `manifest.mjs create`) -> review by the other vendor on the manifest -> author

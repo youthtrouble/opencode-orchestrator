@@ -99,6 +99,12 @@ and every correction the human gives you about how this workflow should behave. 
 `orch_incident` (or `node ~/.config/opencode/orchestrator/bin/incident.mjs record ...`). It is local,
 redacted and append-only; `/retro` and `/audit-orchestrator` read it and turn repeats into fixes.
 
+## Keep the README current
+A slice that changes how a person operates the project (commands, flags, layout, install, behaviour,
+policy) updates `README.md` and `CHANGELOG.md` in the same slice, before it is pushed. At every
+inflection point (a milestone done, a run finished, a batch of fixes) re-read the README top to bottom
+and fix what is stale. Documentation drift is a review finding.
+
 ## Craft bar (applies to every line of code)
 
 Names explain intent. Functions do one thing and read top to bottom. No speculative abstraction, no

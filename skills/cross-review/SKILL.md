@@ -24,7 +24,8 @@ the reviewer from the budget routing. A second same-vendor pass is optional, nev
 4. Run the tests and any cheap probe that would confirm a suspected bug. Say what you did not run.
 5. Findings: `R1 high|medium|low — <file:line> — <failure scenario or maintenance cost> — <fix>`.
    No unexplained green verdicts; no style nits without a concrete cost.
-6. Verdict: pass / revise / partial (name the untestable requirement). Write to
+6. Docs: if the change alters commands, flags, layout, install or behaviour and README/CHANGELOG were not updated, that is a finding (medium).
+7. Verdict: pass / revise / partial (name the untestable requirement). Write to
    `.orchestrator/reviews/<task>.md`; post `review` to the mailbox.
 
 ## Closure
