@@ -1,0 +1,5 @@
+#!/bin/sh
+# Parity fake. It sits first on PATH so no parity case can reach the real CLI. A case that
+# needs this CLI must script it; reaching this unscripted fake is a test failure.
+echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
+exit 97

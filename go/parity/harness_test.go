@@ -1,0 +1,183 @@
+//go:build parity
+
+// Package parity runs the JS runtime and orch on identical inputs in identical sandboxes and
+// requires identical exit codes, stdout, stderr and state files. Run it through run.sh, which
+// builds the binary and sets ORCH_BIN and ORCH_JS.
+package parity
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestParity(t *testing.T) {
+	h := newHarness(t)
+	t.Run("json", h.testJSON)
+}
+
+// testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
+// every golden input plus the checkout's models.json.
+func (h *harness) testJSON(t *testing.T) {
+	inputs, err := filepath.Glob("../testdata/json/*.json")
+	if err != nil || len(inputs) == 0 {
+		t.Fatalf("no JSON inputs (err %v)", err)
+	}
+	inputs = append(inputs, filepath.Join(h.orchJS, "models.json"))
+	const echo = `const indent = Number(process.argv[1]); console.log(JSON.stringify(JSON.parse(require("node:fs").readFileSync(0, "utf8")), null, indent))`
+	for _, input := range inputs {
+		stdin, err := os.ReadFile(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, indent := range []string{"0", "2"} {
+			t.Run(filepath.Base(input)+"/indent="+indent, func(t *testing.T) {
+				h.comparePair(t, invocation{
+					js:    []string{h.node, "-e", echo, indent},
+					orch:  []string{h.orchBin, "json-echo", "--indent", indent},
+					stdin: stdin,
+				})
+			})
+		}
+	}
+}
+
+type harness struct {
+	orchBin  string
+	orchJS   string
+	node     string
+	fakesDir string
+	path     string
+}
+
+func newHarness(t *testing.T) *harness {
+	orchBin, orchJS := os.Getenv("ORCH_BIN"), os.Getenv("ORCH_JS")
+	if orchBin == "" || orchJS == "" {
+		t.Fatal("ORCH_BIN and ORCH_JS must be set; run go/parity/run.sh")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Fatal("node is required for parity runs:", err)
+	}
+	fakesDir, err := filepath.Abs("fakes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fakes come first so no case can reach a real claude, codex or opencode; node and
+	// sqlite3 are the only real tools either runtime may use.
+	searchPath := []string{fakesDir, filepath.Dir(node)}
+	if sqlite, err := exec.LookPath("sqlite3"); err == nil {
+		searchPath = append(searchPath, filepath.Dir(sqlite))
+	}
+	return &harness{orchBin: orchBin, orchJS: orchJS, node: node, fakesDir: fakesDir, path: strings.Join(searchPath, ":")}
+}
+
+// invocation is one parity case: the same input given to each runtime.
+type invocation struct {
+	js    []string
+	orch  []string
+	stdin []byte
+}
+
+// outcome is everything a run can be compared on. files maps paths relative to the sandbox
+// (project .orchestrator/ and the HOME state dir) to their contents.
+type outcome struct {
+	exitCode int
+	stdout   string
+	stderr   string
+	files    map[string]string
+}
+
+// comparePair runs each runtime in its own fresh sandbox and reports every difference.
+func (h *harness) comparePair(t *testing.T, inv invocation) {
+	t.Helper()
+	js := h.runInSandbox(t, inv.js, inv.stdin)
+	orch := h.runInSandbox(t, inv.orch, inv.stdin)
+	if js.exitCode != orch.exitCode {
+		t.Errorf("exit code: js %d, orch %d", js.exitCode, orch.exitCode)
+	}
+	if js.stdout != orch.stdout {
+		t.Errorf("stdout differs\n  js: %q\norch: %q", js.stdout, orch.stdout)
+	}
+	if js.stderr != orch.stderr {
+		t.Errorf("stderr differs\n  js: %q\norch: %q", js.stderr, orch.stderr)
+	}
+	for name, content := range js.files {
+		if other, ok := orch.files[name]; !ok {
+			t.Errorf("file %s written by js only", name)
+		} else if other != content {
+			t.Errorf("file %s differs\n  js: %q\norch: %q", name, content, other)
+		}
+	}
+	for name := range orch.files {
+		if _, ok := js.files[name]; !ok {
+			t.Errorf("file %s written by orch only", name)
+		}
+	}
+}
+
+// runInSandbox runs argv with a fresh temp HOME and a fresh project (with .git/) as the
+// working directory, and an environment holding nothing but what section 5.1 of the plan allows.
+func (h *harness) runInSandbox(t *testing.T, argv []string, stdin []byte) outcome {
+	t.Helper()
+	home, project := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = project
+	cmd.Env = []string{
+		"HOME=" + home,
+		"PATH=" + h.path,
+		"ORCH_HOME=" + h.orchJS,
+		"ORCH_REGISTRY=" + filepath.Join(h.orchJS, "models.json"),
+	}
+	cmd.Stdin = bytes.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	exitCode := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("run %s: %v", argv[0], err)
+		}
+		exitCode = exitErr.ExitCode()
+	}
+	files := map[string]string{}
+	collectFiles(t, filepath.Join(project, ".orchestrator"), "project", files)
+	collectFiles(t, filepath.Join(home, ".local", "state", "opencode", "orchestrator"), "state", files)
+	return outcome{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String(), files: files}
+}
+
+// collectFiles adds every regular file under root to files, keyed "<label>/<relative path>".
+// A missing root contributes nothing.
+func collectFiles(t *testing.T, root, label string, files map[string]string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files[fmt.Sprintf("%s/%s", label, rel)] = string(content)
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("collect %s: %v", root, err)
+	}
+}

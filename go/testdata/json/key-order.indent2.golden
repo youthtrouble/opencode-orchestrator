@@ -1,0 +1,26 @@
+{
+  "0": "zero",
+  "1": "one",
+  "2": "two",
+  "10": "ten",
+  "4294967294": "largest array index",
+  "name": "first",
+  "b": "re-assigned keeps position",
+  "a": 2,
+  "01": "leading zero is a string key",
+  "-1": "negative is a string key",
+  "1.5": "fraction is a string key",
+  "4294967295": "2^32-1 is a string key",
+  "__proto__": "own property",
+  "": "empty key",
+  "lanes": {
+    "0": {},
+    "1": {
+      "phase": "finished"
+    },
+    "conductor": {
+      "phase": "running"
+    },
+    "worker-a": {}
+  }
+}

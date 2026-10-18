@@ -1,0 +1,5 @@
+{"empty object": {}, "empty array": [], "nested empties": [[], {}, [[]], [{}], {"a": {}}],
+ "scalars": [null, true, false, 0, "", "x"],
+ "deep": {"a": {"b": {"c": [1, [2, [3, {"d": null}]]]}}},
+ "array of objects": [{"id": "x", "n": 1}, {"n": 2, "id": "y"}],
+ "matrix": [[1, 2], [3, 4]]}

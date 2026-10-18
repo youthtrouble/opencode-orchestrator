@@ -1,0 +1,17 @@
+{
+  "quote": "say \"hi\"",
+  "backslash": "C:\\path\\to",
+  "slash": "a/b and escaped / slash",
+  "short escapes": "\b\f\n\r\t",
+  "controls": "\u0000\u0001\u0007\u000b\u000e\u001f",
+  "html": "<script>&amp;</script>",
+  "separators": "line para end",
+  "raw separators": "line para end",
+  "non-ascii": "café — naïve ☃ 日本語",
+  "astral escaped": "🚀 rocket",
+  "astral raw": "🚀 rocket",
+  "unicode escapes": "é中�",
+  "empty": "",
+  "spaces": "  padded  ",
+  "em dash key —": "value"
+}
