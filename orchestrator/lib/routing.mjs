@@ -131,3 +131,12 @@ export function summarizeForPrompt(resolved, usage) {
   for (const reason of resolved.reasons) lines.push(`  note: ${reason}`);
   return lines.join("\n");
 }
+
+// Effort for a role given the task size, from registry.effort_policy. Unknown size -> default size.
+export function effortFor(registry, role, size) {
+  const policy = registry.effort_policy || {};
+  const table = policy[role];
+  if (!table) return null;
+  const chosen = table[size] || table[policy.default_size || "medium"] || "medium";
+  return chosen;
+}

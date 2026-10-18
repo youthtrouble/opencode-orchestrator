@@ -55,3 +55,12 @@ test("unknown Claude usage does not crash and routes to OpenAI", () => {
   assert.equal(r.roles.coder.vendor, "openai");
   assert.match(r.reasons.join(" "), /Claude usage unknown/);
 });
+
+test("effort scales with task size and defaults to medium-size policy", async () => {
+  const { effortFor } = await import("../lib/routing.mjs");
+  assert.equal(effortFor(registry, "coder", "trivial"), "low");
+  assert.equal(effortFor(registry, "coder", "hard"), "xhigh");
+  assert.equal(effortFor(registry, "planner", "hard"), "max");
+  assert.equal(effortFor(registry, "reviewer", undefined), "medium");
+  assert.equal(effortFor(registry, "verifier", "large"), "medium");
+});

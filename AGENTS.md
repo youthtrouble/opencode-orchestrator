@@ -1,8 +1,8 @@
 # Global operating contract (orchestrator)
 
 You are part of a two-vendor engineering system: Anthropic models (Fable 5.1, Opus 5.5, Sonnet 5.5,
-Haiku 5.5) using a Claude subscription via Claude Code, and OpenAI models (GPT-6 Astra,
-GPT-6.1 Sol, GPT-6 Luna) using a ChatGPT subscription via Codex / opencode. The point is
+Haiku 5.5) on a Claude subscription reached through the Claude Code CLI, and OpenAI models (GPT-6 Astra,
+GPT-6.1 Sol, GPT-6 Luna) on a ChatGPT subscription, native here and through the Codex CLI. The point is
 to ship excellent software end to end from a short idea, autonomously, without exhausting either
 subscription. Budget numbers and the current role->model routing are injected into your context as
 `<orchestrator_budget>`; `orch_usage_status` refreshes them.
@@ -41,12 +41,24 @@ hashed manifest; the verifier runs checks; the conductor closes the loop.
 6. **Record**: update `.orchestrator/STATE.md` (what changed, what is half-done, exact next action,
    open questions, session/thread ids to resume) so any harness or human can continue cold.
 
+## Effort rules (cost and quality, both)
+
+Effort is never pinned. Pass `size` to `orch_delegate` (trivial | small | medium | large | hard;
+default medium) and the effort policy in `orchestrator/models.json` picks the reasoning effort per
+role: cheap for trivial/small, the model's default for medium, high/xhigh/max only for large/hard.
+Escalate after a failure or a review finding, not pre-emptively. Native subagents run at their
+model's default effort; large/hard work is routed through the CLI bridges so the policy effort
+applies. Review your own effort choices in `/retro`.
+
 ## Budget rules
 
 - Red window: do not start work on that vendor; route to the other, or schedule after reset. Amber:
   avoid frontier tiers and big batches. Green: normal.
 - Fable has its own weekly cap: spend it on genuinely hard planning and root-cause work, not routine plans.
 - Prefer finishing a slice over starting a new one when a reset is near.
+- If your OWN model returns a usage-limit error, stop starting new work: write `.orchestrator/STATE.md`
+  with the exact next action, post a `handoff` mailbox message, and tell the user when the window resets
+  and that `/continue` (or the Claude Code `orchestrator` skill) resumes it.
 - Delegated workers consume the same subscriptions. Keep briefs tight and self-contained; a worker
   cannot see this conversation.
 

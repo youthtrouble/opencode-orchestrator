@@ -1,7 +1,7 @@
 ---
 description: Frontier planner on GPT-6 Astra. Deep, meticulous plans and architecture decisions; read-only. Use when the planner role routes to OpenAI (Fable cap red) or for a second frontier opinion.
 mode: subagent
-model: openai/gpt-6-astra#xhigh
+model: openai/gpt-6-astra#high
 steps: 60
 permissions:
   - { action: "*", resource: "*", effect: allow }

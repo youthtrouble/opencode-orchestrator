@@ -4,8 +4,8 @@
 
   // Native default: OpenAI via "Sign in with ChatGPT" (opencode auth login openai --method chatgpt-token-sharing).
   // Anthropic models are NOT native here (Anthropic blocks subscription OAuth outside Claude Code);
-  // they are reached through the orch_delegate tool -> Claude subscription via Claude Code.
-  "model": "openai/gpt-6.1-sol#high",
+  // they are reached through the orch_delegate tool -> Claude Code CLI on your Team seat.
+  "model": "openai/gpt-6.1-sol#medium",
   "default_agent": "conductor",
   "update": "notify",
   "share": "disabled",
@@ -20,8 +20,8 @@
     "compaction": { "model": "openai/gpt-6-luna" },
     "explore":    { "model": "openai/gpt-6-luna" },
     "general":    { "model": "openai/gpt-6.1-sol#medium" },
-    "plan":       { "model": "openai/gpt-6.1-sol#xhigh" },
-    "build":      { "model": "openai/gpt-6.1-sol#high" }
+    "plan":       { "model": "openai/gpt-6.1-sol#high" },
+    "build":      { "model": "openai/gpt-6.1-sol#medium" }
   },
 
   // Guard rails that apply to every agent (ordered; later rules win).

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 — 2026-10-18
+
+- Effort policy by task size (`effort_policy` in `orchestrator/models.json`); `orch_delegate` takes
+  `size`; static agent efforts lowered to each model's recommended default (escalation per task).
+- Budget gate for native OpenAI subagents: refused with guidance when the OpenAI window is red;
+  provider usage-limit errors trigger an immediate usage refresh.
+- `orch_delegate` infers the harness from an explicit model name (fixes the "Codex bridge failed
+  before starting" observed during the first release run).
+- Native provider detection reads opencode v2's SQLite credential store.
+- Claude Code front door: `claude/agents/*` (conductor, architect, coder, reviewer, verifier,
+  researcher and their hard variants), `claude/skills/orchestrator`, `install-claude.sh`.
+- Contract: size every delegation; a conductor whose own provider is exhausted records STATE.md and
+  hands off instead of retrying.
+
 ## 0.1.0 — 2026-10-18
 
 First release.

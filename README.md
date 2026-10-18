@@ -11,8 +11,15 @@ records enough state to resume later. Usage windows steer work away from a const
   ChatGPT sign-in, or through the Codex CLI bridge.
 
 This is an inspectable collection of prompts, configuration, a plugin and dependency-free Node
-scripts—not a guarantee of unattended delivery. **An initial packaging smoke attempt encountered
-a Codex exec CLI-argument failure; see [verification and limitations](#verification-and-limitations).**
+scripts, not a guarantee of unattended delivery. It has shipped itself once end to end (plan,
+build, cross-vendor review, verification, publish); see [verification and limitations](#verification-and-limitations).
+
+There are two front doors over the same project state:
+
+- `opencode` (default agent `conductor`): OpenAI-native conductor; Anthropic roles run through the Claude Code bridge.
+- `claude --agent conductor`: Anthropic-native conductor; OpenAI roles run through the Codex bridge.
+
+When one vendor's window is exhausted, continue from the other door with `/continue`.
 
 ## Requirements
 
@@ -106,10 +113,25 @@ leave `operation.lock`; confirm no installer is running before manually reconcil
 Low-level storage failures before receipt persistence may require manual recovery. Do not assume
 power-loss durability or delete an opaque backup because a command failed.
 
+### Claude Code side (Anthropic-native conductor)
+
+```sh
+./install-claude.sh          # symlinks claude/agents/*.md and claude/skills/orchestrator into ~/.claude
+claude --agent conductor     # in any repo
+./install-claude.sh --uninstall
+```
+
+The Claude Code conductor uses the same `.orchestrator/` state, mailbox, manifests and bridges.
+Its subagents: `architect` / `architect-hard` (Fable 5.1 high / max), `coder` / `coder-hard`
+(Opus 5.5 medium / xhigh), `verifier` and `researcher` (Sonnet 5.5 low), and a same-vendor
+`reviewer` used only when the OpenAI window is red. Cross-vendor review goes through the Codex
+bridge or `codex review`.
+
 ### Update
 
-For a symlink installation, pull updates in the **checkout**, review them, run both test suites,
-then reload and check health:
+The Git checkout is the source of truth; `~/.config/opencode` only holds links to it plus runtime
+files. Edit in the checkout, commit, push. For a symlink installation, pull updates in the
+**checkout**, review them, run both test suites, then reload and check health:
 
 ```sh
 git pull

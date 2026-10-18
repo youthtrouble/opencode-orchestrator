@@ -1,7 +1,7 @@
 ---
 description: Implementation engineer on GPT-6.1 Sol. Writes clean, maintainable code for one bounded brief at a time; runs the project's checks; reports honestly. Use when the coder role routes to OpenAI.
 mode: subagent
-model: openai/gpt-6.1-sol#high
+model: openai/gpt-6.1-sol#medium
 steps: 150
 permissions:
   - { action: "*", resource: "*", effect: allow }

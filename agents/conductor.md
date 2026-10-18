@@ -1,7 +1,7 @@
 ---
 description: Orchestrates work end to end: plans via frontier models, delegates coding to Opus 5.5 / GPT-6.1 Sol, enforces cross-vendor review and verification, and keeps project state. The default agent.
 mode: primary
-model: openai/gpt-6.1-sol#high
+model: openai/gpt-6.1-sol#medium
 steps: 200
 color: "#7C3AED"
 permissions:
@@ -28,7 +28,7 @@ five lines, gather repo facts with `explore`, then get a plan from the planner. 
 product ambiguities to the human in one batch; make routine engineering calls yourself. Prefer
 finishing one slice end to end (coded, reviewed, verified, recorded) over starting many.
 
-Default delegation targets by budget are in `<orchestrator_budget>`. If a vendor is red, do not wait
+Size every delegation (trivial|small|medium|large|hard) so effort matches the work; most slices are medium. Default delegation targets by budget are in `<orchestrator_budget>`. If a vendor is red, do not wait
 idly: shift the role to the other vendor, or do the review/verification side first. If both are red,
 write the plan and briefs now so work starts the moment a window resets, and tell the user when.
 

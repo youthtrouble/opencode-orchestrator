@@ -103,7 +103,8 @@ export default {
             resume: { type: "string", description: "Previous session_id (Claude) or thread_id (Codex) to continue" },
             harness: { type: "string", enum: ["auto", "claude", "codex"], description: "Force a harness; default auto (routing decides)" },
             model: { type: "string", description: "Override model id for the chosen harness" },
-            effort: { type: "string", description: "Override reasoning effort (low|medium|high|xhigh|max)" },
+            size: { type: "string", enum: ["trivial", "small", "medium", "large", "hard"], description: "Task size; picks reasoning effort from the effort policy (cost vs quality). Default medium. Escalate on failure, not pre-emptively." },
+            effort: { type: "string", description: "Explicit reasoning effort override (low|medium|high|xhigh|max); normally leave unset and pass size instead" },
             write: { type: "boolean", description: "Allow file edits (default true for coder, false for planner/reviewer/researcher)" },
             max_turns: { type: "integer", description: "Claude only: cap agentic turns" },
             timeout_min: { type: "integer", description: "Kill after N minutes (default 90)" },
@@ -117,9 +118,16 @@ export default {
           const writeDefault = input.role === "coder";
           const write = input.write ?? writeDefault;
           let harness = input.harness && input.harness !== "auto" ? input.harness : null;
+          // An explicit model name decides the harness when none was given (gpt-* -> codex, claude-* -> claude).
+          if (!harness && input.model) harness = /^gpt-|^o\d/i.test(input.model) ? "codex" : /^claude/i.test(input.model) ? "claude" : null;
+          const { effortFor } = await lib("routing.mjs");
+          const size = input.size || r.registry.effort_policy?.default_size || "medium";
+          const policyEffort = effortFor(r.registry, input.role, size);
+          const bigTask = size === "large" || size === "hard";
           if (!harness) {
             if (!role) return { content: `All vendors are red or unavailable for role ${input.role}. ${r.resolved.reasons.join(" ")} Wait for the nearest reset or pass force=true.` };
-            if (role.via === "opencode") return { content: `Role ${input.role} is best served natively right now: call the subagent "${ROLE_TO_NATIVE_AGENT[input.role] || "general"}" (model ${role.model}). Budget: ${r.prompt.split("\n")[1] || ""}`, metadata: { native_agent: ROLE_TO_NATIVE_AGENT[input.role], role } };
+            // Native subagents have a fixed effort; large/hard tasks go through the CLI so the policy effort applies.
+            if (role.via === "opencode" && !bigTask) return { content: `Role ${input.role} (size ${size}) is best served natively right now: call the subagent "${ROLE_TO_NATIVE_AGENT[input.role] || "general"}" (model ${role.model}). Budget: ${r.prompt.split("\n")[1] || ""}`, metadata: { native_agent: ROLE_TO_NATIVE_AGENT[input.role], role, size } };
             harness = role.via === "claude-cli" ? "claude" : "codex";
           } else if (!role || (harness === "claude" ? role.vendor !== "anthropic" : role.vendor !== "openai")) {
             // Forced harness: pick that vendor's tier for the role straight from the registry.
@@ -129,7 +137,7 @@ export default {
             role = { vendor, tier, model: t.opencode, cli_model: t.cli, variant: t.variant, effort: t.effort, via: `${harness}-cli` };
           }
           const model = input.model || role.cli_model;
-          const effort = input.effort || role.effort || (harness === "claude" ? ({ max: "max", high: "high", medium: "medium" } as any)[role.variant] || "high" : "high");
+          const effort = input.effort || policyEffort || role.effort || role.variant || "medium";
           const args = [path.join(BIN, harness === "claude" ? "claude-exec.mjs" : "codex-exec.mjs"), "--cwd", cwd, "--model", model, "--effort", effort, "--timeout-min", String(input.timeout_min || 90), "--quiet"];
           if (input.resume) args.push("--resume", input.resume);
           if (input.force) args.push("--force");
@@ -143,7 +151,7 @@ export default {
           if (res.code === 75) return { content: `Refused: ${(out as any).note || "vendor budget is red"}. Resets ${(out as any).resets_at || "unknown"}. Try another role/harness or force=true.`, metadata: out };
           const id = (out as any).session_id || (out as any).thread_id || null;
           const usage = (out as any).usage || null;
-          const header = `[${harness} ${model} effort=${effort} | ${(out as any).ok ? "ok" : "FAILED"} | ${Math.round(((out as any).duration_ms || 0) / 1000)}s | resume=${id} | record=${(out as any).record || "n/a"}]`;
+          const header = `[${harness} ${model} effort=${effort} size=${size} |${(out as any).ok ? "ok" : "FAILED"} | ${Math.round(((out as any).duration_ms || 0) / 1000)}s | resume=${id} | record=${(out as any).record || "n/a"}]`;
           const body = (out as any).final_message || (out as any).errors?.join("; ") || res.stderr.slice(-2000) || "(no output)";
           return { content: `${header}\n\n${body}`, metadata: { ok: (out as any).ok, resume: id, harness, model, usage, files_changed: (out as any).files_changed, permission_denials: (out as any).permission_denials } };
         },
@@ -264,6 +272,28 @@ export default {
         if (!lastSummary && cached) { const reg = usageLib.loadRegistry(); const { resolveRoles, summarizeForPrompt } = await lib("routing.mjs"); lastSummary = summarizeForPrompt(resolveRoles(cached, reg, { channels: usageLib.detectChannels() }), cached); }
         if (lastSummary) e.system.push({ type: "text", text: `<orchestrator_budget updated="${cached?.generated_at || "unknown"}">\n${lastSummary}\nRules: never start frontier-planning or large batches when the relevant window is red; prefer the vendor with headroom; schedule heavy work after the nearest reset; cross-vendor review is the default. Use orch_usage_status for fresh numbers.\n</orchestrator_budget>` });
       } catch { /* never block the turn on budget data */ }
+    });
+
+    // ---- 2b. Budget gate for native subagents + learn from provider limit errors ----------
+    const NATIVE_OPENAI_AGENTS = new Set(Object.keys(NATIVE_AGENT_TIER));
+    await ctx.tool.hook("execute.before", async (e: any) => {
+      if (e.tool !== "subagent") return;
+      const target = String((e.input as any)?.agent || "");
+      if (!NATIVE_OPENAI_AGENTS.has(target)) return;
+      try {
+        const r = await routing(false);
+        const p = r.resolved.postures.openai;
+        if (p?.available && p.overall === "red") {
+          const d = p.detail;
+          throw new Error(`[orchestrator] OpenAI budget is red (5h ${d.five_hour?.pct}% resets ${d.five_hour?.resets_at}; weekly ${d.weekly?.pct}%). Native subagent "${target}" refused. Use orch_delegate(harness="claude", ...) for this role, or defer until the reset and record STATE.md.`);
+        }
+      } catch (err: any) {
+        if (String(err?.message || "").startsWith("[orchestrator]")) throw err;
+        /* usage unavailable: do not block */
+      }
+    });
+    await ctx.tool.hook("execute.after", async (e: any) => {
+      if (e.status === "error" && /usage_limit|rate_limit|subscription_sharing/i.test(String(e.error?.message || e.error || ""))) refreshSoon();
     });
 
     // ---- 3. Keep native agent models in sync with models.json ----------------------------
