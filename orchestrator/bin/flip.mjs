@@ -15,7 +15,7 @@ import { decideFlip, otherDoor } from "../lib/flip.mjs";
 import { post } from "../lib/mailbox.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const { opts, positional } = parseArgs(process.argv.slice(2), { valueKeys: ["active", "to", "from", "cwd", "reason"], flagKeys: ["force"] });
+const { opts, positional } = parseArgs(process.argv.slice(2), { valueKeys: ["active", "to", "from", "cwd", "reason", "resume"], flagKeys: ["force"] });
 const cmd = positional[0];
 const root = path.resolve(opts.cwd || process.cwd());
 const FLIP = path.join(root, ".orchestrator", "flip.json");
@@ -57,13 +57,14 @@ if (cmd === "run") {
   ensureGitExclude(root);
   const briefsDir = path.join(root, ".orchestrator", "briefs"); fs.mkdirSync(briefsDir, { recursive: true });
   const brief = path.join(briefsDir, "conductor-continue.md");
-  fs.writeFileSync(brief, `# Continue as conductor (${to} door)\n\nYou are taking over this project from the ${from} conductor (${opts.reason || "vendor budget flip"}).\nRead .orchestrator/STATE.md and the mailbox, verify recorded facts against the tree, then execute the exact next action and keep following the loop.\nAt each brief boundary run: node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active ${to}\nIf it says handback or flip: update STATE.md, post a handoff, run flip.mjs run --to <door> --from ${to}, and stop.\nYou cannot ask the human interactively: put questions in the mailbox (kind question) and continue with independent work, or stop at human gates.\n`);
+  fs.writeFileSync(brief, `# Continue as conductor (${to} door)\n\nYou are taking over this project from the ${from} conductor (${opts.reason || "vendor budget flip"}).\nRead .orchestrator/STATE.md and the mailbox, verify recorded facts against the tree, then execute the exact next action and keep following the loop.\nAt each brief boundary run: node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active ${to}\nIf it says handback or flip: update STATE.md, post a handoff, run flip.mjs run --to <door> --from ${to}, and stop.\nYou cannot ask the human interactively: put questions in the mailbox (kind question) and continue with independent work, or stop at human gates.\nHEADLESS RULE: ending your turn ends this session and kills background subagents. Run every subagent in the FOREGROUND and wait; any background agents from a previous headless session are gone, re-run them in the foreground. Do not finish until the loop is complete or you have handed off with flip.mjs run/pause.\n`);
   const prev = readFlip();
   const record = { at: new Date().toISOString(), from, to, reason: opts.reason || null, previous: prev ? { at: prev.at, to: prev.to } : null };
   fs.writeFileSync(FLIP, JSON.stringify(record, null, 2) + "\n"); // clears any paused marker
   try { post(root, { from: `conductor-${from}`, to: `conductor-${to}`, kind: "handoff", subject: `conductor flip ${from} -> ${to}`, body: opts.reason || "vendor budget flip", refs: [".orchestrator/STATE.md", path.relative(root, brief)] }); } catch { /* mailbox optional */ }
   const args = [path.join(HERE, "worker.mjs"), "start", "--brief", path.relative(root, brief), "--lane", "conductor", "--harness", to, "--agent", "conductor", "--breadth", "broad", "--cwd", root, "--detach"];
   if (to === "claude") args.push("--permission-mode", "auto");
+  if (opts.resume) args.push("--resume", opts.resume);
   if (opts.force) args.push("--force");
   const r = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
   console.log(JSON.stringify({ flipped: r.status === 0, to, from, launcher: (r.stdout || r.stderr || "").trim().slice(0, 400) }));

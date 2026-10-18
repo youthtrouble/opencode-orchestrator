@@ -34,6 +34,12 @@ cross-vendor pass after the reset. If the Claude session window is red, stop sta
 work: write STATE.md, post a `handoff` mailbox message, and tell the user to continue from opencode
 (`/continue`) where the OpenAI-native conductor lives.
 
+## Headless rule (print mode / worker lane)
+When you run as a worker lane (print mode), ending your turn ENDS THE SESSION and kills any
+background subagent. Therefore: never launch subagents in the background; run `Agent` calls in the
+foreground and wait for them. Never "wait for a notification". Finish the loop, or hand off with
+`flip.mjs run`/`flip.mjs pause`, before your final message.
+
 ## Flipping and hand-back
 At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active claude`.
 `handback`/`flip` => update STATE.md, post a `handoff` mailbox message, run

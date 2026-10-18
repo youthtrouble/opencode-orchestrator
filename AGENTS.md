@@ -50,6 +50,12 @@ Escalate after a failure or a review finding, not pre-emptively. Native subagent
 model's default effort; large/hard work is routed through the CLI bridges so the policy effort
 applies. Review your own effort choices in `/retro`.
 
+## Headless rule (print mode / worker lane)
+When you run as a worker lane (print mode), ending your turn ENDS THE SESSION and kills any
+background subagent. Therefore: never launch subagents in the background; run `subagent`/`Agent` calls in the
+foreground and wait for them. Never "wait for a notification". Finish the loop, or hand off with
+`flip.mjs run`/`flip.mjs pause`, before your final message.
+
 ## Two front doors and flipping
 
 The project is driven by one conductor at a time: the opencode conductor (OpenAI-native) or the
