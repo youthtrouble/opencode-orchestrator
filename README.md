@@ -146,6 +146,19 @@ with `--copy` (and `--force` if the restored previous config occupies the target
 changes before uninstalling. The older nested `orchestrator/bin/setup.sh` is a legacy auth/setup
 helper, not the reversible installer documented here.
 
+## One-command runs
+
+```sh
+node ~/.config/opencode/orchestrator/bin/kickoff.mjs --brief .orchestrator/briefs/<brief>.md [--brief <side-brief>.md] [--headless]
+node ~/.config/opencode/orchestrator/bin/watch.mjs --follow
+```
+
+`kickoff` refreshes budgets, starts the project supervisor, excludes `.orchestrator/` from git, picks
+the door whose vendor has headroom (home first), and launches the conductor with the right prompt,
+interactive by default or as a headless `conductor` lane with `--headless`. If both vendors are red
+it records a pause and the supervisor starts the run by itself at the first reset. `watch` is one
+refreshing screen: budgets, routing, supervisor, flip state, lanes, mailbox, incidents, next action.
+
 ## First run and the conductor loop
 
 Run `opencode` from the project you want to work on, not necessarily this checkout. The installed

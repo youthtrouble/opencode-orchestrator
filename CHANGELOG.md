@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 — 2026-10-18
+
+- `kickoff.mjs` (preflight + door selection + launch, pause when both red) and `watch.mjs` (single dashboard).
+
 ## 0.4.0 — 2026-10-18
 
 - Incident log (`lib/incident.mjs`, `bin/incident.mjs`, `orch_incident` tool): redacted, fingerprinted, local; written automatically by bridges, worker, supervisor and plugin; read by `/retro` and the audit skill; `share` makes a sanitized bundle, never uploads.
