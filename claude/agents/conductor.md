@@ -38,7 +38,7 @@ work: write STATE.md, post a `handoff` mailbox message, and tell the user to con
 At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active claude`.
 `handback`/`flip` => update STATE.md, post a `handoff` mailbox message, run
 `node ~/.config/opencode/orchestrator/bin/flip.mjs run --to <door> --from claude`, and stop.
-`pause` => write the remaining briefs, post a handoff, stop. On first use in a repo add
+`pause` => write the remaining briefs, post a handoff, stop. Then run `node ~/.config/opencode/orchestrator/bin/flip.mjs pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `supervisor.mjs start` running). On first use in a repo add
 `.orchestrator/` to `.git/info/exclude`.
 
 ## The loop

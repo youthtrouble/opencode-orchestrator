@@ -31,6 +31,17 @@ export function ensureGitExclude(projectRoot) {
   return true;
 }
 
+if (cmd === "pause") {
+  // A conductor that stopped because both vendors are red records the pause; the supervisor relaunches
+  // the right door automatically as soon as either window is usable again.
+  const active = opts.active || "opencode";
+  fs.mkdirSync(path.dirname(FLIP), { recursive: true });
+  const prev = readFlip() || {};
+  fs.writeFileSync(FLIP, JSON.stringify({ ...prev, paused: { at: new Date().toISOString(), door: active, reason: opts.reason || "both vendors red" } }, null, 2) + "\n");
+  try { post(root, { from: `conductor-${active}`, to: "supervisor", kind: "handoff", subject: "conductor paused: both vendors red", body: "Supervisor will relaunch when a window resets.", refs: [".orchestrator/STATE.md"] }); } catch { /* optional */ }
+  console.log(JSON.stringify({ paused: true, door: active }));
+  process.exit(0);
+}
 if (cmd === "status") { console.log(JSON.stringify(readFlip() || { state: "never flipped" }, null, 2)); process.exit(0); }
 if (cmd === "decide") {
   if (!opts.active) { console.error("--active opencode|claude required"); process.exit(2); }
@@ -49,7 +60,7 @@ if (cmd === "run") {
   fs.writeFileSync(brief, `# Continue as conductor (${to} door)\n\nYou are taking over this project from the ${from} conductor (${opts.reason || "vendor budget flip"}).\nRead .orchestrator/STATE.md and the mailbox, verify recorded facts against the tree, then execute the exact next action and keep following the loop.\nAt each brief boundary run: node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active ${to}\nIf it says handback or flip: update STATE.md, post a handoff, run flip.mjs run --to <door> --from ${to}, and stop.\nYou cannot ask the human interactively: put questions in the mailbox (kind question) and continue with independent work, or stop at human gates.\n`);
   const prev = readFlip();
   const record = { at: new Date().toISOString(), from, to, reason: opts.reason || null, previous: prev ? { at: prev.at, to: prev.to } : null };
-  fs.writeFileSync(FLIP, JSON.stringify(record, null, 2) + "\n");
+  fs.writeFileSync(FLIP, JSON.stringify(record, null, 2) + "\n"); // clears any paused marker
   try { post(root, { from: `conductor-${from}`, to: `conductor-${to}`, kind: "handoff", subject: `conductor flip ${from} -> ${to}`, body: opts.reason || "vendor budget flip", refs: [".orchestrator/STATE.md", path.relative(root, brief)] }); } catch { /* mailbox optional */ }
   const args = [path.join(HERE, "worker.mjs"), "start", "--brief", path.relative(root, brief), "--lane", "conductor", "--harness", to, "--agent", "conductor", "--breadth", "broad", "--cwd", root, "--detach"];
   if (to === "claude") args.push("--permission-mode", "auto");
@@ -58,4 +69,4 @@ if (cmd === "run") {
   console.log(JSON.stringify({ flipped: r.status === 0, to, from, launcher: (r.stdout || r.stderr || "").trim().slice(0, 400) }));
   process.exit(r.status === 0 ? 0 : 1);
 }
-console.error("commands: decide | run | status"); process.exit(2);
+console.error("commands: decide | run | pause | status"); process.exit(2);

@@ -240,7 +240,7 @@ One conductor drives a project at a time. `models.json` -> `conductor.home` name
 | its own vendor is red | flips to the other door (forced; also triggered automatically when its model dies on a usage-limit error) |
 | it is the away door and home is stably green (green for `green_grace_minutes` after the reset) | hands back home |
 | it is the away door, home still red | keeps going |
-| both red | writes the remaining briefs and pauses; the supervisor re-dispatches after the first reset |
+| both red | writes the remaining briefs, runs `flip.mjs pause`, stops; the supervisor (if running) relaunches automatically: the home door if it comes back first, otherwise the other door |
 
 `flip.mjs run` posts a `handoff`, records `.orchestrator/flip.json`, and starts the other door's
 conductor headless as worker lane `conductor` (lane lock = single driver). A headless conductor

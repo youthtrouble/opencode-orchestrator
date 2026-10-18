@@ -136,9 +136,15 @@ function tickAll(state) {
     if (idle) {
       const d = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "decide", "--active", activeDoor, "--cwd", root], { encoding: "utf8" });
       let decision = null; try { decision = JSON.parse(d.stdout.trim().split("\n").pop()); } catch { /* usage unavailable */ }
-      if (decision && (decision.action === "flip" || decision.action === "handback")) {
-        const r = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "run", "--to", decision.to, "--from", activeDoor, "--reason", decision.reason, "--cwd", root], { encoding: "utf8" });
-        fs.appendFileSync(LOG, `${iso(now)} flip ${activeDoor}->${decision.to} ${decision.action}: ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);
+      // Relaunch rules for an idle conductor: flip/handback launch the target door; a paused project
+      // (both vendors were red) relaunches its own door as soon as decide no longer says pause.
+      const paused = Boolean(flip?.paused);
+      let target = null;
+      if (decision && (decision.action === "flip" || decision.action === "handback")) target = decision.to;
+      else if (decision && decision.action === "stay" && paused) target = activeDoor;
+      if (target) {
+        const r = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "run", "--to", target, "--from", activeDoor, "--reason", `${decision.action}: ${decision.reason}`, "--cwd", root], { encoding: "utf8" });
+        fs.appendFileSync(LOG, `${iso(now)} relaunch ${activeDoor}->${target} (${decision.action}${paused ? ", was paused" : ""}): ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);
       }
     }
   }

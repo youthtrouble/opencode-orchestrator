@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1 — 2026-10-18
+
+- `flip.mjs pause` + supervisor relaunch of a paused conductor as soon as either window is usable (home door preferred); previously only the other-door case relaunched automatically.
+
 ## 0.3.0 — 2026-10-18
 
 - Conductor flip: `orchestrator/bin/flip.mjs` (decide/run/status) with a tested policy
