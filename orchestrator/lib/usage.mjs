@@ -83,11 +83,17 @@ export function readCachedUsage(maxAgeMs = 5 * 60 * 1000) {
 }
 
 export async function getUsage({ refresh = false, maxAgeMs } = {}) {
-  if (!refresh) {
-    const cached = readCachedUsage(maxAgeMs);
-    if (cached && !cached.stale) return cached;
-  }
+  const cached = readCachedUsage(maxAgeMs);
+  if (!refresh && cached && !cached.stale) return cached;
   const usage = await collectUsage();
+  // A failed read (e.g. HTTP 429 on the usage endpoint) must not make a vendor look unavailable:
+  // keep the last good reading, marked with its age, for up to 30 minutes.
+  for (const vendor of ["claude", "codex"]) {
+    const fresh = usage[vendor], last = cached?.[vendor];
+    if (fresh && !fresh.ok && last && last.ok && Date.now() - Date.parse(cached.generated_at) < 30 * 60 * 1000) {
+      usage[vendor] = { ...last, last_good_at: last.last_good_at || cached.generated_at, read_error: fresh.error };
+    }
+  }
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const tmp = USAGE_FILE + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(usage, null, 2));

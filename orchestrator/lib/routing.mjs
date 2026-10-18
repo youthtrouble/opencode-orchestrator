@@ -141,7 +141,7 @@ export function summarizeForPrompt(resolved, usage) {
   const p = resolved.postures;
   if (c?.ok) {
     const fable = c.weekly_by_model?.fable;
-    lines.push(`Claude (${c.plan || "subscription"}): session ${c.session.pct ?? "?"}% [${p.anthropic.windows.session}] resets ${c.session.resets_at || "?"}; weekly ${c.weekly.pct ?? "n/a"}%${fable ? `; Fable weekly ${fable.pct}% [${p.anthropic.windows.fable}] resets ${fable.resets_at}` : ""}.`);
+    lines.push(`Claude (${c.plan || "subscription"}${c.read_error ? ", last good " + String(c.last_good_at).slice(11, 16) + "Z" : ""}): session ${c.session.pct ?? "?"}% [${p.anthropic.windows.session}] resets ${c.session.resets_at || "?"}; weekly ${c.weekly.pct ?? "n/a"}%${fable ? `; Fable weekly ${fable.pct}% [${p.anthropic.windows.fable}] resets ${fable.resets_at}` : ""}.`);
   } else lines.push(`Claude usage: unavailable (${c?.error || "no data"}).`);
   if (x?.ok) lines.push(`Codex (${x.plan || "subscription"}): 5h ${x.five_hour.pct}% [${p.openai.windows.five_hour}] resets ${x.five_hour.resets_at}; weekly ${x.weekly.pct}% [${p.openai.windows.weekly}] resets ${x.weekly.resets_at}.`);
   else lines.push(`Codex usage: unavailable (${x?.error || "no data"}).`);
