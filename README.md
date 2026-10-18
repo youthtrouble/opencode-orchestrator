@@ -243,6 +243,20 @@ Relevant scripts include `usage`, `claude-exec`, `codex-exec`, `worker`, `superv
 `manifest` and `doctor`; read their source headers for arguments. The presence of a tool does not
 mean its external CLI path has passed end-to-end verification.
 
+## Answering the conductor and running unattended
+
+A headless conductor cannot ask you interactively. Its questions land in the mailbox; answer them in one line:
+
+```sh
+node ~/.config/opencode/orchestrator/bin/mailbox.mjs inbox                 # open questions + the exact reply command
+node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply <id> "answer"   # posts your answer and acknowledges
+```
+
+`watch.mjs` shows open questions at the top. The autonomy policy decides what never needs a question:
+by default verified slices are pushed to `main` automatically; releases, code deletion, spend and deploys
+ask but do not block other slices. `policy.mjs show|set|unattended` edits it per project
+(`.orchestrator/policy.json`); `kickoff --unattended` applies the away-mode defaults.
+
 ## Flipping between the two doors
 
 One conductor drives a project at a time. `models.json` -> `conductor.home` names the default door

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // One command to start a run: preflight, pick the door by live budget, launch the conductor.
-//   kickoff.mjs --brief .orchestrator/briefs/X.md [--brief Y.md ...] [--door auto|claude|opencode] [--headless] [--cwd DIR] [--dry-run]
+//   kickoff.mjs --brief .orchestrator/briefs/X.md [--brief Y.md ...] [--door auto|claude|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]
 // Preflight: refresh usage, ensure supervisor running, add .orchestrator/ to .git/info/exclude.
 // Door "auto": the home door if its vendor is usable, else the other; both red => pause + exit 75.
 import fs from "node:fs";
@@ -14,7 +14,7 @@ import { DOOR_VENDOR, otherDoor } from "../lib/flip.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
 const briefs = []; for (let i = 0; i < argv.length; i++) if (argv[i] === "--brief" && argv[i + 1]) briefs.push(argv[++i]);
-const { opts } = parseArgs(argv.filter((a, i, arr) => !(a === "--brief" || arr[i - 1] === "--brief")), { valueKeys: ["door", "cwd"], flagKeys: ["headless", "dry-run", "help"] });
+const { opts } = parseArgs(argv.filter((a, i, arr) => !(a === "--brief" || arr[i - 1] === "--brief")), { valueKeys: ["door", "cwd"], flagKeys: ["headless", "dry-run", "help", "unattended"] });
 const root = path.resolve(opts.cwd || process.cwd());
 if (opts.help || !briefs.length) { console.log("usage: kickoff.mjs --brief FILE [--brief FILE2] [--door auto|claude|opencode] [--headless] [--dry-run]"); process.exit(briefs.length ? 0 : 2); }
 for (const b of briefs) if (!fs.existsSync(path.resolve(root, b))) { console.error(`brief not found: ${b}`); process.exit(2); }
@@ -31,6 +31,7 @@ if (!door) {
   process.exit(75);
 }
 // Preflight (a human is running this, so any human gate is cleared)
+if (opts.unattended) spawnSync(process.execPath, [path.join(HERE, "policy.mjs"), "unattended", "--cwd", root], { stdio: "ignore" });
 spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "gate", "--clear", "--cwd", root], { stdio: "ignore" });
 const sup = spawnSync(process.execPath, [path.join(HERE, "supervisor.mjs"), "start", "--cwd", root], { encoding: "utf8" });
 console.log(`supervisor: ${(sup.stdout || sup.stderr).trim().slice(0, 120)}`);

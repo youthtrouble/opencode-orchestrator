@@ -40,6 +40,15 @@ background subagent. Therefore: never launch subagents in the background; run `A
 foreground and wait for them. Never "wait for a notification". Finish the loop, or hand off with
 `flip.mjs run`/`flip.mjs pause`, before your final message.
 
+## Autonomy policy (so work continues while the human is away)
+Read the effective policy with `node ~/.config/opencode/orchestrator/bin/policy.mjs show`. `push_to_main: auto`
+means: after a slice is verified (review pass, checks green, manifest recorded) commit only that slice's
+files with a descriptive message and push to main yourself; never force-push; record the push in STATE.md.
+For `ask` items (release, code deletion, spend, deploy) post a `question` and KEEP WORKING on the next
+independent slice; record a human gate (`flip.mjs gate`) only when nothing independent remains.
+`product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
+post the question, continue.
+
 ## Flipping and hand-back
 At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active claude`.
 `handback`/`flip` => update STATE.md, post a `handoff` mailbox message, run

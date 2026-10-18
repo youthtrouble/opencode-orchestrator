@@ -27,6 +27,9 @@ async function render() {
   const lanesDir = path.join(root, ".orchestrator", "workers");
   const lanes = fs.existsSync(lanesDir) ? fs.readdirSync(lanesDir).filter((f) => f.endsWith(".json")).map((f) => readJson(path.join(lanesDir, f))).filter(Boolean) : [];
   out.push(`lanes: ${lanes.length ? lanes.map((l) => `${l.lane}[${l.harness}] ${l.status}${["running", "starting"].includes(l.status) ? (alive(l.pid) ? "" : " (DEAD)") : ""} ${l.last_tool ? "last " + l.last_tool : ""} ${String(l.last_progress_at || l.updated_at || "").slice(11, 16)}Z`).join(" | ") : "none"}`);
+  const qs = mailboxList(root, { kind: "question", unackedBy: "human", limit: 20 }).filter((m) => m.to === "human" || m.to === "*");
+  if (qs.length) { out.push(`QUESTIONS FOR YOU (${qs.length}):`); for (const q of qs) out.push(`  [${q.id.slice(0, 8)}] ${q.subject.slice(0, 100)}\n     reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply ${q.id.slice(0, 8)} "..."`); }
+  if (flip?.awaiting_human) out.push(`AWAITING HUMAN: ${flip.awaiting_human.reason}  (clear: node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear)`);
   const msgs = mailboxList(root, { limit: 8 });
   out.push(`mailbox (last ${msgs.length}):`);
   for (const m of msgs) out.push(`  ${m.at.slice(11, 16)}Z ${m.kind.padEnd(8)} ${m.from} -> ${m.to}: ${m.subject}`);

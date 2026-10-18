@@ -13,6 +13,7 @@ All tooling lives in `~/.config/opencode/orchestrator` (README there). Shell com
 - Codex native review of the diff: `codex review --uncommitted` (or `--base main`).
 - Delegate to a separate Claude session: `node ~/.config/opencode/orchestrator/bin/claude-exec.mjs --model claude-opus-5-5 --effort high --permission-mode acceptEdits --cwd <repo> --prompt-file brief.md`.
 - Background worker + supervisor: `worker.mjs start --brief .orchestrator/briefs/X.md --harness codex --detach --breadth standard`, `supervisor.mjs start`, `supervisor.mjs status|ack --event ID`.
+- Answer a headless conductor: `mailbox.mjs inbox`, then `mailbox.mjs reply <id> "answer"`. Autonomy: `policy.mjs show|unattended`.
 - Mailbox: `mailbox.mjs post --from claude --to coordinator --kind release --subject "..." --ref path`, `mailbox.mjs list --unacked-by claude`.
 - Manifests: `manifest.mjs create --task T --author claude --out .orchestrator/manifests/T.json <paths>`; `manifest.mjs verify file.json`.
 
