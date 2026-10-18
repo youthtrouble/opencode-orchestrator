@@ -1,0 +1,148 @@
+{
+  "postures": {
+    "anthropic": {
+      "available": true,
+      "overall": "red",
+      "frontier": "red",
+      "headroom": 90,
+      "windows": {
+        "session": "green",
+        "weekly": "red",
+        "fable": "green"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "team",
+        "session": {
+          "pct": 10,
+          "resets_at": "2026-10-18T14:00:00.000Z"
+        },
+        "weekly": {
+          "pct": 90,
+          "resets_at": "2026-10-23T00:00:00.000Z"
+        },
+        "weekly_by_model": {
+          "fable": {
+            "pct": 10,
+            "resets_at": "2026-10-20T00:00:00.000Z"
+          }
+        }
+      }
+    },
+    "openai": {
+      "available": true,
+      "overall": "green",
+      "frontier": "green",
+      "headroom": 70,
+      "windows": {
+        "five_hour": "green",
+        "weekly": "green"
+      },
+      "resets_soon": false,
+      "detail": {
+        "ok": true,
+        "plan": "plus",
+        "five_hour": {
+          "pct": 30,
+          "resets_at": "2026-10-18T14:00:00.000Z"
+        },
+        "weekly": {
+          "pct": 10,
+          "resets_at": "2026-10-22T03:20:00.000Z"
+        }
+      }
+    }
+  },
+  "roles": {
+    "planner": {
+      "vendor": "openai",
+      "tier": "strong",
+      "model": "openai/gpt-6.1-sol",
+      "cli_model": "gpt-6.1-sol",
+      "cli": "codex",
+      "variant": null,
+      "effort": "medium",
+      "context": 500000,
+      "note": "GPT-6.1 Sol: Codex's workhorse (500k ctx in Codex, 'near-Astra at 1/5 cost'). Long-running autonomous implementation and blind second-opinion review.",
+      "via": "opencode"
+    },
+    "coder": {
+      "vendor": "openai",
+      "tier": "strong",
+      "model": "openai/gpt-6.1-sol",
+      "cli_model": "gpt-6.1-sol",
+      "cli": "codex",
+      "variant": null,
+      "effort": "medium",
+      "context": 500000,
+      "note": "GPT-6.1 Sol: Codex's workhorse (500k ctx in Codex, 'near-Astra at 1/5 cost'). Long-running autonomous implementation and blind second-opinion review.",
+      "via": "opencode"
+    },
+    "reviewer": {
+      "vendor": "openai",
+      "tier": "mid",
+      "model": "openai/gpt-6.1-sol",
+      "cli_model": "gpt-6.1-sol",
+      "cli": "codex",
+      "variant": null,
+      "effort": "medium",
+      "context": 500000,
+      "note": "Same model, medium effort: code review of Anthropic-written code (cross-vendor review).",
+      "cross_vendor": false,
+      "via": "opencode"
+    },
+    "verifier": {
+      "vendor": "openai",
+      "tier": "cheap",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
+      "variant": null,
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "via": "opencode"
+    },
+    "researcher": {
+      "vendor": "openai",
+      "tier": "cheap",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
+      "variant": null,
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "via": "opencode"
+    },
+    "explorer": {
+      "vendor": "openai",
+      "tier": "cheap",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
+      "variant": null,
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "via": "opencode"
+    },
+    "utility": {
+      "vendor": "openai",
+      "tier": "cheap",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
+      "variant": null,
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "via": "opencode"
+    }
+  },
+  "reasons": [
+    "Claude session/weekly is red: Anthropic roles failed over to OpenAI."
+  ],
+  "paused": false
+}

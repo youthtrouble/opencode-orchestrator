@@ -1,7 +1,7 @@
 Claude (subscription): session ?% [red] resets 1792328400; weekly 7%; Fable weekly null% [unknown] resets undefined.
 Codex (plus): 5h 0% [green] resets 2026-10-18T14:00:00.000Z; weekly 0.25% [green] resets 2026-10-22T03:20:00.000Z.
 Routing now:
-  planner: openai/gpt-6-astra (effort high) via codex-cli
+  planner: openai/gpt-6.1-sol (effort medium) via codex-cli
   coder: openai/gpt-6.1-sol (effort medium) via codex-cli
   reviewer: openai/gpt-6.1-sol (effort medium) via codex-cli [same-vendor review: cross vendor unavailable]
   verifier: openai/gpt-6-luna (effort low) via codex-cli

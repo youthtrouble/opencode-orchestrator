@@ -91,10 +91,10 @@
       }
     },
     {
-      "name": "first-usable-vendor-lacks-tier",
+      "name": "missing-tier-preferences-skipped",
       "channels": { "openai": true },
       "registry": {
-        "$comment": "Minimal registry: anthropic has no frontier tier, so the planner pauses although openai.frontier is usable (pickFrom stops at the first usable vendor); utility's same.strong has no coder vendor.",
+        "$comment": "Minimal registry: preferences whose tier is missing are skipped. anthropic has no frontier tier, so the planner falls to openai.frontier; verifier skips openai.missing for anthropic.strong; utility's same.strong has no coder vendor, so it falls to cross.strong.",
         "thresholds": { "amber": 60, "red": 85, "soon_minutes": 20 },
         "vendors": {
           "anthropic": { "cli": "claude", "tiers": { "strong": { "opencode": "anthropic/opus", "cli": "opus", "effort": "high", "context": 200000, "note": "strong only" } } },
@@ -114,6 +114,78 @@
         "claude": { "ok": true, "plan": "team", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 30, "resets_at": "2026-10-18T22:00:00.000Z" } } },
         "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
       }
+    },
+    {
+      "name": "claude-session-amber-frontier",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "max", "session": { "pct": 70, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 20, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 10, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "pro", "five_hour": { "pct": 65, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "claude-weekly-red-frontier-red",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 90, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": { "fable": { "pct": 10, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 30, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "weekly-amber-five-hour-green",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 50, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 70, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": { "fable": { "pct": 10, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 70, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "balance-margin-edge-not-triggered",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 25, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": null, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 10, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "balance-margin-edge-triggered",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 26, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": null, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 10, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "balance-fractional-headroom",
+      "channels": { "anthropic": true, "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "max", "session": { "pct": 61.7, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 41, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 70, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "pro", "five_hour": { "pct": 33.3, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "claude-session-unknown-balanced",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": null, "resets_at": null }, "weekly": { "pct": null, "resets_at": null } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "last-good-reading",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "max", "read_error": "HTTP 429", "last_good_at": "2026-10-18T11:41:07.512Z", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": null }, "weekly_by_model": { "fable": { "pct": 30, "resets_at": "2026-10-20T00:00:00.000Z" } } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "last-good-without-timestamp",
+      "channels": {},
+      "usage": {
+        "claude": { "ok": true, "read_error": "HTTP 429", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": null } },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
     }
   ],
   "flip": [
@@ -130,7 +202,9 @@
     { "routing": "codex-rate-limited", "active": "bogus", "last_flip_at": null },
     { "routing": "green-openai-native", "active": "bogus", "last_flip_at": null },
     { "routing": "codex-weekly-unknown", "active": "claude", "last_flip_at": null },
-    { "routing": "claude-locked-epoch-reset-sparse-fable", "active": "claude", "last_flip_at": null }
+    { "routing": "claude-locked-epoch-reset-sparse-fable", "active": "claude", "last_flip_at": null },
+    { "routing": "claude-weekly-red-frontier-red", "active": "claude", "last_flip_at": null },
+    { "routing": "weekly-amber-five-hour-green", "active": "opencode", "last_flip_at": null }
   ],
   "supervise": [
     {

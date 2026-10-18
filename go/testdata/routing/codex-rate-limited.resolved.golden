@@ -4,6 +4,7 @@
       "available": true,
       "overall": "green",
       "frontier": "green",
+      "headroom": 90,
       "windows": {
         "session": "green",
         "weekly": "green",
@@ -28,6 +29,7 @@
       "available": true,
       "overall": "red",
       "frontier": "red",
+      "headroom": 60,
       "windows": {
         "five_hour": "red",
         "weekly": "green"

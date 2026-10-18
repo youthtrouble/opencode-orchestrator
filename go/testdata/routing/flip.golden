@@ -60,13 +60,23 @@
     "reason": "undefined is red; openai has headroom"
   },
   {
-    "action": "stay",
-    "to": "claude",
-    "reason": "home door opencode not stably green yet"
+    "action": "handback",
+    "to": "opencode",
+    "reason": "home door opencode is stably green again"
   },
   {
     "action": "flip",
     "to": "opencode",
     "reason": "anthropic is red; openai has headroom"
+  },
+  {
+    "action": "flip",
+    "to": "opencode",
+    "reason": "anthropic is red; openai has headroom"
+  },
+  {
+    "action": "stay",
+    "to": "opencode",
+    "reason": "home door with headroom"
   }
 ]

@@ -4,6 +4,7 @@
       "available": true,
       "overall": "green",
       "frontier": "amber",
+      "headroom": 66.5,
       "windows": {
         "session": "green",
         "weekly": "green",
@@ -33,6 +34,7 @@
       "available": true,
       "overall": "amber",
       "frontier": "amber",
+      "headroom": 39,
       "windows": {
         "five_hour": "amber",
         "weekly": "green"
@@ -57,14 +59,14 @@
   "roles": {
     "planner": {
       "vendor": "anthropic",
-      "tier": "frontier",
-      "model": "anthropic/claude-fable-5-1",
-      "cli_model": "claude-fable-5-1",
+      "tier": "strong",
+      "model": "anthropic/claude-opus-5-5",
+      "cli_model": "claude-opus-5-5",
       "cli": "claude",
-      "variant": "high",
+      "variant": "medium",
       "effort": null,
       "context": 1000000,
-      "note": "Fable 5.1: deepest reasoning; has its own weekly cap. Use for planning/architecture/hard debugging only.",
+      "note": "Opus 5.5: Anthropic's recommended default; the everyday writer. Clean, maintainable code. Default coder. Default effort medium; we run high for implementation.",
       "via": "opencode"
     },
     "coder": {
@@ -142,7 +144,7 @@
     }
   },
   "reasons": [
-    "Fable weekly cap is amber: use Fable only for genuinely hard planning; Opus 5.5 for routine plans."
+    "Fable weekly cap is amber: routine planning goes to Opus 5.5; only size=hard delegations use Fable."
   ],
   "paused": false
 }

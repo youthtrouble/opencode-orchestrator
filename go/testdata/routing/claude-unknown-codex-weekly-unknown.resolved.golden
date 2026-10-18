@@ -12,8 +12,9 @@
     },
     "openai": {
       "available": true,
-      "overall": "unknown",
-      "frontier": "unknown",
+      "overall": "green",
+      "frontier": "green",
+      "headroom": 90,
       "windows": {
         "five_hour": "green",
         "weekly": "unknown"
@@ -36,14 +37,14 @@
   "roles": {
     "planner": {
       "vendor": "openai",
-      "tier": "frontier",
-      "model": "openai/gpt-6-astra",
-      "cli_model": "gpt-6-astra",
+      "tier": "strong",
+      "model": "openai/gpt-6.1-sol",
+      "cli_model": "gpt-6.1-sol",
       "cli": "codex",
       "variant": null,
-      "effort": "high",
-      "context": 272000,
-      "note": "GPT-6 Astra: frontier tier (API $10/$50). Planning/hard debugging when Fable/Claude is constrained. Expensive in subscription usage terms; use sparingly.",
+      "effort": "medium",
+      "context": 500000,
+      "note": "GPT-6.1 Sol: Codex's workhorse (500k ctx in Codex, 'near-Astra at 1/5 cost'). Long-running autonomous implementation and blind second-opinion review.",
       "via": "codex-cli"
     },
     "coder": {

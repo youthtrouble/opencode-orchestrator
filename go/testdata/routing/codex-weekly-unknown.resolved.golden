@@ -4,6 +4,7 @@
       "available": true,
       "overall": "green",
       "frontier": "green",
+      "headroom": 80,
       "windows": {
         "session": "green",
         "weekly": "green",
@@ -31,8 +32,9 @@
     },
     "openai": {
       "available": true,
-      "overall": "unknown",
-      "frontier": "unknown",
+      "overall": "green",
+      "frontier": "green",
+      "headroom": 80,
       "windows": {
         "five_hour": "green",
         "weekly": "unknown"

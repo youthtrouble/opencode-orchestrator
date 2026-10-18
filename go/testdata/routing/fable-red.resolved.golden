@@ -4,6 +4,7 @@
       "available": true,
       "overall": "green",
       "frontier": "red",
+      "headroom": 60,
       "windows": {
         "session": "green",
         "weekly": "unknown",
@@ -33,6 +34,7 @@
       "available": true,
       "overall": "green",
       "frontier": "green",
+      "headroom": 80,
       "windows": {
         "five_hour": "green",
         "weekly": "green"
@@ -54,18 +56,6 @@
   },
   "roles": {
     "planner": {
-      "vendor": "openai",
-      "tier": "frontier",
-      "model": "openai/gpt-6-astra",
-      "cli_model": "gpt-6-astra",
-      "cli": "codex",
-      "variant": null,
-      "effort": "high",
-      "context": 272000,
-      "note": "GPT-6 Astra: frontier tier (API $10/$50). Planning/hard debugging when Fable/Claude is constrained. Expensive in subscription usage terms; use sparingly.",
-      "via": "codex-cli"
-    },
-    "coder": {
       "vendor": "anthropic",
       "tier": "strong",
       "model": "anthropic/claude-opus-5-5",
@@ -77,20 +67,20 @@
       "note": "Opus 5.5: Anthropic's recommended default; the everyday writer. Clean, maintainable code. Default coder. Default effort medium; we run high for implementation.",
       "via": "claude-cli"
     },
-    "reviewer": {
+    "coder": {
       "vendor": "openai",
-      "tier": "mid",
+      "tier": "strong",
       "model": "openai/gpt-6.1-sol",
       "cli_model": "gpt-6.1-sol",
       "cli": "codex",
       "variant": null,
       "effort": "medium",
       "context": 500000,
-      "note": "Same model, medium effort: code review of Anthropic-written code (cross-vendor review).",
-      "cross_vendor": true,
+      "note": "GPT-6.1 Sol: Codex's workhorse (500k ctx in Codex, 'near-Astra at 1/5 cost'). Long-running autonomous implementation and blind second-opinion review.",
+      "balanced": true,
       "via": "codex-cli"
     },
-    "verifier": {
+    "reviewer": {
       "vendor": "anthropic",
       "tier": "mid",
       "model": "anthropic/claude-sonnet-5-5",
@@ -100,47 +90,65 @@
       "effort": null,
       "context": 1000000,
       "note": "Sonnet 5.5: reviews, verification, research, test writing.",
+      "cross_vendor": true,
       "via": "claude-cli"
+    },
+    "verifier": {
+      "vendor": "openai",
+      "tier": "cheap",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
+      "variant": null,
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "balanced": true,
+      "via": "codex-cli"
     },
     "researcher": {
-      "vendor": "anthropic",
-      "tier": "mid",
-      "model": "anthropic/claude-sonnet-5-5",
-      "cli_model": "claude-sonnet-5-5",
-      "cli": "claude",
-      "variant": "medium",
-      "effort": null,
-      "context": 1000000,
-      "note": "Sonnet 5.5: reviews, verification, research, test writing.",
-      "via": "claude-cli"
+      "vendor": "openai",
+      "tier": "cheap",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
+      "variant": null,
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "balanced": true,
+      "via": "codex-cli"
     },
     "explorer": {
-      "vendor": "anthropic",
+      "vendor": "openai",
       "tier": "cheap",
-      "model": "anthropic/claude-haiku-5-5",
-      "cli_model": "claude-haiku-5-5",
-      "cli": "claude",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
       "variant": null,
-      "effort": null,
-      "context": 1000000,
-      "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated.",
-      "via": "claude-cli"
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "balanced": true,
+      "via": "codex-cli"
     },
     "utility": {
-      "vendor": "anthropic",
+      "vendor": "openai",
       "tier": "cheap",
-      "model": "anthropic/claude-haiku-5-5",
-      "cli_model": "claude-haiku-5-5",
-      "cli": "claude",
+      "model": "openai/gpt-6-luna",
+      "cli_model": "gpt-6-luna",
+      "cli": "codex",
       "variant": null,
-      "effort": null,
-      "context": 1000000,
-      "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated.",
-      "via": "claude-cli"
+      "effort": "low",
+      "context": 272000,
+      "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol.",
+      "balanced": true,
+      "via": "codex-cli"
     }
   },
   "reasons": [
-    "Fable weekly cap is red: planning routed away from Fable until it resets."
+    "Fable weekly cap is red: planning routed away from Fable until it resets.",
+    "Coder balanced to openai: it has more 5-hour headroom (Claude 40% vs Codex 20% used)."
   ],
   "paused": false
 }

@@ -78,13 +78,11 @@ func TestRoutingJS(t *testing.T) {
 		expect(t, "reviewer.via", r.Role("reviewer").Via, "opencode")
 	})
 
-	t.Run("Fable weekly red: planning leaves Fable but Opus still codes", func(t *testing.T) {
+	t.Run("Fable weekly red: planning leaves Fable; coding follows 5-hour headroom", func(t *testing.T) {
 		r := ResolveRoles(usageOf(claudeUsage(t, 40, 90), codexUsage(t, 20, 5)), reg, time.Now(), nil)
-		expect(t, "planner.model", r.Role("planner").Model, "openai/gpt-6-astra")
-		expect(t, "coder.model", r.Role("coder").Model, "anthropic/claude-opus-5-5")
-		if !regexp.MustCompile(`Fable weekly cap is red`).MatchString(strings.Join(r.Reasons, " ")) {
-			t.Errorf("reasons = %q, want the Fable red reason", r.Reasons)
-		}
+		expect(t, "planner.model", r.Role("planner").Model, "anthropic/claude-opus-5-5")
+		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI) // 80 vs 60 headroom
+		expectReason(t, r, `Fable weekly cap is red`)
 	})
 
 	t.Run("Claude session red: everything Anthropic fails over to OpenAI, review flips to Anthropic? no: cross vendor unavailable -> same vendor cheap", func(t *testing.T) {
@@ -118,9 +116,7 @@ func TestRoutingJS(t *testing.T) {
 	t.Run("unknown Claude usage does not crash and routes to OpenAI", func(t *testing.T) {
 		r := ResolveRoles(usageOf(parse(t, `{"ok": false, "error": "no token"}`), codexUsage(t, 10, 1)), reg, time.Now(), nil)
 		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI)
-		if !regexp.MustCompile(`Claude usage unknown`).MatchString(strings.Join(r.Reasons, " ")) {
-			t.Errorf("reasons = %q, want the Claude unknown reason", r.Reasons)
-		}
+		expectReason(t, r, `Claude usage unknown`)
 	})
 
 	t.Run("effort scales with task size and defaults to medium-size policy", func(t *testing.T) {
@@ -137,6 +133,52 @@ func TestRoutingJS(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("frontier tiers need a GREEN frontier posture: amber Fable routes routine planning to Opus", func(t *testing.T) {
+		r := ResolveRoles(usageOf(claudeUsage(t, 30, 70), codexUsage(t, 10, 5)), reg, time.Now(), nil)
+		expect(t, "planner.model", r.Role("planner").Model, "anthropic/claude-opus-5-5")
+		expectReason(t, r, `Fable weekly cap is amber`)
+	})
+
+	t.Run("5-hour window steers; an amber weekly does not block or demote a vendor", func(t *testing.T) {
+		x := codexUsage(t, 10, 70) // weekly amber
+		r := ResolveRoles(usageOf(claudeUsage(t, 50, 10), x), reg, time.Now(), map[string]bool{OpenAI: true})
+		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI)
+		expect(t, "openai.overall", r.Postures.OpenAI.Overall, Green)
+	})
+
+	t.Run("coder is balanced to the vendor with clearly more 5-hour headroom", func(t *testing.T) {
+		for _, c := range []struct {
+			claudeSession, codexFiveHour float64
+			want                         string
+		}{
+			{60, 10, OpenAI},
+			{20, 25, Anthropic}, // within margin: registry order
+			{10, 70, Anthropic},
+		} {
+			r := ResolveRoles(usageOf(claudeUsage(t, c.claudeSession, 10), codexUsage(t, c.codexFiveHour, 10)), reg, time.Now(), nil)
+			expect(t, fmt.Sprintf("coder.vendor (claude %v%%, codex %v%%)", c.claudeSession, c.codexFiveHour), r.Role("coder").Vendor, c.want)
+		}
+	})
+
+	t.Run("a red weekly still blocks the vendor", func(t *testing.T) {
+		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 5, 95)), reg, time.Now(), nil)
+		expect(t, "reviewer.vendor", r.Role("reviewer").Vendor, Anthropic)
+	})
+
+	t.Run("a preference naming a tier missing from the registry is skipped, not a crash", func(t *testing.T) {
+		reg := loadRegistry(t)
+		jsjson.Path(reg, "roles", "coder").(*jsjson.Object).Set("prefer", []any{"anthropic.nonexistent", "openai.strong", "anthropic.strong"})
+		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 60, 10)), reg, time.Now(), nil)
+		expect(t, "coder.vendor", r.Role("coder").Vendor, Anthropic)
+	})
+}
+
+func expectReason(t *testing.T, r Resolved, pattern string) {
+	t.Helper()
+	if !regexp.MustCompile(pattern).MatchString(strings.Join(r.Reasons, " ")) {
+		t.Errorf("reasons = %q, want one matching %q", r.Reasons, pattern)
+	}
 }
 
 func TestEffortForRoleWithoutPolicy(t *testing.T) {

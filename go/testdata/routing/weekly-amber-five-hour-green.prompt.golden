@@ -1,0 +1,12 @@
+Claude (team): session 50% [green] resets 2026-10-18T14:00:00.000Z; weekly 70%; Fable weekly 10% [green] resets 2026-10-20T00:00:00.000Z.
+Codex (plus): 5h 10% [green] resets 2026-10-18T14:00:00.000Z; weekly 70% [amber] resets 2026-10-22T03:20:00.000Z.
+Routing now:
+  planner: anthropic/claude-fable-5-1#high via claude-cli
+  coder: openai/gpt-6.1-sol (effort medium) via opencode [balanced by headroom]
+  reviewer: anthropic/claude-sonnet-5-5#medium via claude-cli
+  verifier: openai/gpt-6-luna (effort low) via opencode [balanced by headroom]
+  researcher: openai/gpt-6-luna (effort low) via opencode [balanced by headroom]
+  explorer: openai/gpt-6-luna (effort low) via opencode [balanced by headroom]
+  utility: openai/gpt-6-luna (effort low) via opencode [balanced by headroom]
+  note: Coder balanced to openai: it has more 5-hour headroom (Claude 50% vs Codex 10% used).
+  note: A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.

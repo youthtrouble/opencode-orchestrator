@@ -2,6 +2,7 @@ package routing
 
 import (
 	"strings"
+	"unicode/utf16"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 )
@@ -27,7 +28,7 @@ func claudeLine(claude any, posture *VendorPosture) string {
 	if !jsjson.Truthy(jsjson.Path(claude, "ok")) {
 		return "Claude usage: unavailable (" + jsjson.OrText(jsjson.Path(claude, "error"), "no data") + ")."
 	}
-	line := "Claude (" + jsjson.OrText(jsjson.Path(claude, "plan"), "subscription") + "): " +
+	line := "Claude (" + jsjson.OrText(jsjson.Path(claude, "plan"), "subscription") + lastGoodSuffix(claude) + "): " +
 		"session " + nullishText(jsjson.Path(claude, "session", "pct"), "?") + "% [" + jsjson.TemplateStringOf(posture.Window("session")) + "] " +
 		"resets " + jsjson.OrText(jsjson.Path(claude, "session", "resets_at"), "?") + "; " +
 		"weekly " + nullishText(jsjson.Path(claude, "weekly", "pct"), "n/a") + "%"
@@ -36,6 +37,25 @@ func claudeLine(claude any, posture *VendorPosture) string {
 			"resets " + jsjson.TemplateStringOf(jsjson.Lookup(fable, "resets_at"))
 	}
 	return line + "."
+}
+
+// lastGoodSuffix names the time (HH:MM UTC) of the reading in use when the latest refresh
+// failed and the last good one was kept.
+func lastGoodSuffix(claude any) string {
+	if !jsjson.Truthy(jsjson.Path(claude, "read_error")) {
+		return ""
+	}
+	lastGoodAt := jsjson.TemplateStringOf(jsjson.Lookup(claude, "last_good_at"))
+	return ", last good " + sliceUTF16(lastGoodAt, 11, 16) + "Z"
+}
+
+// sliceUTF16 is String.prototype.slice(start, end) for 0 <= start <= end: JS strings index
+// UTF-16 code units, not bytes or runes.
+func sliceUTF16(s string, start, end int) string {
+	units := utf16.Encode([]rune(s))
+	end = min(end, len(units))
+	start = min(start, end)
+	return string(utf16.Decode(units[start:end]))
 }
 
 func codexLine(codex any, posture *VendorPosture) string {
@@ -64,6 +84,9 @@ func roleLine(a Assignment) string {
 	line += " via " + r.Via
 	if r.CrossVendor != nil && !*r.CrossVendor {
 		line += " [same-vendor review: cross vendor unavailable]"
+	}
+	if r.Balanced {
+		line += " [balanced by headroom]"
 	}
 	return line
 }

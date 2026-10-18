@@ -4,6 +4,7 @@
       "available": true,
       "overall": "green",
       "frontier": "green",
+      "headroom": 80,
       "windows": {
         "session": "green",
         "weekly": "green",
@@ -33,6 +34,7 @@
       "available": true,
       "overall": "green",
       "frontier": "green",
+      "headroom": 80,
       "windows": {
         "five_hour": "green",
         "weekly": "green"
@@ -53,7 +55,18 @@
     }
   },
   "roles": {
-    "planner": null,
+    "planner": {
+      "vendor": "openai",
+      "tier": "frontier",
+      "model": "openai/astra",
+      "cli_model": "astra",
+      "cli": "codex",
+      "variant": "max",
+      "effort": "xhigh",
+      "context": 272000,
+      "note": "frontier",
+      "via": "opencode"
+    },
     "coder": {
       "vendor": "anthropic",
       "tier": "strong",
@@ -79,7 +92,18 @@
       "cross_vendor": true,
       "via": "opencode"
     },
-    "verifier": null,
+    "verifier": {
+      "vendor": "anthropic",
+      "tier": "strong",
+      "model": "anthropic/opus",
+      "cli_model": "opus",
+      "cli": "claude",
+      "variant": null,
+      "effort": "high",
+      "context": 200000,
+      "note": "strong only",
+      "via": "claude-cli"
+    },
     "researcher": {
       "vendor": "openai",
       "tier": "strong",

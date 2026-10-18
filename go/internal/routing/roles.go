@@ -22,6 +22,8 @@ type RoleEntry struct {
 	Effort  any
 	Context any
 	Note    string
+	// Balanced marks an entry moved to the other vendor for its clearly larger 5-hour headroom.
+	Balanced bool
 	// CrossVendor is set for the reviewer only: whether it differs from the coder's vendor.
 	CrossVendor *bool
 	// Via is the channel: "opencode" for a native provider, else "<cli>-cli".
@@ -40,6 +42,9 @@ func (r *RoleEntry) JSON() *jsjson.Object {
 	out.Set("effort", r.Effort)
 	out.Set("context", r.Context)
 	out.Set("note", r.Note)
+	if r.Balanced {
+		out.Set("balanced", true)
+	}
 	if r.CrossVendor != nil {
 		out.Set("cross_vendor", *r.CrossVendor)
 	}
@@ -94,26 +99,31 @@ func (r *Resolved) JSON() *jsjson.Object {
 }
 
 // ResolveRoles picks a model for every role from the registry's preference lists, skipping
-// vendors whose posture is red. channels[vendor] is true when opencode has that vendor
-// natively, which makes the role run "via opencode" instead of the vendor's CLI bridge.
+// vendors whose posture is red (for frontier tiers: not green) and balancing the roles in
+// balancedRoles across vendors by 5-hour headroom. channels[vendor] is true when opencode has
+// that vendor natively, which makes the role run "via opencode" instead of the vendor's CLI
+// bridge.
 func ResolveRoles(usage *jsjson.Object, registry *jsjson.Object, now time.Time, channels map[string]bool) Resolved {
 	postures := VendorPostures(usage, registry, now)
+	pick := func(role, coderVendor string) *RoleEntry {
+		return pickFor(&postures, registry, role, coderVendor)
+	}
 
 	// Planner and coder first; the reviewer is chosen relative to the coder's vendor.
-	planner := pick(&postures, registry, "planner", "")
-	coder := pick(&postures, registry, "coder", "")
+	planner := pick("planner", "")
+	coder := pick("coder", "")
 	coderVendor := Anthropic
 	if coder != nil {
 		coderVendor = coder.Vendor
 	}
-	reviewer := pick(&postures, registry, "reviewer", coderVendor)
+	reviewer := pick("reviewer", coderVendor)
 	if reviewer != nil {
 		crossVendor := reviewer.Vendor != coderVendor
 		reviewer.CrossVendor = &crossVendor
 	}
 	roles := []Assignment{{"planner", planner}, {"coder", coder}, {"reviewer", reviewer}}
 	for _, role := range []string{"verifier", "researcher", "explorer", "utility"} {
-		roles = append(roles, Assignment{role, pick(&postures, registry, role, "")})
+		roles = append(roles, Assignment{role, pick(role, "")})
 	}
 
 	paused := allPaused(roles)
@@ -122,7 +132,7 @@ func ResolveRoles(usage *jsjson.Object, registry *jsjson.Object, now time.Time, 
 			a.Entry.Via = channelOf(a.Entry, channels)
 		}
 	}
-	return Resolved{Postures: postures, Roles: roles, Reasons: reasons(&postures, paused), Paused: paused}
+	return Resolved{Postures: postures, Roles: roles, Reasons: reasons(&postures, coder, paused), Paused: paused}
 }
 
 // channelOf is the execution channel: the native opencode provider or the vendor's CLI bridge.
@@ -133,13 +143,36 @@ func channelOf(entry *RoleEntry, channels map[string]bool) string {
 	return entry.CLI + "-cli"
 }
 
-// pick returns the first usable preference of the role. A preference is "vendor.tier", where
-// vendor "cross" means the vendor other than coderVendor and "same" means coderVendor; with
-// no coderVendor (every role but the reviewer) "cross" is anthropic and "same" is unusable.
-// The first usable vendor wins even when the registry lacks its tier (the role is then
-// paused): mirrored from the JS.
-func pick(postures *Postures, registry *jsjson.Object, role string, coderVendor string) *RoleEntry {
+// balancedRoles may move to the other vendor when it has clearly more 5-hour headroom.
+var balancedRoles = map[string]bool{"coder": true, "verifier": true, "researcher": true, "explorer": true, "utility": true}
+
+// pickFor returns the first usable preference of the role, unless the role is balanced and
+// another usable vendor leads it in headroom by more than thresholds.balance_margin.
+func pickFor(postures *Postures, registry *jsjson.Object, role, coderVendor string) *RoleEntry {
+	candidates := usableCandidates(postures, registry, role, coderVendor)
+	if len(candidates) == 0 {
+		return nil
+	}
+	first := candidates[0]
+	if balancedRoles[role] && len(candidates) > 1 {
+		margin := thresholdsOf(registry).BalanceMargin
+		alt := otherVendorCandidate(first, candidates)
+		if alt != nil && headroom(postures, alt.Vendor)-headroom(postures, first.Vendor) > margin {
+			alt.Balanced = true
+			return alt
+		}
+	}
+	return first
+}
+
+// usableCandidates returns the role's preferences whose vendor is usable, in registry order. A
+// preference is "vendor.tier", where vendor "cross" means the vendor other than coderVendor and
+// "same" means coderVendor; with no coderVendor (every role but the reviewer) "cross" is
+// anthropic and "same" is unusable. A preference whose tier is missing from the registry is
+// skipped, so the search continues with the next one.
+func usableCandidates(postures *Postures, registry *jsjson.Object, role, coderVendor string) []*RoleEntry {
 	prefs, _ := jsjson.Path(registry, "roles", role, "prefer").([]any)
+	var candidates []*RoleEntry
 	for _, item := range prefs {
 		pref, _ := item.(string)
 		parts := strings.Split(pref, ".")
@@ -157,25 +190,55 @@ func pick(postures *Postures, registry *jsjson.Object, role string, coderVendor 
 		case "same":
 			vendor = coderVendor
 		}
-		if usable(postures, vendor, tier == "frontier") {
-			return tierEntry(registry, vendor, tier)
+		if !usable(postures, vendor, tier == "frontier") {
+			continue
+		}
+		if entry := tierEntry(registry, vendor, tier); entry != nil {
+			candidates = append(candidates, entry)
 		}
 	}
-	return nil
+	return candidates
 }
 
-// usable: a vendor serves a role unless unavailable or red (frontier tiers also count the
-// Fable window).
+// otherVendorCandidate is the first candidate from a vendor other than first's, preferring
+// one of the same tier.
+func otherVendorCandidate(first *RoleEntry, candidates []*RoleEntry) *RoleEntry {
+	var anyTier *RoleEntry
+	for _, c := range candidates {
+		if c.Vendor == first.Vendor {
+			continue
+		}
+		if c.Tier == first.Tier {
+			return c
+		}
+		if anyTier == nil {
+			anyTier = c
+		}
+	}
+	return anyTier
+}
+
+// headroom is the vendor's 5-hour headroom, -1 when unknown.
+func headroom(postures *Postures, vendor string) float64 {
+	p := postures.ByVendor(vendor)
+	if p == nil || p.Headroom == nil {
+		return -1
+	}
+	return *p.Headroom
+}
+
+// usable: a vendor serves a role unless unavailable or red. Frontier tiers draw on weekly
+// caps (Fable has its own), so they are used only while the frontier posture is green; an
+// amber one sends routine planning to the strong tier.
 func usable(postures *Postures, vendor string, isFrontier bool) bool {
 	p := postures.ByVendor(vendor)
 	if p == nil || !p.Available {
 		return false
 	}
-	level := p.Overall
 	if isFrontier {
-		level = p.Frontier
+		return p.Frontier == Green
 	}
-	return level != Red
+	return p.Overall != Red
 }
 
 func tierEntry(registry *jsjson.Object, vendor, tier string) *RoleEntry {
@@ -212,7 +275,7 @@ func allPaused(roles []Assignment) bool {
 }
 
 // reasons explains the interesting routing decisions, in the JS order.
-func reasons(postures *Postures, paused bool) []string {
+func reasons(postures *Postures, coder *RoleEntry, paused bool) []string {
 	a, o := &postures.Anthropic, &postures.OpenAI
 	fable, _ := a.Window("fable")
 	var out []string
@@ -220,10 +283,16 @@ func reasons(postures *Postures, paused bool) []string {
 		out = append(out, "Fable weekly cap is red: planning routed away from Fable until it resets.")
 	}
 	if a.Available && fable == Amber {
-		out = append(out, "Fable weekly cap is amber: use Fable only for genuinely hard planning; Opus 5.5 for routine plans.")
+		out = append(out, "Fable weekly cap is amber: routine planning goes to Opus 5.5; only size=hard delegations use Fable.")
 	}
 	if a.Available && a.Overall == Red {
 		out = append(out, "Claude session/weekly is red: Anthropic roles failed over to OpenAI.")
+	}
+	if coder != nil && coder.Balanced {
+		out = append(out, "Coder balanced to "+coder.Vendor+": it has more 5-hour headroom (Claude "+usedText(a)+"% vs Codex "+usedText(o)+"% used).")
+	}
+	if weeklyAmber(a) || weeklyAmber(o) {
+		out = append(out, "A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.")
 	}
 	if o.Available && o.Overall == Red {
 		out = append(out, "Codex window is red: OpenAI roles failed over to Anthropic.")
@@ -238,4 +307,18 @@ func reasons(postures *Postures, paused bool) []string {
 		out = append(out, "Both vendors are red or unavailable: pause heavy work; wait for the nearest reset.")
 	}
 	return out
+}
+
+// usedText is `${100 - (headroom ?? 0)}`.
+func usedText(p *VendorPosture) string {
+	headroom := 0.0
+	if p.Headroom != nil {
+		headroom = *p.Headroom
+	}
+	return jsjson.TemplateString(100 - headroom)
+}
+
+func weeklyAmber(p *VendorPosture) bool {
+	weekly, _ := p.Window("weekly")
+	return p.Available && weekly == Amber
 }

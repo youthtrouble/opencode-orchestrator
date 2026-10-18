@@ -1,11 +1,11 @@
 Claude (max): session 33.5% [green] resets 2026-10-18T12:15:59.707347+00:00; weekly 41%; Fable weekly 70% [amber] resets 2026-10-20T00:00:00+00:00.
 Codex (pro): 5h 61% [amber] resets 2026-10-18T12:30:00.000Z; weekly 10% [green] resets 2026-10-22T03:20:00.000Z.
 Routing now:
-  planner: anthropic/claude-fable-5-1#high via opencode
+  planner: anthropic/claude-opus-5-5#medium via opencode
   coder: anthropic/claude-opus-5-5#medium via opencode
   reviewer: openai/gpt-6.1-sol (effort medium) via opencode
   verifier: anthropic/claude-sonnet-5-5#medium via opencode
   researcher: anthropic/claude-sonnet-5-5#medium via opencode
   explorer: anthropic/claude-haiku-5-5 via opencode
   utility: anthropic/claude-haiku-5-5 via opencode
-  note: Fable weekly cap is amber: use Fable only for genuinely hard planning; Opus 5.5 for routine plans.
+  note: Fable weekly cap is amber: routine planning goes to Opus 5.5; only size=hard delegations use Fable.
