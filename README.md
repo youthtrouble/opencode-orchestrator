@@ -302,6 +302,20 @@ Runtime usage cache is separately stored at `~/.local/state/opencode/orchestrato
 the runtime does not retarget that path through `XDG_STATE_HOME`. Installer receipts/backups use
 the different `opencode-orchestrator` state directory described above.
 
+## Incident log and keep-awake
+
+Orchestrator defects (tool/contract mismatches, misroutes, budget surprises, bridge crashes, flips,
+and corrections the human gives about the workflow) are appended, redacted, to
+`~/.local/state/opencode/orchestrator/incidents.jsonl` by the bridges, worker, supervisor, plugin and
+the `orch_incident` tool. `incident.mjs report` groups them by fingerprint; the audit skill turns
+repeats into fixes. Nothing is uploaded: `incident.mjs share --out file.json` writes a sanitized
+bundle you can attach to an issue by hand if you choose.
+
+Detached workers and the supervisor are wrapped in `caffeinate -i -s` on macOS (`systemd-inhibit`
+on Linux) so long runs survive idle sleep; the assertion ends with the process. A laptop lid still
+sleeps the machine unless it is in clamshell mode. Disable with `runtime.keep_awake: false` in
+`orchestrator/models.json`.
+
 ## Audit and troubleshoot
 
 Run `/audit-orchestrator` when models or CLI versions change. It loads `skills/orchestrator-audit`,

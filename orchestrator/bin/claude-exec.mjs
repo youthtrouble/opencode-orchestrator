@@ -16,6 +16,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { parseArgs, readPrompt, writeRunRecord } from "../lib/run-record.mjs";
 import { budgetGate } from "../lib/budget.mjs";
+import { record as incident } from "../lib/incident.mjs";
 import { getUsage } from "../lib/usage.mjs";
 
 const { opts, positional } = parseArgs(process.argv.slice(2), {
@@ -32,7 +33,7 @@ const log = (s) => { if (!opts.quiet) console.error(`[claude] ${s}`); };
 
 const isFrontier = /fable/i.test(model);
 const gate = await budgetGate("anthropic", { force: Boolean(opts.force), frontier: isFrontier });
-if (!gate.allowed) { console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
+if (!gate.allowed) { try { incident({ component: "bridge", kind: "limit", summary: `${path.basename(process.argv[1])} refused: budget red`, context: { resets_at: gate.resets_at || null }, project: cwd }); } catch { /* ignore */ } console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
 
 const args = ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", opts["permission-mode"] || "auto", "--permission-prompts", "none"];
 if (opts.resume) args.push("--resume", opts.resume); else args.push("--model", model);
@@ -78,5 +79,6 @@ if (code !== 0) result.ok = false;
 result.record = writeRunRecord(cwd, { ...result, prompt_sha256: crypto.createHash("sha256").update(prompt).digest("hex"), prompt_head: prompt.slice(0, 400) });
 getUsage({ refresh: true }).catch(() => {});
 log(`done ok=${result.ok} turns=${result.num_turns} in ${Math.round(result.duration_ms / 1000)}s; record ${result.record}`);
+if (!result.ok) { try { incident({ component: "bridge", kind: /limit|rate/i.test(result.errors.join(" ")) ? "limit" : "crash", summary: `${result.harness} bridge failed: ${result.errors.join("; ").slice(0, 160)}`, detail: result.errors.join("\n"), context: { model: result.model || null, exit_code: result.exit_code }, project: cwd }); } catch { /* ignore */ } }
 console.log(JSON.stringify(result));
 process.exit(result.ok ? 0 : 1);

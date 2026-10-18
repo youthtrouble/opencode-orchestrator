@@ -207,5 +207,9 @@
     "return_policy": "boundary",
     "green_grace_minutes": 10,
     "flip_cooldown_minutes": 10
+  },
+  "runtime": {
+    "keep_awake": true,
+    "$comment": "Wrap detached workers and the supervisor in caffeinate (macOS) / systemd-inhibit (Linux) so long runs survive idle sleep. Lid-closed sleep still happens on a laptop without external display + power."
   }
 }

@@ -41,6 +41,11 @@ At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs d
 `pause` => write the remaining briefs, post a handoff, stop. Then run `node ~/.config/opencode/orchestrator/bin/flip.mjs pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `supervisor.mjs start` running). On first use in a repo add
 `.orchestrator/` to `.git/info/exclude`.
 
+## Incidents
+When the orchestrator itself misbehaves (tool/contract mismatch, misroute, budget surprise, crash,
+or the human corrects the workflow), record it:
+`node ~/.config/opencode/orchestrator/bin/incident.mjs record --component <c> --kind <k> --summary "..."`.
+
 ## The loop
 plan (architect writes `.orchestrator/plans/<slug>.md` with bounded briefs) -> build one brief
 (coder; report + `manifest.mjs create`) -> review by the other vendor on the manifest -> author

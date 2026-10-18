@@ -15,6 +15,14 @@ node orchestrator/bin/doctor.mjs
 cat orchestrator/models.json
 ```
 
+## 1b. Read the incident log first
+```
+node ~/.config/opencode/orchestrator/bin/incident.mjs report --since <last audit date>
+```
+Every fingerprint with count >= 2, and every `human-correction`, becomes a candidate fix in this
+audit: a contract wording change, a routing/threshold change, or a code fix with a regression test.
+Record what you fixed in CHANGELOG.md and leave the log intact (it is history, not a queue).
+
 ## 2. Verify live catalogs (ground truth beats blogs)
 - Codex catalog on this account: `codex debug models | python3 -c "import sys,json;[print(m['slug'],m.get('visibility'),m.get('description')) for m in json.load(sys.stdin)['models']]"`
 - Anthropic ids reachable from Claude Code: `claude -p --model <id> --max-turns 1 "reply OK"` for each id in models.json (costs ~one tiny call each; skip if the Claude session window is red).

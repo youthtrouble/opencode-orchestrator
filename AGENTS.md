@@ -75,6 +75,14 @@ Claude Code conductor (`claude --agent conductor`, Anthropic-native). Both use t
 - Delegated workers consume the same subscriptions. Keep briefs tight and self-contained; a worker
   cannot see this conversation.
 
+## Incidents (how the orchestrator improves)
+
+Product bugs go in reviews. Orchestrator defects go in the incident log: a tool or contract that
+did not behave as documented, a misroute, a budget surprise, a crash or timeout in a bridge/worker,
+and every correction the human gives you about how this workflow should behave. Record with
+`orch_incident` (or `node ~/.config/opencode/orchestrator/bin/incident.mjs record ...`). It is local,
+redacted and append-only; `/retro` and `/audit-orchestrator` read it and turn repeats into fixes.
+
 ## Craft bar (applies to every line of code)
 
 Names explain intent. Functions do one thing and read top to bottom. No speculative abstraction, no

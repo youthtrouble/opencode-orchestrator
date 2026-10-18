@@ -18,6 +18,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "../lib/run-record.mjs";
 import { observe, chooseEvent, pruneEvents, reminderText } from "../lib/supervise.mjs";
 import { post } from "../lib/mailbox.mjs";
+import { keepAwakeWrap } from "../lib/keepawake.mjs";
+import { record as incident } from "../lib/incident.mjs";
+import { loadRegistry } from "../lib/usage.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { opts, positional } = parseArgs(process.argv.slice(2), { valueKeys: ["cwd", "event", "by"], flagKeys: [] });
@@ -123,6 +126,10 @@ function tickAll(state) {
     state.lanes[lane].next_check = now + obs.interval;
     state.lanes[lane].next_check_at = iso(now + obs.interval);
     fs.appendFileSync(LOG, `${iso(now)} ${ev.id} ${state.events[ev.id].status} ${JSON.stringify(results)}\n`);
+    try {
+      if (state.events[ev.id].status === "delivery_failed") incident({ component: "supervisor", kind: "bug", summary: `wake delivery failed for ${ev.reason}`, detail: JSON.stringify(results), project: root });
+      if (ev.reason === "stale_lock" || ev.reason === "process_exited") incident({ component: "supervisor", kind: "crash", summary: `worker lane ${lane}: ${ev.reason}`, project: root });
+    } catch { /* never block */ }
   }
   // Conductor flip / hand-back: once a minute, when the project has a conductor lane or has flipped before.
   const flipFile = path.join(dir, "flip.json");
@@ -144,6 +151,7 @@ function tickAll(state) {
       else if (decision && decision.action === "stay" && paused) target = activeDoor;
       if (target) {
         const r = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "run", "--to", target, "--from", activeDoor, "--reason", `${decision.action}: ${decision.reason}`, "--cwd", root], { encoding: "utf8" });
+        try { incident({ component: "flip", kind: "flip", summary: `conductor ${decision.action} ${activeDoor}->${target}`, detail: decision.reason, project: root }); } catch { /* never block */ }
         fs.appendFileSync(LOG, `${iso(now)} relaunch ${activeDoor}->${target} (${decision.action}${paused ? ", was paused" : ""}): ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);
       }
     }
@@ -167,7 +175,9 @@ if (cmd === "start") {
   if (alive(Number(readText(LOCK)))) { console.log(JSON.stringify({ started: false, reason: "already running", pid: Number(readText(LOCK)) })); process.exit(0); }
   try { fs.unlinkSync(STOP); } catch { /* none */ }
   const fd = fs.openSync(LOG, "a");
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve", "--cwd", root], { cwd: root, detached: true, stdio: ["ignore", fd, fd] });
+  let keepAwake = true; try { keepAwake = loadRegistry().runtime?.keep_awake !== false; } catch { /* default on */ }
+  const wrapped = keepAwakeWrap(process.execPath, [fileURLToPath(import.meta.url), "serve", "--cwd", root], { enabled: keepAwake });
+  const child = spawn(wrapped.cmd, wrapped.args, { cwd: root, detached: true, stdio: ["ignore", fd, fd] });
   child.unref();
   console.log(JSON.stringify({ started: true, supervisor_pid: child.pid, log: LOG }));
   process.exit(0);

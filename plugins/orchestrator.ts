@@ -250,6 +250,17 @@ export default {
       });
 
       add({
+        name: "incident",
+        description: "Record an orchestrator incident for the next audit: a tool/contract mismatch, a misroute, a budget surprise, a crash, or a correction the human gave you about how the orchestrator should behave. Local, redacted, append-only. Use whenever the orchestrator (not the product code) misbehaved or the user corrected the workflow.",
+        input: { type: "object", required: ["kind", "summary"], properties: { kind: { type: "string", enum: ["bug", "limit", "misroute", "permission", "crash", "timeout", "contract", "human-correction", "flip", "note"] }, component: { type: "string", description: "plugin|bridge|worker|supervisor|flip|usage|contract|agent (default agent)" }, summary: { type: "string" }, detail: { type: "string" }, cwd: { type: "string" } } },
+        async execute(input: any, c: any) {
+          const { record } = await lib("incident.mjs");
+          const e = record({ component: input.component || "agent", kind: input.kind, summary: input.summary, detail: input.detail || "", context: { agent: c.agent, session: c.sessionID }, project: cwdOf(input, c) });
+          return { content: `recorded incident ${e.fp}` };
+        },
+      });
+
+      add({
         name: "supervisor",
         description: "Control the project supervisor daemon that watches workers and wakes the coordinator: start | status | stop | ack.",
         input: { type: "object", required: ["action"], properties: { cwd: { type: "string" }, action: { type: "string", enum: ["start", "status", "stop", "ack"] }, event: { type: "string" } } },
@@ -315,6 +326,10 @@ export default {
       }
     });
     await ctx.tool.hook("execute.after", async (e: any) => {
+      // Our own tools failing is an orchestrator defect by definition: log it for the audit.
+      if (e.status === "error" && String(e.tool).startsWith("orch")) {
+        try { const { record } = await lib("incident.mjs"); record({ component: "plugin", kind: "bug", summary: `tool ${e.tool} errored: ${String(e.error?.message || e.error).slice(0, 160)}`, detail: JSON.stringify(e.input).slice(0, 800), context: { agent: e.agent }, project: ctx.location?.directory }); } catch { /* never block */ }
+      }
       if (e.status === "error" && LIMIT_RE.test(String(e.error?.message || e.error || ""))) {
         refreshSoon();
         if (e.tool === "subagent" && String(e.agent) === "conductor") await flipToClaude(ctx.location?.directory || process.cwd(), "native subagent hit the OpenAI usage limit");

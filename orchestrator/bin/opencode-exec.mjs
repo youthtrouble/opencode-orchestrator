@@ -8,13 +8,14 @@ import path from "node:path";
 import readline from "node:readline";
 import { parseArgs, readPrompt, writeRunRecord } from "../lib/run-record.mjs";
 import { budgetGate } from "../lib/budget.mjs";
+import { record as incident } from "../lib/incident.mjs";
 
 const { opts, positional } = parseArgs(process.argv.slice(2), { valueKeys: ["agent", "cwd", "resume", "timeout-min", "prompt", "prompt-file", "model"], flagKeys: ["quiet", "force", "help"] });
 let prompt; try { prompt = readPrompt(opts, positional); } catch (e) { console.error(e.message); process.exit(2); }
 const cwd = path.resolve(opts.cwd || process.cwd());
 const log = (s) => { if (!opts.quiet) console.error(`[opencode] ${s}`); };
 const gate = await budgetGate("openai", { force: Boolean(opts.force) });
-if (!gate.allowed) { console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
+if (!gate.allowed) { try { incident({ component: "bridge", kind: "limit", summary: `${path.basename(process.argv[1])} refused: budget red`, context: { resets_at: gate.resets_at || null }, project: cwd }); } catch { /* ignore */ } console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
 const args = ["run", "--format", "json", "--auto", "--agent", opts.agent || "conductor"];
 if (opts.resume) args.push("--session", opts.resume);
 if (opts.model) args.push("--model", opts.model);
@@ -37,5 +38,6 @@ clearTimeout(timer);
 result.final_message = text; result.ok = code === 0; result.exit_code = code; result.duration_ms = Date.now() - started;
 if (code !== 0) result.errors.push(stderr.trim().split("\n").slice(-3).join(" | "));
 result.record = writeRunRecord(cwd, { ...result, prompt_sha256: crypto.createHash("sha256").update(prompt).digest("hex"), prompt_head: prompt.slice(0, 400) });
+if (!result.ok) { try { incident({ component: "bridge", kind: /limit|rate/i.test(result.errors.join(" ")) ? "limit" : "crash", summary: `${result.harness} bridge failed: ${result.errors.join("; ").slice(0, 160)}`, detail: result.errors.join("\n"), context: { model: result.model || null, exit_code: result.exit_code }, project: cwd }); } catch { /* ignore */ } }
 console.log(JSON.stringify(result));
 process.exit(result.ok ? 0 : 1);

@@ -16,6 +16,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../lib/run-record.mjs";
 import { post } from "../lib/mailbox.mjs";
+import { keepAwakeWrap } from "../lib/keepawake.mjs";
+import { record as incident } from "../lib/incident.mjs";
+import { loadRegistry } from "../lib/usage.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { opts, positional } = parseArgs(process.argv.slice(2), {
@@ -65,9 +68,11 @@ if (opts.detach) {
   const logPath = path.join(logsDir, `${lane}-${runId.slice(0, 8)}.log`);
   const fd = fs.openSync(logPath, "wx", 0o600);
   const args = [fileURLToPath(import.meta.url), ...process.argv.slice(2).filter((a) => a !== "--detach"), "--log-path", logPath, "--run-id", runId];
-  const child = spawn(process.execPath, args, { cwd: root, detached: true, stdio: ["ignore", fd, fd] });
+  let keepAwake = true; try { keepAwake = loadRegistry().runtime?.keep_awake !== false; } catch { /* default on */ }
+  const wrapped = keepAwakeWrap(process.execPath, args, { enabled: keepAwake });
+  const child = spawn(wrapped.cmd, wrapped.args, { cwd: root, detached: true, stdio: ["ignore", fd, fd] });
   child.unref();
-  console.log(JSON.stringify({ lane, runner_pid: child.pid, log_path: logPath, run_id: runId }));
+  console.log(JSON.stringify({ lane, runner_pid: child.pid, log_path: logPath, run_id: runId, keep_awake: wrapped.cmd !== process.execPath }));
   process.exit(0);
 }
 
@@ -119,11 +124,13 @@ try {
   let result = null; try { result = JSON.parse(output.trim().split("\n").pop()); } catch { /* bridge crashed before JSON */ }
   if (code === 75 || result?.reason === "budget_red") {
     finish("deferred", { deferred_reason: "budget_red", resume_after: result?.resets_at || null, result_summary: result?.note || "budget gate refused" });
+    try { incident({ component: "worker", kind: "limit", summary: `worker lane ${lane} deferred: ${harness} budget red`, context: { harness, resets_at: result?.resets_at || null }, project: root }); } catch { /* never block */ }
     post(root, { from: lane, to: "coordinator", kind: "deferred", subject: `${lane} deferred: ${harness} budget is red`, body: `Resets ${result?.resets_at || "unknown"}. The supervisor will re-dispatch after reset if auto_redispatch is enabled.`, refs: [] });
   } else if (result?.ok) {
     finish("finished", { session_id: result.session_id || result.thread_id || state.session_id, exit_code: code, result_summary: (result.final_message || "").slice(0, 2000), record: result.record, usage: result.usage || null, cost_usd: result.cost_usd ?? null, permission_denials: result.permission_denials?.length ?? 0 });
   } else {
     finish("failed", { exit_code: code, errors: result?.errors || ["bridge produced no result"], record: result?.record || null, result_summary: (result?.final_message || "").slice(0, 2000) });
+    try { incident({ component: "worker", kind: /limit/i.test(String(result?.errors)) ? "limit" : "crash", summary: `worker lane ${lane} failed on ${harness}: ${(result?.errors || ["no result"]).join("; ").slice(0, 160)}`, detail: output.slice(-1500), context: { harness, model: opts.model || null, exit_code: code }, project: root }); } catch { /* never block */ }
     post(root, { from: lane, to: "coordinator", kind: "blocked", subject: `${lane} failed on ${harness}`, body: (result?.errors || ["no result"]).join("; ").slice(0, 1500), refs: result?.record ? [path.relative(root, result.record)] : [] });
   }
 } finally {
