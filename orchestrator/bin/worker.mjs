@@ -63,6 +63,13 @@ const harness = opts.harness;
 if (!["codex", "claude", "opencode"].includes(harness)) { console.error("harness must be codex, claude or opencode"); process.exit(2); }
 
 if (opts.detach) {
+  // Fail fast if the lane is already owned by a live process: callers (flip.mjs) rely on seeing "lane locked"
+  // synchronously; a detached runner dying on the lock would otherwise look like a successful launch.
+  if (fs.existsSync(lockPath(lane))) {
+    const holder = Number(fs.readFileSync(lockPath(lane), "utf8").trim());
+    if (alive(holder)) { const prev = readState(lane); console.error(JSON.stringify({ error: "lane locked", lane, previous: prev && { status: prev.status, pid: prev.pid, alive: true } })); process.exit(3); }
+    fs.unlinkSync(lockPath(lane)); // stale lock from a dead process
+  }
   fs.mkdirSync(logsDir, { recursive: true });
   const runId = crypto.randomUUID();
   const logPath = path.join(logsDir, `${lane}-${runId.slice(0, 8)}.log`);

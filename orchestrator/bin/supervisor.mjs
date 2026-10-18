@@ -144,7 +144,16 @@ function tickAll(state) {
     if (flip?.awaiting_human) {
       if (!state.awaiting_human_logged) { fs.appendFileSync(LOG, `${iso(now)} conductor awaiting human: ${flip.awaiting_human.reason}; no relaunch until cleared\n`); state.awaiting_human_logged = true; }
     } else if (state.awaiting_human_logged) { state.awaiting_human_logged = false; }
+    // Catch-all: a flip was recorded to a door, but the lane that exists belongs to the other door and has
+    // finished (the departing conductor). The target never started: launch it.
+    const laneDoor = conductorLane ? (conductorLane.harness === "claude" ? "claude" : "opencode") : null;
+    const flipTargetNeverStarted = flip?.to && !flip.pending_launch && idle && lockFree && conductorLane && laneDoor !== flip.to && ["finished", "failed", "interrupted"].includes(conductorLane.status) && Date.parse(flip.at) >= Date.parse(conductorLane.started_at) && now - (state.last_relaunch_at || 0) >= 120;
     if (flip?.awaiting_human) { /* human gate: do nothing */ }
+    else if (flipTargetNeverStarted) {
+      const r = spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "run", "--to", flip.to, "--from", laneDoor, "--reason", "flip target never started", "--cwd", root], { cwd: root, encoding: "utf8" });
+      fs.appendFileSync(LOG, `${iso(now)} flip target never started: launching ${flip.to}: ${(r.stdout || r.stderr || "").trim().slice(0, 200)}\n`);
+      state.last_relaunch_at = now;
+    }
     else if (idle && lockFree && flip?.pending_launch) {
       // A hand-off recorded while the previous conductor still held the lane: launch the target now.
       const pl = flip.pending_launch;
