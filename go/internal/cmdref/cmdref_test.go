@@ -31,6 +31,33 @@ func TestFlipGateClearIsTheGateMessageCommand(t *testing.T) {
 	}
 }
 
+// flip.mjs run writes its brief from a template literal (l.74) whose only escapes are \n and
+// whose only substitutions are to, from and the reason. Rendering that literal from the
+// source pins the text byte for byte.
+func TestConductorContinueBriefIsTheFlipTemplate(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "flip.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, after, found := strings.Cut(string(source), "fs.writeFileSync(brief, `")
+	template, _, closed := strings.Cut(after, "`);")
+	if !found || !closed {
+		t.Fatal("flip.mjs no longer writes the brief from one template literal")
+	}
+	rendered := strings.NewReplacer(
+		`${to}`, "claude",
+		`${from}`, "opencode",
+		`${opts.reason || "vendor budget flip"}`, "handback: home door",
+		`\n`, "\n",
+	).Replace(template)
+	if strings.Contains(rendered, "${") || strings.Contains(rendered, `\`) {
+		t.Fatalf("the template has a substitution or escape this test does not render: %q", rendered)
+	}
+	if got := ConductorContinueBrief("claude", "opencode", "handback: home door"); got != rendered {
+		t.Errorf("ConductorContinueBrief differs from flip.mjs\n got: %q\nwant: %q", got, rendered)
+	}
+}
+
 // bin/claude-exec.mjs records its incidents under its own file name.
 func TestScriptFileIsTheScriptBasename(t *testing.T) {
 	if got := ScriptFile("claude-exec"); got != "claude-exec.mjs" {

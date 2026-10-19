@@ -1,11 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
 )
 
@@ -14,9 +19,13 @@ var (
 	flipFlagKeys  = []string{"force", "clear"}
 )
 
-// Flip implements `orch flip decide|pause|gate|status` (bin/flip.mjs), byte-identical to the
-// JS except for the parity exceptions in go/README.md (decide reads flip.json's at in the
-// ECMAScript date formats only, PE-15). `run` comes in S7b.
+// launcherGrace bounds how long `flip run` waits for the launcher's pipes once it has exited
+// (PE-10); spawnSync waits for them forever.
+const launcherGrace = 10 * time.Second
+
+// Flip implements `orch flip decide|run|pause|gate|status` (bin/flip.mjs), byte-identical to
+// the JS except for the parity exceptions in go/README.md (decide reads flip.json's at in the
+// ECMAScript date formats only, PE-15; run launches the conductor as `orch worker`).
 func Flip(args []string, stdio Stdio) int {
 	opts, positional := cliargs.ParseArgs(decodeArgv(args), flipValueKeys, flipFlagKeys)
 	root, err := projectRoot(opts) // before any command, as the JS resolves it at the top
@@ -34,20 +43,19 @@ func Flip(args []string, stdio Stdio) int {
 	case "pause":
 		answer, err := project.Pause(opts)
 		if err != nil {
-			return flipCrash(stdio, err)
+			return crash(stdio, err)
 		}
 		return printLine(stdio, answer)
 	case "gate":
 		answer, err := project.Gate(opts)
 		if err != nil {
-			return flipCrash(stdio, err)
+			return crash(stdio, err)
 		}
 		return printLine(stdio, answer)
 	case "decide":
 		return flipDecide(project, opts, stdio)
 	case "run":
-		fmt.Fprintln(stdio.Err, "orch flip run: not implemented yet (S7b)")
-		return 2
+		return flipRun(project, opts, stdio)
 	}
 	fmt.Fprintln(stdio.Err, "commands: decide | run | pause | gate [--clear] | status")
 	return 2
@@ -73,13 +81,47 @@ func flipDecide(project flipcmd.Project, opts cliargs.Opts, stdio Stdio) int {
 	return printLine(stdio, decision.JSON())
 }
 
-// flipCrash prints the error line of the exception a flip command dies of: the script's own
-// TypeError carries its class, Node's filesystem errors are Errors.
-func flipCrash(stdio Stdio, err error) int {
-	var typeError *flipcmd.PropertyTypeError
-	if errors.As(err, &typeError) {
-		fmt.Fprintf(stdio.Err, "TypeError: %v\n", typeError)
-		return 1
+// flipRun hands the project over and prints the answer.
+func flipRun(project flipcmd.Project, opts cliargs.Opts, stdio Stdio) int {
+	answer, code, err := project.Run(opts, workerLauncher(project.Root))
+	switch {
+	case errors.Is(err, flipcmd.ErrToRequired):
+		fmt.Fprintln(stdio.Err, err)
+		return 2
+	case err != nil:
+		return crash(stdio, err)
 	}
-	return crash(stdio, err)
+	if printed := printLine(stdio, answer); printed != 0 {
+		return printed
+	}
+	return code
+}
+
+// workerLauncher runs `orch worker start ...` from the project root as the JS spawnSync runs
+// worker.mjs: this executable, the inherited environment, no input, both outputs captured and
+// decoded as UTF-8. A launcher that cannot be started gives no status and no output, as
+// spawnSync's error result does.
+func workerLauncher(root string) flipcmd.Launcher {
+	return func(args []string) (*int, string, string) {
+		self, err := os.Executable()
+		if err != nil {
+			return nil, "", ""
+		}
+		var stdout, stderr bytes.Buffer
+		child, err := procs.Start(procs.Spec{
+			Name:   self,
+			Args:   append([]string{"worker"}, args...),
+			Dir:    root,
+			Stdout: &stdout,
+			Stderr: &stderr,
+			Grace:  launcherGrace,
+		})
+		if err != nil {
+			return nil, "", ""
+		}
+		// Copying into buffers cannot fail, and a status Wait could not collect is already
+		// nil, which is how spawnSync reports it.
+		status, _ := child.Wait()
+		return status, jsstr.DecodeUTF8(stdout.Bytes()), jsstr.DecodeUTF8(stderr.Bytes())
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
 // Project is the worker area of one project.
@@ -54,7 +55,7 @@ func laneText(lane any) string {
 // ReadState is JSON.parse of the lane's state file, which may hold any JSON value, or nil when
 // the file cannot be read or parsed (the JS returns null for both).
 func (p Project) ReadState(lane any) any {
-	return jsjson.ReadFileOrNull(p.StatePath(lane))
+	return nodefs.ReadJSONOrNull(p.StatePath(lane))
 }
 
 // Alive is the JS alive(pid): false for a falsy pid, else whether process.kill(pid, 0)

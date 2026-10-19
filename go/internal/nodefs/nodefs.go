@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
 // Resolve mirrors path.resolve(path): a relative path is joined to the working directory as
@@ -86,6 +89,39 @@ func WriteFile(path string, data []byte) error {
 		return FileError(closeErr, "close", "")
 	}
 	return nil
+}
+
+// AppendFile mirrors fs.appendFileSync(path, data): open for appending, creating the file with
+// mode 0666 less the umask (a dangling symlink creates its target), then one write.
+func AppendFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
+	if err != nil {
+		return FileError(err, "open", path)
+	}
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return FileError(writeErr, "write", "")
+	}
+	if closeErr != nil {
+		return FileError(closeErr, "close", "")
+	}
+	return nil
+}
+
+// ReadJSONOrNull is `try { return JSON.parse(fs.readFileSync(path, "utf8")) } catch { return
+// null }`: any JSON value the file holds, or nil when it cannot be read (missing, a
+// directory) or parsed (a BOM, bad JSON). Malformed UTF-8 is decoded as Node decodes it.
+func ReadJSONOrNull(path string) any {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	value, err := jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
+	if err != nil {
+		return nil
+	}
+	return value
 }
 
 // MkdirAll mirrors fs.mkdirSync(dir, {recursive: true}), failing with Node's errno and message.

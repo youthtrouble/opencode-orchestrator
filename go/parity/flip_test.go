@@ -13,14 +13,29 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 )
 
-// Fresh flip values, rewritten only in their exact place and format: the at a pause or a gate
-// writes as the first key of its record (seeded records put another key first, so their at is
-// compared verbatim), and the id and at of a newly appended mailbox line.
-var flipFreshAt = regexp.MustCompile(`("(?:paused|awaiting_human)": \{\n +"at": ")` + isoMillis.String() + `(")`)
+// flipAt is an ISO timestamp flip.json holds under "at" (a record's, paused's, a gate's,
+// pending_launch's or previous's), as written with indent 2.
+var flipAt = regexp.MustCompile(`("at": ")(` + isoMillis.String() + `)(")`)
 
-func normalizeFlip(s string) string {
-	s = flipFreshAt.ReplaceAllString(s, "${1}<iso>${2}")
-	return workerMailbox.ReplaceAllString(s, "${1}<uuid>${2}<iso>${3}")
+// normalizeFlip rewrites the fresh values of a flip run that starts after since: an "at"
+// written in the run, and the id and at of a newly appended mailbox line. An "at" is fresh
+// when it lies between since and the time it is normalised, which is after the output was
+// collected; any other "at" was seeded (fixed past or future values, or a record another run
+// wrote before the case) and is compared verbatim, so a command that wrongly rewrote a kept
+// timestamp cannot be masked. ISO strings of four-digit years order as their times do.
+func normalizeFlip(since time.Time) func(string) string {
+	start := jsjson.ISOString(since)
+	return func(s string) string {
+		collected := jsjson.ISOString(time.Now())
+		s = flipAt.ReplaceAllStringFunc(s, func(field string) string {
+			parts := flipAt.FindStringSubmatch(field)
+			if at := parts[2]; at < start || at > collected {
+				return field
+			}
+			return parts[1] + "<iso>" + parts[3]
+		})
+		return workerMailbox.ReplaceAllString(s, "${1}<uuid>${2}<iso>${3}")
+	}
 }
 
 type flipCase struct {
@@ -32,7 +47,8 @@ type flipCase struct {
 }
 
 // flipInvocation runs bin/flip.mjs and `orch flip` in the sandbox project, never with a --cwd
-// outside it, and never `run` on the JS side (it would launch a conductor).
+// outside it. Its fresh values are those written after it is built. A `run` it makes must
+// find the conductor lane locked (see flipRunInvocation); launches go through runFlipLaunch.
 func (h *harness) flipInvocation(c flipCase) invocation {
 	return invocation{
 		js:           append([]string{h.node, filepath.Join(h.orchJS, "bin", "flip.mjs")}, c.args...),
@@ -43,14 +59,14 @@ func (h *harness) flipInvocation(c flipCase) invocation {
 		errorLine:    c.errorLine,
 		projectPaths: true,
 		extraFiles:   []string{".git/info/exclude"},
-		normalize:    normalizeFlip,
+		normalize:    normalizeFlip(time.Now()),
 	}
 }
 
 func seedFlip(content string) seed { return seedProjectFile(".orchestrator/flip.json", content) }
 
-// testFlip compares `orch flip decide|pause|gate|status` and its usage errors with
-// bin/flip.mjs. `run` is S7b's; here only orch's placeholder runs.
+// testFlip compares `orch flip decide|run|pause|gate|status` and its usage errors with
+// bin/flip.mjs.
 func (h *harness) testFlip(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	const orchestratorIsFile = "Error: EEXIST: file already exists, mkdir '$PROJECT/.orchestrator'"
@@ -119,18 +135,10 @@ func (h *harness) testFlip(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.flipInvocation(c)) })
 	}
-	t.Run("usage/run-placeholder", h.testFlipRunPlaceholder)
 	t.Run("gate/PE-1", h.testFlipGateSubjectCut)
 	t.Run("decide", h.testFlipDecide)
 	t.Run("cross-runtime", h.testFlipCrossRuntime)
-}
-
-// testFlipRunPlaceholder runs orch only: the JS run would launch a conductor.
-func (h *harness) testFlipRunPlaceholder(t *testing.T) {
-	o := h.run(t, h.newSandbox(t), []string{h.orchBin, "flip", "run", "--to", "claude"}, nil, []string{noPostRunRefresh})
-	if o.exitCode != 2 || o.stdout != "" || o.stderr != "orch flip run: not implemented yet (S7b)\n" || len(o.files) != 0 {
-		t.Errorf("orch flip run: exit %d, stdout %q, stderr %q, files %v", o.exitCode, o.stdout, o.stderr, o.files)
-	}
+	t.Run("run", h.testFlipRun)
 }
 
 // testFlipGateSubjectCut asserts PE-1 in the human's message: the 80-unit cut splits an emoji,

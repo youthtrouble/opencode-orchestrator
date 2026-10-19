@@ -185,3 +185,75 @@ func TestRelativeIsPathRelative(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendFileAppendsAndCreatesAsAppendFileSync(t *testing.T) {
+	dir := t.TempDir()
+	umask := syscall.Umask(0)
+	syscall.Umask(umask)
+
+	created := filepath.Join(dir, "created")
+	for _, chunk := range []string{"a\n", "b"} {
+		if err := AppendFile(created, []byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data, _ := os.ReadFile(created); string(data) != "a\nb" {
+		t.Errorf("content %q, want %q", data, "a\nb")
+	}
+	if info, err := os.Stat(created); err != nil || info.Mode().Perm() != 0o666&^os.FileMode(umask) {
+		t.Errorf("mode %v (%v), want 0666 less the umask %03o", info.Mode(), err, umask)
+	}
+
+	target := filepath.Join(dir, "target")
+	symlink(t, target, filepath.Join(dir, "dangling"))
+	if err := AppendFile(filepath.Join(dir, "dangling"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "x" {
+		t.Errorf("a dangling symlink's target holds %q (%v), want it created with %q", data, err, "x")
+	}
+}
+
+func TestAppendFileFailsWithNodesOpenErrors(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{"directory", dir, "EISDIR: illegal operation on a directory, open '" + dir + "'"},
+		{"missing parent", filepath.Join(dir, "absent", "f"), "ENOENT: no such file or directory, open '" + filepath.Join(dir, "absent", "f") + "'"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := AppendFile(tc.path, []byte("x")); err == nil || err.Error() != tc.want {
+				t.Errorf("AppendFile = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadJSONOrNullReadsAnyValueAndNilOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f.json")
+	for _, tc := range []struct {
+		name, content string
+		want          any
+	}{
+		{"number", `5`, 5.0},
+		{"invalid UTF-8 decoded as Node does", "\"a\xffb\"", "a\uFFFDb"},
+		{"BOM", "\xef\xbb\xbf{}", nil},
+		{"unparsable", `{"to":`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(file, []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := ReadJSONOrNull(file); got != tc.want {
+				t.Errorf("ReadJSONOrNull = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+	for name, path := range map[string]string{"missing": filepath.Join(dir, "absent"), "directory": dir} {
+		if got := ReadJSONOrNull(path); got != nil {
+			t.Errorf("%s: ReadJSONOrNull = %#v, want nil", name, got)
+		}
+	}
+}

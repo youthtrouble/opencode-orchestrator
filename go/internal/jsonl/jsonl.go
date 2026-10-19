@@ -5,7 +5,6 @@
 package jsonl
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -47,18 +46,6 @@ func Append(file string, value *jsjson.Object) error {
 	if err := nodefs.MkdirAll(filepath.Dir(file)); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
-	if err != nil {
-		return nodefs.FileError(err, "open", file)
-	}
 	// One write per line, so lines appended concurrently by orch and the JS never interleave.
-	_, writeErr := f.Write(append(line, '\n'))
-	closeErr := f.Close()
-	if writeErr != nil {
-		return nodefs.FileError(writeErr, "write", "")
-	}
-	if closeErr != nil {
-		return nodefs.FileError(closeErr, "close", "")
-	}
-	return nil
+	return nodefs.AppendFile(file, append(line, '\n'))
 }

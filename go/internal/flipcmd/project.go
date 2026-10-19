@@ -41,7 +41,7 @@ func NewProject(root string) Project {
 // ReadFlip is the JS readFlip(): flip.json's JSON value, or nil when it cannot be read or
 // parsed.
 func (p Project) ReadFlip() any {
-	return jsjson.ReadFileOrNull(p.FlipPath)
+	return nodefs.ReadJSONOrNull(p.FlipPath)
 }
 
 // makeStateDir is mkdirSync(dirname(FLIP), {recursive: true}).

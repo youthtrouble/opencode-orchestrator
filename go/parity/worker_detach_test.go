@@ -31,6 +31,9 @@ type workerDetachCase struct {
 	steps     detachSteps
 	// runnerRefuses marks a runner that exits before writing a worker state.
 	runnerRefuses bool
+	// launchLine extracts the launch JSON from a successful command's stdout; nil means the
+	// stdout is the launch line itself, as `worker start --detach` prints it.
+	launchLine func(t *testing.T, stdout string) string
 }
 
 // detachSteps runs commands in the sandbox while the runner runs, with worker naming the
@@ -47,7 +50,9 @@ type launch struct {
 // settleTimeout bounds the wait for a detached runner to be gone.
 const settleTimeout = 30 * time.Second
 
-var runnerPid = regexp.MustCompile(`("runner_pid":)\d+`)
+// runnerPid matches the pid as the launcher prints it and as `flip run` quotes the launcher's
+// line inside a JSON string (\"runner_pid\":123).
+var runnerPid = regexp.MustCompile(`("runner_pid\\?":)\d+`)
 
 // keepAwakeWrapper is the wrapper keep-awake looks for on this platform.
 func keepAwakeWrapper() string {
@@ -160,8 +165,9 @@ func (h *harness) runnerPrefixes(t *testing.T) []string {
 
 // runDetached runs one runtime's launcher (argv) in a fresh sandbox. When it launched a
 // runner, steps run (their output is appended to stdout), the runner is settled and the files
-// are collected again. The launch is checked against what the runner wrote, then its run id,
-// log name and pid and the runner's command are rewritten before the case's normalizers.
+// are collected again, with the invocation's extra files. The launch is checked against what
+// the runner wrote, then its run id, log name and pid and the runner's command are rewritten
+// before the case's normalizers.
 func (h *harness) runDetached(t *testing.T, inv invocation, worker, argv []string, c workerDetachCase, runners *strings.Replacer) outcome {
 	t.Helper()
 	sb := h.newSandbox(t)
@@ -171,7 +177,11 @@ func (h *harness) runDetached(t *testing.T, inv invocation, worker, argv []strin
 	o := h.run(t, sb, argv, nil, inv.env)
 	var l launch
 	if o.exitCode == 0 {
-		if err := json.Unmarshal([]byte(o.stdout), &l); err != nil || l.RunnerPid < 2 {
+		line := o.stdout
+		if c.launchLine != nil {
+			line = c.launchLine(t, o.stdout)
+		}
+		if err := json.Unmarshal([]byte(line), &l); err != nil || l.RunnerPid < 2 {
 			if l.RunnerPid >= 2 { // a launch line that names its runner but is otherwise wrong
 				settle(t, l.RunnerPid)
 			}
@@ -186,6 +196,7 @@ func (h *harness) runDetached(t *testing.T, inv invocation, worker, argv []strin
 		o.files = sb.files(t)
 		requireLaunchRecorded(t, argv[0], l, o.files, !c.runnerRefuses)
 	}
+	collectExtraFiles(t, sb, inv, o.files)
 	o = o.withLaunch(l, runners)
 	o = o.withProjectPlaceholder(t, sb)
 	o = inv.normalizeWrites(o, before)

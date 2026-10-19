@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -105,7 +106,9 @@ func newHarness(t *testing.T) *harness {
 // invocation is one parity case: the same input given to each runtime. seed, when set,
 // prepares each runtime's fresh sandbox identically before the run; env adds entries to the
 // environment (where "$PROJECT" stands for the sandbox project directory); extraFiles are
-// project-relative files compared besides .orchestrator/ (as "extra/<path>"); normalize, when
+// project-relative files compared besides .orchestrator/ (as "extra/<path>"), and
+// extraFilesMayBeBlocked lets one of them be a directory or lie under a file (as no file) for
+// the cases that make it so, where any other read error stays fatal; normalize, when
 // set, rewrites stdout, stderr and file contents of both before comparing (for values that
 // legitimately differ between runs, such as a fresh timestamp); crash, when set, is the
 // class of uncaught JS exception the case ends in (see crashError). C1 also pins errorLine;
@@ -114,18 +117,19 @@ func newHarness(t *testing.T) *harness {
 // in stdout, stderr and every file, for commands that print or record their working directory.
 // normalizeWrites receives seeded files separately so fresh fields cannot mask seed mutations.
 type invocation struct {
-	js              []string
-	orch            []string
-	stdin           []byte
-	env             []string
-	extraFiles      []string
-	seed            func(t *testing.T, sb sandbox)
-	normalize       func(string) string
-	crash           crashClass
-	errorLine       string
-	progress        string
-	projectPaths    bool
-	normalizeWrites func(outcome, map[string]string) outcome
+	js                     []string
+	orch                   []string
+	stdin                  []byte
+	env                    []string
+	extraFiles             []string
+	extraFilesMayBeBlocked bool
+	seed                   func(t *testing.T, sb sandbox)
+	normalize              func(string) string
+	crash                  crashClass
+	errorLine              string
+	progress               string
+	projectPaths           bool
+	normalizeWrites        func(outcome, map[string]string) outcome
 }
 
 // crashClass names how a case that ends in an uncaught JS exception is compared (plan
@@ -181,14 +185,7 @@ func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 		before := map[string]string{}
 		if inv.normalizeWrites != nil {
 			collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
-			for _, rel := range inv.extraFiles {
-				content, err := os.ReadFile(filepath.Join(sb.project, rel))
-				if err == nil {
-					before["extra/"+rel] = string(content)
-				} else if !errors.Is(err, fs.ErrNotExist) {
-					t.Fatal(err)
-				}
-			}
+			collectExtraFiles(t, sb, inv, before)
 		}
 		o := h.run(t, sb, argv, inv.stdin, inv.env)
 		if strings.Contains(inv.errorLine, "$PROJECT") {
@@ -199,13 +196,7 @@ func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 			o.stderr = strings.ReplaceAll(o.stderr, canonicalProject, "$PROJECT")
 			o.stderr = strings.ReplaceAll(o.stderr, sb.project, "$PROJECT")
 		}
-		for _, rel := range inv.extraFiles {
-			if content, err := os.ReadFile(filepath.Join(sb.project, rel)); err == nil {
-				o.files["extra/"+rel] = string(content)
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				t.Fatal(err)
-			}
-		}
+		collectExtraFiles(t, sb, inv, o.files)
 		if inv.projectPaths {
 			o = o.withProjectPlaceholder(t, sb)
 		}
@@ -377,6 +368,25 @@ func (sb sandbox) files(t *testing.T) map[string]string {
 	collectFiles(t, filepath.Join(sb.home, ".local", "state", "opencode", "orchestrator"), "state", files)
 	collectFiles(t, filepath.Join(sb.home, "fake-log"), "fakelog", files)
 	return files
+}
+
+// collectExtraFiles adds each of the invocation's extra files that is a regular file to
+// files, keyed "extra/<path>". A missing path is not one; neither, when the invocation's
+// extraFilesMayBeBlocked is set, is a directory or a path under a file (a case may make .git
+// a file or the exclude a directory). Any other read error fails the test.
+func collectExtraFiles(t *testing.T, sb sandbox, inv invocation, files map[string]string) {
+	t.Helper()
+	for _, rel := range inv.extraFiles {
+		content, err := os.ReadFile(filepath.Join(sb.project, rel))
+		switch {
+		case err == nil:
+			files["extra/"+rel] = string(content)
+		case errors.Is(err, fs.ErrNotExist):
+		case inv.extraFilesMayBeBlocked && (errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.EISDIR)):
+		default:
+			t.Fatal(err)
+		}
+	}
 }
 
 // collectFiles adds every regular file under root to files, keyed "<label>/<relative path>".

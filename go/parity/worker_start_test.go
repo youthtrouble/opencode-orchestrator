@@ -118,6 +118,9 @@ func withWorkerLockPid(o outcome, before map[string]string) outcome {
 
 func text(s string) *string { return &s }
 
+// opencodeRunOK scripts the fake opencode run to finish a session that used a tool.
+var opencodeRunOK = map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n" + `{"part":{"type":"tool","tool":"bash"}}` + "\n", "exit": "0\n"}
+
 // testWorkerStart compares foreground `worker start` runs over the bridges' fakes.
 func (h *harness) testWorkerStart(t *testing.T) {
 	brief := []string{"--brief", "b.md"}
@@ -130,7 +133,6 @@ func (h *harness) testWorkerStart(t *testing.T) {
 	codexOK := map[string]string{"jsonl": codexThread + `{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"ls","exit_code":0}}` + "\n" +
 		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"pong"}}` + "\n" +
 		`{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}` + "\n", "exit": "0\n"}
-	opencodeOK := map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n" + `{"part":{"type":"tool","tool":"bash"}}` + "\n", "exit": "0\n"}
 	const (
 		briefBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[1]" argument must be of type string. Received type boolean (true)`
 		cwdBoolean   = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
@@ -174,8 +176,8 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		{name: "codex/sandbox-read-only", args: append(brief, "--harness", "codex", "--sandbox", "read-only"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
 
 		// opencode
-		{name: "opencode/finished-with-agent", args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeOK}},
-		{name: "opencode/effort-becomes-the-prompt", args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeOK}},
+		{name: "opencode/finished-with-agent", args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
+		{name: "opencode/effort-becomes-the-prompt", args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
 
 		// validation
 		{name: "usage/no-brief", args: []string{"--harness", "claude"}},

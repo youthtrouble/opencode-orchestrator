@@ -61,15 +61,16 @@ func NewUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// Draft is a message to post. From and To are written as given: callers pass strings, except
-// that a reply addresses whatever the original's `from` holds and a worker posts from its
-// lane, which is true for a bare --lane. An empty Thread is written as null.
+// Draft is a message to post. From, To and Body are written as given: callers pass strings,
+// except that a reply addresses whatever the original's `from` holds, a worker posts from its
+// lane, which is true for a bare --lane, and a flip's body is its --reason, true when bare. A
+// nil Body is the JS default "". An empty Thread is written as null.
 type Draft struct {
 	From    any
 	To      any
 	Kind    string
 	Subject string
-	Body    string
+	Body    any
 	Refs    []string
 	Thread  string
 }
@@ -84,6 +85,10 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	for i, ref := range d.Refs {
 		refs[i] = ref
 	}
+	body := d.Body
+	if body == nil {
+		body = ""
+	}
 	var thread any
 	if d.Thread != "" {
 		thread = d.Thread
@@ -95,7 +100,7 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	msg.Set("to", d.To)
 	msg.Set("kind", d.Kind)
 	msg.Set("subject", d.Subject)
-	msg.Set("body", d.Body)
+	msg.Set("body", body)
 	msg.Set("refs", refs)
 	msg.Set("thread", thread)
 	if err := jsonl.Append(filepath.Join(b.Dir, "messages.jsonl"), msg); err != nil {

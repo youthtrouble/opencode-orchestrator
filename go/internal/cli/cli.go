@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
@@ -70,10 +71,12 @@ func jsErrorClass(err error) string {
 	var manifestShape *manifest.ShapeError
 	var incidentShape *incident.ShapeError
 	var policyType *policy.TypeError
+	var flipProperty *flipcmd.PropertyTypeError
 	var typeError *jsTypeError
 	var syntax *jsonSyntaxError
 	switch {
-	case errors.As(err, &mailboxShape), errors.As(err, &manifestShape), errors.As(err, &incidentShape), errors.As(err, &policyType):
+	case errors.As(err, &mailboxShape), errors.As(err, &manifestShape), errors.As(err, &incidentShape), errors.As(err, &policyType),
+		errors.As(err, &flipProperty):
 		return "TypeError"
 	case errors.As(err, &typeError):
 		if typeError.code != "" {

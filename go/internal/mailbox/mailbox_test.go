@@ -59,6 +59,30 @@ func TestPostAcceptsAnyTruthyFrom(t *testing.T) {
 	}
 }
 
+// A flip posts its --reason as the body, which is true for a bare --reason; an absent body is
+// the JS default "".
+func TestPostWritesTheBodyAsGivenAndDefaultsItToEmpty(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		body any
+		want string
+	}{
+		{"absent", nil, `""`},
+		{"string", "why", `"why"`},
+		{"bare option", true, `true`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			msg, err := testMailbox(t).Post(Draft{From: "a", Subject: "s", Body: c.body})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := marshal(t, jsjson.Path(msg, "body")); got != c.want {
+				t.Errorf("body = %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
 // The JS error lines, captured from Node v26.5.1 (bin/mailbox.mjs), minus the "Error: " the
 // CLI adds.
 func TestErrorMessagesAreTheJSMessages(t *testing.T) {

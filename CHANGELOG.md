@@ -69,8 +69,14 @@
   stderr, exit codes, `.orchestrator/flip.json`, mailbox), every `flip.json` shape included
   (`gate` on a number, string or `true` dies of the JS TypeError; a bare `--reason` on `gate`
   posts no message, as in the JS). New PE-15: `decide` reads `flip.json`'s `at` in the ECMAScript
-  date formats only, so a hand-written legacy date never holds back a hand-back. `orch flip run`
-  is a placeholder (exit 2) until S7b. New `flip` parity group, run in CI.
+  date formats only, so a hand-written legacy date never holds back a hand-back. New `flip`
+  parity group, run in CI.
+- Go port: `orch flip run` matches `bin/flip.mjs run`: `.git/info/exclude` (lines split as the JS
+  multiline regex splits them), the continue brief, `flip.json` and the handoff message, then
+  the conductor launched as `orch worker start --detach` (so a Go-driven flip runs the conductor
+  on the Go worker and bridges), or `pending_launch` when the lane is locked. PE-1, PE-2 and
+  PE-10 are extended to its `launcher` text and wait; worktree `.git` files still crash, as in
+  the JS. The `flip` parity group gains pending and full launches against the fakes.
 
 ## 0.4.7 — 2026-10-19
 
