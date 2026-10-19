@@ -4,9 +4,9 @@ package parity
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,24 +117,53 @@ func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed, pathEnv 
 	compareOutcomes(t, js, orch)
 }
 
-// pathWithoutGo is the fakes followed by a directory holding only node and sqlite3, so neither
-// runtime can find a go toolchain: the harness PATH holds the directories of node and sqlite3,
-// which may also hold a go (a system go on Linux CI, Homebrew's bin on macOS). Without it
-// orch's unit tests row would run `go test` in the checkout under the sandbox HOME, its result,
-// and whether a toolchain is downloaded into a read-only module cache, depending on the machine.
+// pathWithoutGo is the harness PATH with every directory that holds a go toolchain binary
+// (a system go on Linux CI, Homebrew's bin on macOS) replaced by a temporary directory of
+// symlinks to all of its other entries, so the fakes and both runtimes keep the same system
+// tools but cannot find go. With a go, orch's unit tests row would run `go test` in the
+// checkout under the sandbox HOME, its result, and whether a toolchain is downloaded into a
+// read-only module cache, depending on the machine.
 func (h *harness) pathWithoutGo(t *testing.T) string {
 	t.Helper()
-	tools := t.TempDir()
-	linkTool := func(target string) {
-		if err := os.Symlink(target, filepath.Join(tools, filepath.Base(target))); err != nil {
+	var search []string
+	for _, dir := range strings.Split(h.path, ":") {
+		if holdsGoToolchain(dir) {
+			dir = linkAllExceptGo(t, dir)
+		}
+		search = append(search, dir)
+	}
+	return strings.Join(search, ":")
+}
+
+var goToolchainBinaries = []string{"go", "gofmt"}
+
+func holdsGoToolchain(dir string) bool {
+	for _, name := range goToolchainBinaries {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// linkAllExceptGo returns a fresh directory of symlinks to every entry of dir but the go
+// toolchain binaries.
+func linkAllExceptGo(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := t.TempDir()
+	for _, entry := range entries {
+		if slices.Contains(goToolchainBinaries, entry.Name()) {
+			continue
+		}
+		if err := os.Symlink(filepath.Join(dir, entry.Name()), filepath.Join(links, entry.Name())); err != nil {
 			t.Fatal(err)
 		}
 	}
-	linkTool(h.node)
-	if sqlite, err := exec.LookPath("sqlite3"); err == nil {
-		linkTool(sqlite)
-	}
-	return h.fakesDir + ":" + tools
+	return links
 }
 
 var (
