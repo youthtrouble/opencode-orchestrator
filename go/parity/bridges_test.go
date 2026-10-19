@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,18 +17,59 @@ import (
 
 const claudeFixtures = "../testdata/claude/stream-json"
 
-// testBridges compares `orch claude-exec` with bin/claude-exec.mjs, with the scripted claude
-// fake standing in for claude (see parity/fakes/claude).
+// testBridges compares each `orch <bridge>-exec` with bin/<bridge>-exec.mjs, with the scripted
+// fake standing in for the CLI (see parity/fakes).
 func (h *harness) testBridges(t *testing.T) {
 	t.Run("claude", h.testClaudeExec)
+	t.Run("codex", h.testCodexExec)
+	t.Run("opencode", h.testOpencodeExec)
 }
 
-// claudeCase is one claude-exec run. fixture names a capture in testdata/claude/stream-json
-// that the fake replays with its recorded exit code; script adds or overrides fake files by
-// extension (jsonl, stderr, exit, signal, sleep). Unless usage names another cache fixture
-// ("" is green, "none" seeds no cache), the usage cache is fresh, so the budget gate does not
-// collect; only cases with codex set script the codex fake.
-type claudeCase struct {
+// bridge is what the harness needs to know of one bridge. Its name is the CLI it runs and
+// names the script (<name>-exec.mjs), the subcommand, the run files and the fake's logs.
+type bridge struct {
+	name string
+	// scriptDir is where, under $HOME, a case scripts the fake (see parity/fakes/<name>).
+	scriptDir string
+	// fixtures holds the captures a case may replay; "" when there are none yet.
+	fixtures string
+	// done matches the seconds in the "done" progress line; nil for a bridge without one.
+	done *regexp.Regexp
+	// fakeLogs are the fake's logs under fake-log/, dropped from a case whose CLI may be
+	// signalled before it has written them.
+	fakeLogs []string
+}
+
+var (
+	claudeBridge = bridge{
+		name:      "claude",
+		scriptDir: "fake-claude",
+		fixtures:  claudeFixtures,
+		done:      regexp.MustCompile(`(?m)^(\[claude\] done ok=(?:true|false) turns=.* in )\d+(s; record )`),
+		fakeLogs:  []string{"claude-argv.txt"},
+	}
+	codexBridge = bridge{
+		name:      "codex",
+		scriptDir: "fake-codex-exec",
+		done:      regexp.MustCompile(`(?m)^(\[codex\] done ok=(?:true|false) in )\d+(s; record )`),
+		fakeLogs:  []string{"codex-argv.txt", "codex-cwd.txt", "codex-env.txt", "codex-stdin.txt"},
+	}
+	opencodeBridge = bridge{
+		name:      "opencode",
+		scriptDir: "fake-opencode-run",
+		fakeLogs:  []string{"opencode-argv.txt", "opencode-cwd.txt", "opencode-env.txt"},
+	}
+)
+
+// progress is the prefix of the bridge's progress lines.
+func (b bridge) progress() string { return "[" + b.name + "] " }
+
+// bridgeCase is one bridge run. fixture names a capture in the bridge's fixtures that the fake
+// replays with its recorded exit code; script adds or overrides fake files by extension
+// (jsonl, stderr, exit, signal, sleep, and for codex nostdin). Unless usage names another
+// cache fixture ("" is green, "none" seeds no cache), the usage cache is fresh, so the budget
+// gate does not collect; only cases with codex set script the codex app-server fake.
+type bridgeCase struct {
 	name      string
 	args      []string
 	stdin     string
@@ -40,17 +82,16 @@ type claudeCase struct {
 	crash     crashClass
 	errorLine string
 	normalize func(string) string
-	// dropArgvLog drops the fake's argv log from the comparison, for a case whose claude may
-	// be signalled before it has written it.
-	dropArgvLog bool
+	// dropFakeLogs drops the fake's logs from the comparison, for a case whose CLI may be
+	// signalled before it has written them.
+	dropFakeLogs bool
 }
 
 // Fresh values, rewritten only in their exact place and format.
 var (
 	bridgeStartedAt = regexp.MustCompile(`("started_at": ?")` + isoMillis.String() + `(")`)
 	bridgeDuration  = regexp.MustCompile(`("duration_ms": ?)\d+(,)`)
-	runFileStamp    = regexp.MustCompile(`(^project/runs/|/\.orchestrator/runs/)\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(-claude-)`)
-	doneSeconds     = regexp.MustCompile(`(?m)^(\[claude\] done ok=(?:true|false) turns=.* in )\d+(s; record )`)
+	runFileStamp    = regexp.MustCompile(`(^project/runs/|/\.orchestrator/runs/)\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z(-(?:claude|codex|opencode)-)`)
 	// Node 26 warns when setTimeout clamps its delay; orch never prints Node warnings (PE-9).
 	nodeTimerWarning = regexp.MustCompile(`(?m)^\(node:\d+\) Timeout(?:NaN|Negative|Overflow)Warning: .*\nTimeout duration was set to 1\.\n(?:\(Use ` + "`node --trace-warnings \\.\\.\\.`" + ` to show where the warning was created\)\n)?`)
 )
@@ -60,20 +101,24 @@ func withoutNodeWarnings(s string) string {
 	return nodeTimerWarning.ReplaceAllString(s, "")
 }
 
-func normalizeClaudeExec(s string) string {
+// normalize rewrites the fresh values of the bridge's runs.
+func (b bridge) normalize(s string) string {
 	s = bridgeStartedAt.ReplaceAllString(s, "${1}<iso>${2}")
 	s = bridgeDuration.ReplaceAllString(s, "${1}<ms>${2}")
 	s = runFileStamp.ReplaceAllString(s, "${1}<stamp>${2}")
-	s = doneSeconds.ReplaceAllString(s, "${1}<n>${2}")
+	if b.done != nil {
+		s = b.done.ReplaceAllString(s, "${1}<n>${2}")
+	}
 	return normalizeGeneratedAt(normalizeIncident(s))
 }
 
-// normalizeRunFileNames rewrites the started_at stamp in the names of run records.
-func normalizeRunFileNames(drop bool) func(outcome, map[string]string) outcome {
+// normalizeRunFileNames rewrites the started_at stamp in the names of run records and, with
+// drop, leaves out the fake's logs.
+func (b bridge) normalizeRunFileNames(drop bool) func(outcome, map[string]string) outcome {
 	return func(o outcome, _ map[string]string) outcome {
 		files := map[string]string{}
 		for name, content := range o.files {
-			if drop && name == "fakelog/claude-argv.txt" {
+			if drop && slices.Contains(b.fakeLogs, strings.TrimPrefix(name, "fakelog/")) {
 				continue
 			}
 			files[runFileStamp.ReplaceAllString(name, "${1}<stamp>${2}")] = content
@@ -88,7 +133,7 @@ func normalizeRunFileNames(drop bool) func(outcome, map[string]string) outcome {
 // the JS refresh never completes. The JS ignores the variable.
 const noPostRunRefresh = "ORCH_NO_POST_RUN_REFRESH=1"
 
-func (h *harness) claudeInvocation(t *testing.T, c claudeCase) invocation {
+func (h *harness) bridgeInvocation(t *testing.T, b bridge, c bridgeCase) invocation {
 	t.Helper()
 	caches := readCacheFixtures(t)
 	var seedUsage seed = func(*testing.T, sandbox) {}
@@ -99,6 +144,8 @@ func (h *harness) claudeInvocation(t *testing.T, c claudeCase) invocation {
 		seedUsage = seedCache(green, time.Now())
 	case "fable-red":
 		seedUsage = seedCache(fableRed(t, caches), time.Now())
+	case "anthropic-red":
+		seedUsage = seedCache(anthropicRed(t, caches), time.Now())
 	default:
 		fixture, ok := caches.Get(c.usage)
 		if !ok {
@@ -106,45 +153,45 @@ func (h *harness) claudeInvocation(t *testing.T, c claudeCase) invocation {
 		}
 		seedUsage = seedCache(fixture, time.Now())
 	}
-	all := []seed{seedUsage, seedFile("fake-log/.keep", ""), h.seedClaude(t, c)}
+	all := []seed{seedUsage, seedFile("fake-log/.keep", ""), h.seedFake(t, b, c)}
 	if c.codex {
 		all = append(all, codexAnswers(t))
 	}
 	if c.seed != nil {
 		all = append(all, c.seed)
 	}
-	normalize := normalizeClaudeExec
+	normalize := b.normalize
 	if c.normalize != nil {
-		normalize = func(s string) string { return c.normalize(normalizeClaudeExec(s)) }
+		normalize = func(s string) string { return c.normalize(b.normalize(s)) }
 	}
 	return invocation{
-		js:              append([]string{h.node, filepath.Join(h.orchJS, "bin", "claude-exec.mjs")}, c.args...),
-		orch:            append([]string{h.orchBin, "claude-exec"}, c.args...),
+		js:              append([]string{h.node, filepath.Join(h.orchJS, "bin", b.name+"-exec.mjs")}, c.args...),
+		orch:            append([]string{h.orchBin, b.name + "-exec"}, c.args...),
 		stdin:           []byte(c.stdin),
 		env:             append([]string{noPostRunRefresh}, c.env...),
 		seed:            seeds(all...),
 		normalize:       normalize,
 		crash:           c.crash,
 		errorLine:       c.errorLine,
-		progress:        "[claude] ",
+		progress:        b.progress(),
 		projectPaths:    true,
-		normalizeWrites: normalizeRunFileNames(c.dropArgvLog),
+		normalizeWrites: b.normalizeRunFileNames(c.dropFakeLogs),
 	}
 }
 
-// seedClaude scripts the claude fake for the case, if it has a fixture or a script.
-func (h *harness) seedClaude(t *testing.T, c claudeCase) seed {
+// seedFake scripts the bridge's fake for the case, if it has a fixture or a script.
+func (h *harness) seedFake(t *testing.T, b bridge, c bridgeCase) seed {
 	t.Helper()
 	files := map[string]string{}
 	if c.fixture != "" {
 		for _, ext := range []string{"jsonl", "stderr"} {
-			data, err := os.ReadFile(filepath.Join(claudeFixtures, c.fixture+"."+ext))
+			data, err := os.ReadFile(filepath.Join(b.fixtures, c.fixture+"."+ext))
 			if err != nil {
 				t.Fatal(err)
 			}
 			files[ext] = string(data)
 		}
-		files["exit"] = fmt.Sprintf("%v\n", jsjson.Path(readClaudeCases(t), c.fixture, "exit_code"))
+		files["exit"] = fmt.Sprintf("%v\n", jsjson.Path(readFixtureCases(t, b.fixtures), c.fixture, "exit_code"))
 	}
 	for ext, content := range c.script {
 		files[ext] = content
@@ -153,16 +200,17 @@ func (h *harness) seedClaude(t *testing.T, c claudeCase) seed {
 		return func(*testing.T, sandbox) {}
 	}
 	return func(t *testing.T, sb sandbox) {
-		writeSandboxFile(t, sb, "fake-claude/case", "c\n")
+		writeSandboxFile(t, sb, b.scriptDir+"/case", "c\n")
 		for ext, content := range files {
-			writeSandboxFile(t, sb, "fake-claude/c."+ext, content)
+			writeSandboxFile(t, sb, b.scriptDir+"/c."+ext, content)
 		}
 	}
 }
 
-func readClaudeCases(t *testing.T) any {
+// readFixtureCases reads the cases.json beside a bridge's captures.
+func readFixtureCases(t *testing.T, fixtures string) any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(claudeFixtures, "cases.json"))
+	data, err := os.ReadFile(filepath.Join(fixtures, "cases.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,8 +240,19 @@ func fableRed(t *testing.T, caches *jsjson.Object) *jsjson.Object {
 	return copied.(*jsjson.Object)
 }
 
+// anthropicRed is the green cache with the red cache's Claude reading: Anthropic is red,
+// OpenAI green.
+func anthropicRed(t *testing.T, caches *jsjson.Object) *jsjson.Object {
+	t.Helper()
+	green, _ := caches.Get("green")
+	red, _ := caches.Get("red")
+	copied := jsjson.Spread(green)
+	copied.Set("claude", jsjson.Path(red, "claude"))
+	return copied
+}
+
 // pathWithout is a PATH of the fakes except name, then the sqlite3 directory, so a lookup of
-// name fails. It never holds a real claude.
+// name fails. It never holds a real claude, codex or opencode.
 func (h *harness) pathWithout(t *testing.T, name string, before ...string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -215,8 +274,10 @@ func (h *harness) pathWithout(t *testing.T, name string, before ...string) strin
 		}
 	}
 	for _, entry := range search[len(before):] {
-		if _, err := os.Stat(filepath.Join(entry, "claude")); err == nil && entry != dir {
-			t.Fatalf("%s holds a claude; refusing to run a spawn-error case that could reach it", entry)
+		for _, cli := range []string{"claude", "codex", "opencode"} {
+			if _, err := os.Stat(filepath.Join(entry, cli)); err == nil && entry != dir {
+				t.Fatalf("%s holds a %s; refusing to run a spawn-error case that could reach it", entry, cli)
+			}
 		}
 	}
 	return strings.Join(search, ":")
@@ -234,7 +295,7 @@ func (h *harness) testClaudeExec(t *testing.T) {
 		nullBlock      = "TypeError: Cannot read properties of null (reading 'type')"
 	)
 	init := `{"type":"system","subtype":"init","session_id":"s1","model":"m"}` + "\n"
-	cases := []claudeCase{
+	cases := []bridgeCase{
 		// Every captured and synthetic fixture.
 		{name: "fixture/ok", args: ok, fixture: "ok"},
 		{name: "fixture/bash-readonly-allowed", args: ok, fixture: "bash-readonly-allowed"},
@@ -287,8 +348,8 @@ func (h *harness) testClaudeExec(t *testing.T) {
 		{name: "end/killed-by-signal", args: ok, fixture: "ok", script: map[string]string{"signal": "TERM\n"}},
 		{name: "end/stderr-tail", args: ok, script: map[string]string{"stderr": "\u00a0first\nsecond\r\nthird\n\nfifth \n\t\n", "exit": "2\n"}},
 		{name: "end/no-output", args: ok, script: map[string]string{"exit": "0\n"}},
-		{name: "PE-9/timeout-0", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropArgvLog: true, normalize: withoutNodeWarnings},
-		{name: "PE-9/timeout-negative-warns-in-node", args: []string{"--timeout-min", "-1", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropArgvLog: true, normalize: withoutNodeWarnings},
+		{name: "PE-9/timeout-0", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
+		{name: "PE-9/timeout-negative-warns-in-node", args: []string{"--timeout-min", "-1", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
 		{name: "end/limit-in-errors-is-a-limit-incident", args: ok, script: map[string]string{"jsonl": `{"type":"result","is_error":true,"subtype":"rate_limited"}` + "\n", "exit": "1\n"}},
 
 		// A trailing value key without a value is the JS value true.
@@ -315,6 +376,7 @@ func (h *harness) testClaudeExec(t *testing.T) {
 		{name: "crash/spawn-enoent", args: []string{"--prompt", "p"}, env: []string{"PATH=" + h.pathWithout(t, "claude")}, crash: crashC1, errorLine: "Error: spawn claude ENOENT"},
 		{name: "crash/spawn-eacces", args: []string{"--prompt", "p"}, env: []string{"PATH=" + h.pathWithout(t, "claude", nonExecutable)}, crash: crashC1, errorLine: "Error: spawn claude EACCES"},
 		{name: "crash/cwd-missing", args: []string{"--cwd", "absent", "--prompt", "p"}, crash: crashC1, errorLine: "Error: spawn claude ENOENT"},
+		{name: "crash/null-byte-in-the-prompt", stdin: "a\x00b", fixture: "ok", crash: crashC1, errorLine: `TypeError [ERR_INVALID_ARG_VALUE]: The argument 'args[11]' must be a string without null bytes. Received 'a\x00b'`},
 		{name: "crash/null-event", args: ok, script: map[string]string{"jsonl": init + "null\n" + init, "exit": "0\n"}, crash: crashC1, errorLine: nullEvent},
 		{name: "crash/null-block", args: ok, script: map[string]string{"jsonl": init + `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"},null]}}` + "\n", "exit": "0\n"}, crash: crashC1, errorLine: nullBlock},
 		{name: "crash/content-not-iterable", args: ok, script: map[string]string{"jsonl": init + `{"type":"assistant","message":{"content":5}}` + "\n", "exit": "0\n"}, crash: crashC2},
@@ -340,7 +402,7 @@ func (h *harness) testClaudeExec(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h.comparePair(t, h.claudeInvocation(t, c))
+			h.comparePair(t, h.bridgeInvocation(t, claudeBridge, c))
 		})
 	}
 	t.Run("PE-8/bare-prompt", func(t *testing.T) { h.testBarePrompt(t) })
@@ -361,7 +423,7 @@ func seedUnreadable(rel string) seed {
 // "true" (and then crash hashing it), where orch refuses before the gate and never starts
 // claude.
 func (h *harness) testBarePrompt(t *testing.T) {
-	js, orch := h.runPair(t, h.claudeInvocation(t, claudeCase{args: []string{"--prompt"}, fixture: "ok"}))
+	js, orch := h.runPair(t, h.bridgeInvocation(t, claudeBridge, bridgeCase{args: []string{"--prompt"}, fixture: "ok"}))
 	if js.exitCode != 1 || !strings.HasSuffix(js.files["fakelog/claude-argv.txt"], "\n--\ntrue\n") || !strings.Contains(js.stderr, "TypeError [ERR_INVALID_ARG_TYPE]: The \"data\" argument") {
 		t.Errorf("js: exit %d, argv log %q, stderr:\n%s", js.exitCode, js.files["fakelog/claude-argv.txt"], js.stderr)
 	}
@@ -401,8 +463,8 @@ func TestClaudeExecNormalizer(t *testing.T) {
 		"[claude] done ok=false turns=null in <n>s; record $PROJECT/.orchestrator/runs/<stamp>-claude-run.json\n" +
 		"(node:123) TimeoutNegativeWarning: -60000 is a negative number.\nTimeout duration was set to 1.\n(Use `node --trace-warnings ...` to show where the warning was created)\n" +
 		`  "started_at": "<iso>",` + "\n" + `  "duration_ms": <ms>,` + "\n"
-	if got := normalizeClaudeExec(in); got != want {
-		t.Errorf("normalizeClaudeExec\n got %q\nwant %q", got, want)
+	if got := claudeBridge.normalize(in); got != want {
+		t.Errorf("claudeBridge.normalize\n got %q\nwant %q", got, want)
 	}
 	if got := nodeTimerWarning.ReplaceAllString(want, ""); strings.Contains(got, "Warning") {
 		t.Errorf("warning not stripped: %q", got)
@@ -419,7 +481,7 @@ func (h *harness) testClaudeSplitSurrogates(t *testing.T) {
 	events := `{"type":"result","is_error":true,"subtype":"` + strings.Repeat("c", 159) + emoji + `"}` + "\n" +
 		`{"type":"result","is_error":true,"subtype":"success","result":"` + strings.Repeat("b", 199) + emoji + `"}` + "\n"
 	prompt := strings.Repeat("p", 399) + emoji
-	js, orch := h.runPair(t, h.claudeInvocation(t, claudeCase{args: []string{"--prompt", prompt}, script: map[string]string{"jsonl": events, "exit": "0\n"}}))
+	js, orch := h.runPair(t, h.bridgeInvocation(t, claudeBridge, bridgeCase{args: []string{"--prompt", prompt}, script: map[string]string{"jsonl": events, "exit": "0\n"}}))
 	observe := func(where, got string, wants ...string) string {
 		for _, want := range wants {
 			if !strings.Contains(got, want) {

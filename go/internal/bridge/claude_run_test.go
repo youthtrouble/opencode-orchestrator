@@ -19,20 +19,27 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 )
 
-// runClaudeEnv makes the test binary act as `orch claude-exec`, so the run flow, its exit
-// code and its signal handling are tested in a process of their own. The post-run refresh
-// relaunches that binary as `usage --refresh`, which then acts as fakeUsageRefresh.
-const runClaudeEnv = "ORCH_BRIDGE_TEST_RUN_CLAUDE"
+// runBridgeEnv names the bridge the test binary acts as (`orch claude-exec` for "claude", and
+// likewise "codex" and "opencode"), so the run flow, its exit code and its signal handling are
+// tested in a process of their own. The post-run refresh relaunches that binary as `usage
+// --refresh`, which then acts as fakeUsageRefresh.
+const runBridgeEnv = "ORCH_BRIDGE_TEST_RUN"
+
+var bridgeRuns = map[string]func(args []string, stdin *os.File, stdout, stderr io.Writer) int{
+	"claude":   RunClaude,
+	"codex":    RunCodex,
+	"opencode": RunOpencode,
+}
 
 // refreshReportEnv names the file fakeUsageRefresh reports to; without it the fake exits at once.
 const refreshReportEnv = "ORCH_BRIDGE_TEST_REFRESH_REPORT"
 
 func TestMain(m *testing.M) {
-	if os.Getenv(runClaudeEnv) == "1" {
+	if run, isBridge := bridgeRuns[os.Getenv(runBridgeEnv)]; isBridge {
 		if len(os.Args) > 1 && os.Args[1] == "usage" {
 			os.Exit(fakeUsageRefresh(os.Args[1:]))
 		}
-		os.Exit(RunClaude(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+		os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
 }
@@ -53,19 +60,24 @@ func fakeUsageRefresh(args []string) int {
 	return 0
 }
 
-// claudeSandbox is a HOME, a project and a PATH holding only a fake claude and the parity
-// codex fake. The registry is missing, so the budget gate proceeds without collecting usage.
-type claudeSandbox struct {
-	home, project, bin string
+// bridgeSandbox is a HOME, a project and a PATH holding only the fake CLI a test installs and
+// the parity codex fake, for the bridge the test binary acts as. The registry is missing, so
+// the budget gate proceeds without collecting usage.
+type bridgeSandbox struct {
+	bridge, home, project, bin string
 }
 
-func newClaudeSandbox(t *testing.T) claudeSandbox {
+func newClaudeSandbox(t *testing.T) bridgeSandbox {
+	return newBridgeSandbox(t, "claude")
+}
+
+func newBridgeSandbox(t *testing.T, bridge string) bridgeSandbox {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sb := claudeSandbox{home: filepath.Join(root, "home"), project: filepath.Join(root, "project"), bin: filepath.Join(root, "bin")}
+	sb := bridgeSandbox{bridge: bridge, home: filepath.Join(root, "home"), project: filepath.Join(root, "project"), bin: filepath.Join(root, "bin")}
 	for _, dir := range []string{sb.home, sb.project, sb.bin, filepath.Join(sb.home, "fake-log")} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -83,7 +95,14 @@ func newClaudeSandbox(t *testing.T) claudeSandbox {
 
 // fakeClaude installs a claude that records its environment, prints stdout and stderr, then
 // runs ending (e.g. "exit 0", or "exec /bin/sleep 30" to stay alive until signalled).
-func (sb claudeSandbox) fakeClaude(t *testing.T, stdout, stderr, ending string) {
+func (sb bridgeSandbox) fakeClaude(t *testing.T, stdout, stderr, ending string) {
+	t.Helper()
+	sb.fakeCLI(t, "claude", stdout, stderr, ending)
+}
+
+// fakeCLI installs name as a fake that records its environment, prints stdout and stderr, then
+// runs ending; it replaces the parity codex fake for name "codex".
+func (sb bridgeSandbox) fakeCLI(t *testing.T, name, stdout, stderr, ending string) {
 	t.Helper()
 	write(t, filepath.Join(sb.home, "stdout"), stdout)
 	write(t, filepath.Join(sb.home, "stderr"), stderr)
@@ -92,7 +111,11 @@ func (sb claudeSandbox) fakeClaude(t *testing.T, stdout, stderr, ending string) 
 		`/bin/cat "$HOME/stdout"` + "\n" +
 		`/bin/cat "$HOME/stderr" >&2` + "\n" +
 		ending + "\n"
-	if err := os.WriteFile(filepath.Join(sb.bin, "claude"), []byte(script), 0o755); err != nil {
+	file := filepath.Join(sb.bin, name)
+	if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -104,11 +127,11 @@ func write(t *testing.T, path, content string) {
 	}
 }
 
-func (sb claudeSandbox) command(args ...string) *exec.Cmd {
+func (sb bridgeSandbox) command(args ...string) *exec.Cmd {
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Dir = sb.project
 	cmd.Env = []string{
-		runClaudeEnv + "=1",
+		runBridgeEnv + "=" + sb.bridge,
 		"HOME=" + sb.home,
 		"PATH=" + sb.bin,
 		"ORCH_HOME=" + sb.home,
@@ -119,7 +142,7 @@ func (sb claudeSandbox) command(args ...string) *exec.Cmd {
 	return cmd
 }
 
-func (sb claudeSandbox) run(t *testing.T, args ...string) (code int, stdout, stderr string) {
+func (sb bridgeSandbox) run(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	t.Helper()
 	cmd := sb.command(args...)
 	var out, errOut bytes.Buffer
@@ -157,7 +180,7 @@ func readFixture(t *testing.T, name string) string {
 	return string(data)
 }
 
-func (sb claudeSandbox) incidents(t *testing.T) string {
+func (sb bridgeSandbox) incidents(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(sb.home, ".local", "state", "opencode", "orchestrator", "incidents.jsonl"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -204,8 +227,8 @@ func TestRunClaudeNormalPath(t *testing.T) {
 	}
 }
 
-// The post-run refresh is `orch usage --refresh`, started in a session of its own after the
-// result is printed; orch exits while it still runs (PE-12).
+// The post-run refresh is `orch usage --refresh`, started in a session of its own once the
+// run record is written; orch exits while it still runs (PE-12).
 func TestRunClaudeStartsADetachedUsageRefresh(t *testing.T) {
 	sb := newClaudeSandbox(t)
 	sb.fakeClaude(t, readFixture(t, "ok.jsonl"), "", "exit 0")
@@ -252,6 +275,31 @@ func TestRunClaudeRefreshCanBeTurnedOff(t *testing.T) {
 	time.Sleep(500 * time.Millisecond) // a refresh, had one started, reports well within this
 	if _, err := os.Stat(report); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("a refresh ran with %s=1 (%v)", noPostRunRefreshEnv, err)
+	}
+}
+
+// A bare --resume makes session_id true, which the run record throws on; the JS dies there,
+// before its refresh, so orch starts none.
+func TestRunClaudeStartsNoRefreshAfterARunRecordCrash(t *testing.T) {
+	sb := newClaudeSandbox(t)
+	sb.fakeClaude(t, readFixture(t, "ok.jsonl"), "", "exit 0")
+	assertNoRefresh(t, sb.home, sb.command("--quiet", "--prompt", "p", "--resume"))
+}
+
+// assertNoRefresh runs cmd, which must crash in its run record, and fails if it starts a
+// post-run refresh.
+func assertNoRefresh(t *testing.T, home string, cmd *exec.Cmd) {
+	t.Helper()
+	report := filepath.Join(home, "refresh")
+	cmd.Env = append(cmd.Env, refreshReportEnv+"="+report)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if code := exitCode(t, cmd.Run()); code != 1 || !strings.HasPrefix(stderr.String(), "TypeError: ") {
+		t.Fatalf("exit %d, stderr %q; want the run record's TypeError", code, stderr.String())
+	}
+	time.Sleep(500 * time.Millisecond) // a refresh, had one started, reports well within this
+	if _, err := os.Stat(report); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a refresh ran after the run record crashed (%v)", err)
 	}
 }
 
@@ -326,11 +374,11 @@ func TestRunClaudeUsageLimitPath(t *testing.T) {
 	}
 }
 
-// start runs claude-exec with a claude that prints stdout and then sleeps, and returns once
-// orch has logged ready, so claude is running and orch's signal handling is in place.
-func (sb claudeSandbox) start(t *testing.T, stdout, ready string, args ...string) (cmd *exec.Cmd, out *bytes.Buffer, stderr *strings.Builder) {
+// start runs the bridge with a CLI that prints stdout and then sleeps, and returns once orch
+// has logged ready, so the CLI is running and orch's signal handling is in place.
+func (sb bridgeSandbox) start(t *testing.T, stdout, ready string, args ...string) (cmd *exec.Cmd, out *bytes.Buffer, stderr *strings.Builder) {
 	t.Helper()
-	sb.fakeClaude(t, stdout, "", "exec /bin/sleep 30")
+	sb.fakeCLI(t, sb.bridge, stdout, "", "exec /bin/sleep 30")
 	cmd = sb.command(args...)
 	out, stderr = &bytes.Buffer{}, &strings.Builder{}
 	cmd.Stdout = out
@@ -354,8 +402,8 @@ func (sb claudeSandbox) start(t *testing.T, stdout, ready string, args ...string
 	return cmd, out, stderr
 }
 
-// waitWithin waits for cmd, failing if it takes longer than limit (claude's kill grace is 10 s,
-// so a forwarded signal that reached claude ends the run well before that).
+// waitWithin waits for cmd, failing if it takes longer than limit (the CLI's kill grace is 10 s,
+// so a forwarded signal that reached it ends the run well before that).
 func waitWithin(t *testing.T, cmd *exec.Cmd, limit time.Duration) int {
 	t.Helper()
 	done := make(chan error, 1)

@@ -12,20 +12,22 @@ import (
 // commands maps subcommand names to implementations. json-echo is hidden from the usage text:
 // it exists for the parity harness only.
 var commands = map[string]cli.Command{
-	"version":     cli.Version,
-	"usage":       cli.Usage,
-	"routing":     cli.Routing,
-	"budget":      cli.Budget,
-	"effort":      cli.Effort,
-	"mailbox":     cli.Mailbox,
-	"manifest":    cli.Manifest,
-	"incident":    cli.Incident,
-	"policy":      cli.Policy,
-	"claude-exec": cli.ClaudeExec,
-	"json-echo":   cli.JSONEcho,
+	"version":       cli.Version,
+	"usage":         cli.Usage,
+	"routing":       cli.Routing,
+	"budget":        cli.Budget,
+	"effort":        cli.Effort,
+	"mailbox":       cli.Mailbox,
+	"manifest":      cli.Manifest,
+	"incident":      cli.Incident,
+	"policy":        cli.Policy,
+	"claude-exec":   cli.ClaudeExec,
+	"codex-exec":    cli.CodexExec,
+	"opencode-exec": cli.OpencodeExec,
+	"json-echo":     cli.JSONEcho,
 }
 
-const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox, manifest, incident, policy, claude-exec"
+const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox, manifest, incident, policy, claude-exec, codex-exec, opencode-exec"
 
 func main() {
 	os.Exit(run(os.Args[1:], cli.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}))

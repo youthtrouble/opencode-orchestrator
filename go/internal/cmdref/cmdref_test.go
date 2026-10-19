@@ -41,3 +41,15 @@ func TestClaudeExecHelpIsTheScriptHeader(t *testing.T) {
 		t.Errorf("ClaudeExecHelp differs from the script header\n got: %q\nwant: %q", ClaudeExecHelp, want)
 	}
 }
+
+// codex-exec.mjs --help prints lines 2-12 of its own source joined by "\n".
+func TestCodexExecHelpIsTheScriptHeader(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "codex-exec.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join(strings.Split(string(source), "\n")[1:12], "\n")
+	if CodexExecHelp != want {
+		t.Errorf("CodexExecHelp differs from the script header\n got: %q\nwant: %q", CodexExecHelp, want)
+	}
+}

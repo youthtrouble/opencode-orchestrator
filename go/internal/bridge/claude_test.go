@@ -14,9 +14,9 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 )
 
-func parseClaude(args ...string) claudeOptions {
+func parseClaude(args ...string) options {
 	opts, _ := cliargs.ParseArgs(args, claudeValueKeys, claudeFlagKeys)
-	return claudeOptions(opts)
+	return options(opts)
 }
 
 var argvPrefix = []string{"-p", "--output-format", "stream-json", "--verbose"}
@@ -116,7 +116,7 @@ func TestStartLine(t *testing.T) {
 
 func TestNewClaudeResultKeepsBareValues(t *testing.T) {
 	// Only the last key can be bare on a real command line; each is tested here at once.
-	opts := claudeOptions{"effort": {Flag: true}, "resume": {Flag: true}}
+	opts := options{"effort": {Flag: true}, "resume": {Flag: true}}
 	result := newClaudeResult(opts, true, "/w", "2026-10-19T00:00:00.000Z")
 	got, err := jsjson.Marshal(result)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestNewClaudeResultKeepsBareValues(t *testing.T) {
 func replay(t *testing.T, input []byte) (*claudeEvents, string) {
 	t.Helper()
 	var log bytes.Buffer
-	events := newClaudeEvents(&logger{w: &log}, newClaudeResult(parseClaude(), defaultClaudeModel, "/w", "t"))
+	events := newClaudeEvents(&logger{w: &log, prefix: "[claude] "}, newClaudeResult(parseClaude(), defaultClaudeModel, "/w", "t"))
 	lines := &procs.Lines{OnLine: events.handleLine}
 	if _, err := lines.Write(input); err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func TestTimeoutDelayFollowsNodeClamp(t *testing.T) {
 		{true, time.Minute},
 	}
 	for _, c := range cases {
-		if got := timeoutDelay(c.value); got != c.want {
+		if got := timeoutDelay(c.value, 60); got != c.want {
 			t.Errorf("timeoutDelay(%#v) = %v, want %v", c.value, got, c.want)
 		}
 	}

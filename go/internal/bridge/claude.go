@@ -1,19 +1,11 @@
-// Package bridge runs a coding CLI on a bounded task and reports one structured result, as the
-// JS bridges in orchestrator/bin do. RunClaude is `orch claude-exec` (bin/claude-exec.mjs).
-//
-// The JS reads its options as JS values: a value key given last on the command line, without
-// its value, is the boolean true, not a string. Those values are carried here as any (a string
-// or true) so that they print, serialize and coerce exactly as the JS ones do.
 package bridge
 
 import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
@@ -27,34 +19,11 @@ var (
 // defaultClaudeModel is the model when --model is not given.
 const defaultClaudeModel = "claude-opus-5-5"
 
-// claudeOptions are the parsed command-line options, read as the JS reads `opts`.
-type claudeOptions cliargs.Opts
-
-// value is opts[key]: nil when absent (JS undefined), true for a bare key, else the string.
-func (o claudeOptions) value(key string) any {
-	opt, present := o[key]
-	switch {
-	case !present:
-		return nil
-	case opt.Flag:
-		return true
-	}
-	return opt.Value
-}
-
-// or is `opts[key] || fallback`.
-func (o claudeOptions) or(key string, fallback any) any {
-	if v := o.value(key); jsjson.Truthy(v) {
-		return v
-	}
-	return fallback
-}
-
 // claudeArgv is the argv claude-exec.mjs passes to claude (l.38-49). Node's spawn coerces the
 // value true to "true". --json-schema passes the schema file's contents; --add-dir an absolute
 // path. A bare --json-schema or --add-dir is the path.resolve TypeError, and an unreadable
 // schema file Node's fs error, both uncaught in the JS.
-func claudeArgv(opts claudeOptions, model any, prompt string) ([]string, error) {
+func claudeArgv(opts options, model any, prompt string) ([]string, error) {
 	argv := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", text(opts.or("permission-mode", "auto")), "--permission-prompts", "none"}
 	if resume := opts.value("resume"); jsjson.Truthy(resume) {
 		argv = append(argv, "--resume", text(resume))
@@ -95,25 +64,9 @@ func claudeArgv(opts claudeOptions, model any, prompt string) ([]string, error) 
 	return append(argv, "--", prompt), nil
 }
 
-// resolvePath is path.resolve(v) for an option value: true is Node's ERR_INVALID_ARG_TYPE.
-func resolvePath(v any) (string, error) {
-	s, isString := v.(string)
-	if !isString {
-		return "", errPathArgBoolean
-	}
-	abs, err := nodefs.Resolve(s)
-	if err != nil {
-		return "", &jsError{class: "Error", message: err.Error()}
-	}
-	return abs, nil
-}
-
-// text is String(v) for an option value or a value read from an event.
-func text(v any) string { return jsjson.TemplateString(v) }
-
 // startLine is the "start" log line (l.52). Its mode falls back to "acceptEdits" although
 // claude is passed "auto": a latent JS defect, mirrored.
-func startLine(opts claudeOptions, model any, cwd string) string {
+func startLine(opts options, model any, cwd string) string {
 	shown := model
 	if jsjson.Truthy(opts.value("resume")) {
 		shown = "(resumed)"
@@ -127,7 +80,7 @@ func startLine(opts claudeOptions, model any, cwd string) string {
 
 // newClaudeResult is the result object with its JS key order (l.57); exit_code, duration_ms
 // and then record (or reason and resets_at) are appended when the run ends.
-func newClaudeResult(opts claudeOptions, model any, cwd, startedAt string) *jsjson.Object {
+func newClaudeResult(opts options, model any, cwd, startedAt string) *jsjson.Object {
 	result := jsjson.NewObject()
 	result.Set("ok", false)
 	result.Set("harness", "claude")
@@ -149,90 +102,34 @@ func newClaudeResult(opts claudeOptions, model any, cwd, startedAt string) *jsjs
 }
 
 // claudeEvents applies claude's stream-json events to the result and writes the progress log,
-// as the JS line handler does (l.59-73). Line events, the timeout and the end of the run come
-// from different goroutines; mu serializes them, so the log order is the order of events, as
-// in single-threaded JS.
+// as the JS line handler does (l.59-73), on the jsThread that serializes them.
 type claudeEvents struct {
-	mu     sync.Mutex
-	log    *logger
+	*jsThread
 	result *jsjson.Object
-	// crash is the exception that would have killed the JS inside its line handler; once set,
-	// later events and log lines are dropped, as the JS process is gone.
-	crash   error
-	crashed chan struct{} // closed when crash is set
-	closed  bool          // claude has closed; the timeout no longer logs
 }
 
 func newClaudeEvents(log *logger, result *jsjson.Object) *claudeEvents {
-	return &claudeEvents{log: log, result: result, crashed: make(chan struct{})}
+	e := &claudeEvents{result: result}
+	e.jsThread = newJSThread(log, e)
+	return e
 }
 
-// handleLine is the readline "line" listener.
-func (e *claudeEvents) handleLine(line string) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.crash != nil {
-		return
-	}
-	if err := e.handleEvent(line); err != nil {
-		e.crash = err
-		close(e.crashed)
-	}
-}
-
-// logf writes one progress line unless the JS would already have died.
-func (e *claudeEvents) logf(format string, args ...any) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.crash == nil {
-		e.log.printf(format, args...)
-	}
-}
-
-// logIfRunning writes a progress line unless claude has closed or the JS would have crashed,
-// and reports whether it did; the JS clears the timer on close.
-func (e *claudeEvents) logIfRunning(line string) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed || e.crash != nil {
-		return false
-	}
-	e.log.printf("%s", line)
-	return true
-}
-
-// close is the child's "close" handler (l.74-78).
-func (e *claudeEvents) close(code *int, waitErr error, stderr []byte, duration time.Duration) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.closed = true
-	if e.crash != nil {
-		return e.crash
-	}
-	if waitErr != nil {
-		return waitErr
-	}
-	exitCode := any(nil)
-	if code != nil {
-		exitCode = float64(*code)
-	}
+// handleClose is the child's "close" handler (l.74-78).
+func (e *claudeEvents) handleClose(exitCode any, stderr []byte, duration time.Duration) {
 	e.result.Set("exit_code", exitCode)
 	e.result.Set("duration_ms", float64(duration.Milliseconds()))
 	if exitCode == 0.0 {
-		return nil
+		return
 	}
 	if len(jsjson.Path(e.result, "errors").([]any)) == 0 {
 		e.pushError(fmt.Sprintf("claude exited %s: %s", text(exitCode), stderrTail(stderr)))
 	}
 	e.result.Set("ok", false)
-	return nil
 }
 
 var (
-	errNullEvent = &jsError{class: "TypeError", message: "Cannot read properties of null (reading 'session_id')"}
-	errNullBlock = &jsError{class: "TypeError", message: "Cannot read properties of null (reading 'type')"}
-	// errPathArgBoolean is path.resolve(true).
-	errPathArgBoolean = &jsError{class: "TypeError [ERR_INVALID_ARG_TYPE]", message: cliargs.ErrPathArgBoolean.Error()}
+	errNullEvent = nullPropertyRead("session_id")
+	errNullBlock = nullPropertyRead("type")
 )
 
 // handleEvent applies one line. Unparsable lines are skipped; primitives and arrays have none
@@ -386,53 +283,8 @@ func (e *claudeEvents) pushError(message any) {
 	e.result.Set("errors", append(errors, message))
 }
 
-// or is `v || fallback`.
-func or(v, fallback any) any {
-	if jsjson.Truthy(v) {
-		return v
-	}
-	return fallback
-}
-
-// stderrTail is `stderr.trim().split("\n").slice(-3).join(" | ")`: the last three lines of
-// claude's stderr, trimmed of JS white space. The JS decodes each chunk on its own, so a
-// character split across chunks becomes U+FFFD there; the whole buffer is decoded here.
-func stderrTail(stderr []byte) string {
-	lines := strings.Split(strings.Trim(jsstr.DecodeUTF8(stderr), jsstr.WhiteSpace), "\n")
-	return strings.Join(lines[max(len(lines)-3, 0):], " | ")
-}
-
+// limitText is LIMIT_TEXT (l.79), /i like limitOrRate, and fable the frontier test (l.35).
 var (
-	// limitText is LIMIT_TEXT (l.79) and limitOrRate the incident kind test (l.89), both /i. A
-	// non-unicode JS /i matches ASCII letters only against ASCII letters, so the input is
-	// lowered in ASCII only (see asciiLower) and the patterns are lower case.
-	limitText   = regexp.MustCompile(`hit your (session|usage|weekly) limit|usage limit reached|rate limit`)
-	limitOrRate = regexp.MustCompile(`limit|rate`)
-	fable       = regexp.MustCompile(`fable`)
+	limitText = regexp.MustCompile(`hit your (session|usage|weekly) limit|usage limit reached|rate limit`)
+	fable     = regexp.MustCompile(`fable`)
 )
-
-// matchesIgnoringCase is re.test(s) for a /i regexp of lower-case ASCII literals.
-func matchesIgnoringCase(re *regexp.Regexp, s string) bool {
-	return re.MatchString(asciiLower(s))
-}
-
-// asciiLower lowers A-Z only. Under a non-unicode /i, JS canonicalizes by toUpperCase but
-// never maps a non-ASCII character onto an ASCII one, so the Kelvin sign does not match "k"
-// (Go's (?i) folding would match it).
-func asciiLower(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r >= 'A' && r <= 'Z' {
-			return r + 'a' - 'A'
-		}
-		return r
-	}, s)
-}
-
-// jsError is an exception the JS leaves uncaught. Node prints "<class>: <message>" amid a
-// source excerpt and a stack and exits 1; orch prints that line alone.
-type jsError struct {
-	class   string
-	message string
-}
-
-func (e *jsError) Error() string { return e.class + ": " + e.message }

@@ -36,3 +36,17 @@ const ClaudeExecHelp = `// Delegate a bounded task to Claude Code (print mode) o
 // Prints one JSON object on stdout: { ok, session_id, final_message, usage, model_usage, cost_usd,
 // num_turns, permission_denials, duration_ms, record }. Exit codes: 0 ok, 1 error, 75 budget refused.
 import { spawn } from "node:child_process";`
+
+// CodexExecHelp is what `codex-exec.mjs --help` prints: lines 2-12 of the script, the header
+// comment and the import line that follows it.
+const CodexExecHelp = `// Delegate a bounded task to the Codex CLI on the ChatGPT subscription and get a structured result.
+//
+//   codex-exec.mjs [--model gpt-6.1-sol] [--effort low|medium|high|xhigh|max|ultra]
+//                  [--sandbox read-only|workspace-write|danger-full-access] [--cwd DIR]
+//                  [--resume THREAD_ID] [--schema FILE] [--timeout-min 60] [--force] [--quiet]
+//                  [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+//
+// Prints one JSON object on stdout: { ok, thread_id, final_message, usage, files_changed, commands,
+// duration_ms, record } and streams progress lines to stderr. Exit codes: 0 ok, 1 turn failed,
+// 75 budget gate refused, 2 usage error.
+import { spawn } from "node:child_process";`

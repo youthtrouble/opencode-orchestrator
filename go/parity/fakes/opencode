@@ -4,9 +4,40 @@
 # a case relies on the CLI failing (the usage group's auth.json fallback).
 #
 # Scripted `opencode auth list`: prints $HOME/fake-opencode/auth-list.txt when it exists.
+#
+# Scripted `opencode run`: when $HOME/fake-opencode-run/case names a case, each argv element
+# is appended as one line to $HOME/fake-log/opencode-argv.txt, the physical working directory
+# is written to opencode-cwd.txt and CLAUDECODE (or <unset>) to opencode-env.txt. Then
+# <case>.jsonl, .stderr, .signal, .sleep and .exit act as in the claude fake. Shell builtins
+# only: PATH holds no coreutils.
 if [ "$1 $2" = "auth list" ] && [ -f "$HOME/fake-opencode/auth-list.txt" ]; then
   while IFS= read -r line; do printf '%s\n' "$line"; done < "$HOME/fake-opencode/auth-list.txt"
   exit 0
+fi
+script="$HOME/fake-opencode-run"
+if [ "$1" = run ] && [ -f "$script/case" ]; then
+  IFS= read -r case < "$script/case"
+  log="$HOME/fake-log"
+  for arg in "$@"; do printf '%s\n' "$arg" >> "$log/opencode-argv.txt"; done
+  pwd -P > "$log/opencode-cwd.txt"
+  printf 'CLAUDECODE=%s\n' "${CLAUDECODE-<unset>}" > "$log/opencode-env.txt"
+  if [ -f "$script/$case.jsonl" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$script/$case.jsonl"
+  fi
+  if [ -f "$script/$case.stderr" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line" >&2; done < "$script/$case.stderr"
+  fi
+  if [ -f "$script/$case.signal" ]; then
+    IFS= read -r sig < "$script/$case.signal"
+    kill "-$sig" $$
+  fi
+  if [ -f "$script/$case.sleep" ]; then
+    IFS= read -r seconds < "$script/$case.sleep"
+    exec /bin/sleep "$seconds"
+  fi
+  code=0
+  if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
+  exit "$code"
 fi
 echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
 exit 97

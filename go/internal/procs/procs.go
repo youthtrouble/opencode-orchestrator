@@ -11,8 +11,8 @@
 //
 // One difference is deliberate (PE-B3 in the S5a plan): the JS sends one signal and waits for
 // "close" forever. Here a signalled child that has not exited after Spec.Grace is killed, and
-// once the child exits, Wait gives a grandchild that still holds stdout or stderr at most
-// Spec.Grace before it closes the pipes. The child stays in the caller's process group (no
+// once the child exits, Wait gives a grandchild that still holds stdin, stdout or stderr at
+// most Spec.Grace before it closes the pipes. The child stays in the caller's process group (no
 // Setpgid, no Setsid), so a signal to the caller's group still reaches it.
 package procs
 
@@ -27,15 +27,18 @@ import (
 )
 
 // Spec describes a child. Name is resolved on the PATH in Env as Node's spawn does; a nil Env
-// means the parent's environment, as Node's env: undefined. Stdin is /dev/null (Node's
-// "ignore"); Stdout and Stderr receive the child's output (nil discards it). Grace bounds both
-// the wait before SIGKILL after Signal and the wait for pipe EOF after the child exits; it
-// must be positive.
+// means the parent's environment, as Node's env: undefined. Stdin, when set, is copied to the
+// child's stdin, which is then closed (Node's child.stdin.end(data)); nil gives it /dev/null
+// (Node's "ignore"). A child that exits without reading all of it is not an error: os/exec
+// drops the EPIPE of that copy. Stdout and Stderr receive the child's output (nil discards
+// it). Grace bounds both the wait before SIGKILL after Signal and the wait for the stdin copy
+// and pipe EOF after the child exits; it must be positive.
 type Spec struct {
 	Name           string
 	Args           []string
 	Dir            string
 	Env            []string
+	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Grace          time.Duration
 }
@@ -70,6 +73,7 @@ func Start(s Spec) (*Child, error) {
 		Args:      append([]string{s.Name}, s.Args...),
 		Dir:       s.Dir,
 		Env:       env,
+		Stdin:     s.Stdin,
 		Stdout:    s.Stdout,
 		Stderr:    s.Stderr,
 		WaitDelay: s.Grace,
@@ -105,12 +109,13 @@ func (c *Child) kill() {
 
 // Wait waits for the child to exit and returns its exit code: a normal exit n gives &n, a
 // death by signal gives nil (the JS close code null). Once the child has exited, Wait waits
-// at most Grace for its stdout and stderr copies to finish, then closes the pipes.
+// at most Grace for the copies to and from its stdin, stdout and stderr to finish, then closes
+// the pipes.
 //
-// err is non-nil only when the child's status could not be collected, or when copying its
-// output to Stdout or Stderr failed. exec.ErrWaitDelay (a grandchild held a pipe past Grace)
-// is not an error here: the exit status is complete, the bound is a resource policy, and exec
-// reports it only for a zero exit anyway.
+// err is non-nil only when the child's status could not be collected, or when copying Stdin
+// or its output to Stdout or Stderr failed (EPIPE on stdin excepted). exec.ErrWaitDelay (a
+// grandchild held a pipe past Grace) is not an error here: the exit status is complete, the
+// bound is a resource policy, and exec reports it only for a zero exit anyway.
 func (c *Child) Wait() (code *int, err error) {
 	err = c.cmd.Wait()
 	c.mu.Lock()

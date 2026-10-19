@@ -4,7 +4,15 @@
 #
 # Scripted `codex app-server`: when $HOME/fake-codex/ exists, every stdin line is appended to
 # $HOME/fake-log/codex-app-server.jsonl and the n-th line is answered with the contents of
-# $HOME/fake-codex/<n>, if present. Shell builtins only: PATH holds no coreutils.
+# $HOME/fake-codex/<n>, if present.
+#
+# Scripted `codex exec`: when $HOME/fake-codex-exec/case names a case, each argv element is
+# appended as one line to $HOME/fake-log/codex-argv.txt, the physical working directory is
+# written to codex-cwd.txt and CLAUDECODE (or <unset>) to codex-env.txt. Unless
+# <case>.nostdin exists, stdin is then read to its end into codex-stdin.txt, with a
+# "<no newline at end>" line after an unterminated last line. Then <case>.jsonl, .stderr,
+# .signal, .sleep and .exit act as in the claude fake. Shell builtins only: PATH holds no
+# coreutils.
 script="$HOME/fake-codex"
 if [ "$1" = app-server ] && [ -d "$script" ]; then
   n=0
@@ -16,6 +24,36 @@ if [ "$1" = app-server ] && [ -d "$script" ]; then
     fi
   done
   exit 0
+fi
+script="$HOME/fake-codex-exec"
+if [ "$1" = exec ] && [ -f "$script/case" ]; then
+  IFS= read -r case < "$script/case"
+  log="$HOME/fake-log"
+  for arg in "$@"; do printf '%s\n' "$arg" >> "$log/codex-argv.txt"; done
+  pwd -P > "$log/codex-cwd.txt"
+  printf 'CLAUDECODE=%s\n' "${CLAUDECODE-<unset>}" > "$log/codex-env.txt"
+  if [ ! -f "$script/$case.nostdin" ]; then
+    : > "$log/codex-stdin.txt"
+    while IFS= read -r line; do printf '%s\n' "$line" >> "$log/codex-stdin.txt"; done
+    if [ -n "$line" ]; then printf '%s\n<no newline at end>\n' "$line" >> "$log/codex-stdin.txt"; fi
+  fi
+  if [ -f "$script/$case.jsonl" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$script/$case.jsonl"
+  fi
+  if [ -f "$script/$case.stderr" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line" >&2; done < "$script/$case.stderr"
+  fi
+  if [ -f "$script/$case.signal" ]; then
+    IFS= read -r sig < "$script/$case.signal"
+    kill "-$sig" $$
+  fi
+  if [ -f "$script/$case.sleep" ]; then
+    IFS= read -r seconds < "$script/$case.sleep"
+    exec /bin/sleep "$seconds"
+  fi
+  code=0
+  if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
+  exit "$code"
 fi
 echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
 exit 97

@@ -192,3 +192,61 @@ func TestStartRequiresAGrace(t *testing.T) {
 		t.Error("Start accepted a zero Grace, which would leave the pipe wait unbounded")
 	}
 }
+
+func TestStdinDeliversTheBytes(t *testing.T) {
+	const prompt = "line one\nprompt é \U0001F600 without a final newline"
+	var out strings.Builder
+	child, err := Start(Spec{Name: script(t, "exec /bin/cat"), Stdin: strings.NewReader(prompt), Stdout: &out, Grace: testGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, intp(0))
+	if out.String() != prompt {
+		t.Errorf("child read %q, want %q", out.String(), prompt)
+	}
+}
+
+// A child that exits without reading its stdin (codex rejecting its argv, say) closes the pipe
+// under a pending write: the EPIPE is dropped and the child's own exit code reported (PE-13).
+func TestStdinUnreadByAnExitingChildIsNotAnError(t *testing.T) {
+	prompt := strings.Repeat("p", 1<<20) // far beyond any pipe buffer, so the write must fail
+	child, err := Start(Spec{Name: script(t, "exit 2"), Stdin: strings.NewReader(prompt), Grace: testGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatalf("Wait error = %v; an unread stdin is not an error", err)
+	}
+	wantCode(t, code, intp(2))
+}
+
+// TestStdinCopyIsBoundedByGrace: a grandchild that inherited stdin and never reads it would
+// block the stdin copy for as long as it lives; Wait gives up on it after Grace.
+func TestStdinCopyIsBoundedByGrace(t *testing.T) {
+	var out strings.Builder
+	body := "exec 3<&0; /bin/sleep 30 <&3 >/dev/null 2>&1 & echo $!; exit 0"
+	child, err := Start(Spec{Name: script(t, body), Stdin: strings.NewReader(strings.Repeat("p", 1<<20)), Stdout: &out, Grace: killGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	code, err := child.Wait()
+	elapsed := time.Since(started)
+	if grandchild, convErr := strconv.Atoi(strings.TrimSpace(out.String())); convErr == nil {
+		t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+	} else {
+		t.Errorf("child printed %q, not the grandchild's pid", out.String())
+	}
+	if err != nil {
+		t.Fatalf("Wait error = %v; the bounded stdin copy is not an error", err)
+	}
+	wantCode(t, code, intp(0))
+	if elapsed > killGrace+slack {
+		t.Errorf("Wait took %v with a grandchild holding stdin, want at most %v", elapsed, killGrace+slack)
+	}
+}

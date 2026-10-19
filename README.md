@@ -486,8 +486,11 @@ byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good rea
 plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
 post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
 create|verify|diff`, `orch incident record|list|report|share` (appending to the same incident log),
-`orch policy show|set|unattended` and `orch claude-exec` (the Claude bridge: the same `claude -p`
-command line, result JSON and run records), each byte-identical to its `bin/*.mjs` script when
+`orch policy show|set|unattended`, and the three bridges `orch claude-exec`, `orch codex-exec`
+and `orch opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` command lines,
+result JSON and run records; `codex-exec` still passes `--approve-for-me` with the default
+`workspace-write` sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs`
+does), each byte-identical to its `bin/*.mjs` script when
 both read the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. The other scripts are not ported.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness
 that diffs every implemented command against the JS.

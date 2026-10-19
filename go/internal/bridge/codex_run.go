@@ -1,0 +1,75 @@
+package bridge
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/budget"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
+)
+
+// RunCodex is `orch codex-exec [args]`: it runs `codex exec` on the prompt, given on codex's
+// stdin, and prints one JSON result, exactly as bin/codex-exec.mjs does, step for step, and
+// returns the exit code: 0 ok, 1 failed or crashed, 2 no prompt, 75 budget red. The
+// differences are the documented exceptions PE-1 and PE-8 to PE-13 and the crash output (only
+// the error line of an exception the JS leaves uncaught).
+func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
+	parsed, positional := cliargs.ParseArgs(args, codexValueKeys, codexFlagKeys)
+	opts := options(parsed)
+	if parsed.IsFlag("help") {
+		fmt.Fprintln(stdout, cmdref.CodexExecHelp)
+		return exitOK
+	}
+	prompt, err := cliargs.ReadPrompt(parsed, positional, stdin)
+	if err != nil {
+		fmt.Fprintln(stderr, err.Error())
+		return exitPrompt
+	}
+	request, err := newCodexRequest(opts)
+	if err != nil {
+		return crash(stderr, err)
+	}
+	timeout := timeoutDelay(opts.value("timeout-min"), defaultCodexTimeoutMins)
+	log := &logger{w: stderr, prefix: "[codex] ", quiet: parsed.IsFlag("quiet")}
+
+	cfg, err := usageConfig()
+	if err != nil {
+		return crash(stderr, err)
+	}
+	decision, err := budget.Gate(cfg, routing.OpenAI, parsed.IsFlag("force"), isFrontierCodexModel(request.model))
+	if err != nil {
+		return crash(stderr, err)
+	}
+	if !decision.Allowed {
+		return refuse(stdout, stderr, &decision, request.cwd, "codex-exec")
+	}
+
+	argv, err := request.argv()
+	if err != nil {
+		return crash(stderr, err)
+	}
+	started := time.Now()
+	log.printf("%s", request.startLine())
+	result := newCodexResult(request, jsjson.ISOString(started))
+	events := newCodexEvents(log, result)
+	err = childRun{
+		name:       "codex",
+		args:       argv,
+		dir:        request.cwd,
+		stdin:      strings.NewReader(prompt), // an unread prompt is no error (PE-13)
+		timeout:    timeout,
+		timeoutLog: "timeout; killing",
+		started:    started,
+	}.run(events.jsThread)
+	if err != nil {
+		return crash(stderr, err)
+	}
+	result.flagToolHostOutage()
+	return finishedRun{log: log, cwd: request.cwd, prompt: prompt, afterRecord: startUsageRefresh, doneLine: codexDoneLine}.report(stdout, stderr, result.JSON())
+}

@@ -41,6 +41,14 @@
   parity group replays the captured claude stream-json fixtures through a scripted fake and runs
   in CI.
 - Contract: no sleep-waiting while independent work exists; re-read the mailbox between waits.
+- Go port: `orch codex-exec` and `orch opencode-exec` match `bin/codex-exec.mjs` and
+  `bin/opencode-exec.mjs` byte for byte (argv, the prompt on codex's stdin, environment, stdout
+  JSON, `[codex]`/`[opencode]` progress lines, exit codes, run records, incident lines), latent
+  JS defects included (`--approve-for-me` with `workspace-write`, opencode's ignored `--help` and
+  `--effort`). PE-8 to PE-11 now cover all three bridges, PE-12 (the detached post-run refresh)
+  claude and codex; new PE-13: codex exiting without reading its prompt is reported as a failed
+  run where the JS may die of `write EPIPE`. A NUL byte in a bridge's argv fails as Node's spawn
+  does. The `bridges` parity group gains `codex` and `opencode` subgroups over scripted fakes.
 
 ## 0.4.7 — 2026-10-19
 
