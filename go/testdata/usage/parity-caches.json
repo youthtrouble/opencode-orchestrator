@@ -1,5 +1,5 @@
 {
-  "$comment": "Usage cache fixtures for the parity usage group: each entry is {claude, codex}; the harness prepends a fresh generated_at. Resets in 2099 are never soon; resets in 2020 already passed (soon).",
+  "$comment": "Usage cache fixtures for the parity usage group: each entry is {claude, codex}; the harness prepends a fresh generated_at. Resets in 2099 are never soon; \"<soon>\" is replaced by a time 10 minutes after generated_at (soon, but not yet reset: a passed reset makes the cache stale).",
   "green": {
     "claude": {"ok": true, "source": "claude-code-keychain", "plan": "team", "tier": "default_claude_max_5x", "session": {"pct": 12, "resets_at": "2099-01-01T05:00:00.123456+00:00", "severity": "normal"}, "weekly": {"pct": null, "resets_at": null, "severity": null}, "weekly_by_model": {"fable": {"pct": 20, "resets_at": "2099-01-07T00:00:00.5+00:00", "severity": "normal", "active": true}}, "extra_usage_enabled": false, "locked_reason": null},
     "codex": {"ok": true, "plan": "plus", "five_hour": {"pct": 5, "resets_at": "2099-01-01T05:00:00.000Z", "window_mins": 300}, "weekly": {"pct": 10, "resets_at": "2099-01-07T00:00:00.000Z", "window_mins": 10080}, "rate_limit_reached": null, "ordinary_usage_allowed": true, "reset_credits_available": 3, "credits": {"hasCredits": false, "unlimited": false, "balance": "0"}}
@@ -9,8 +9,8 @@
     "codex": {"ok": true, "plan": "pro", "five_hour": {"pct": 80, "resets_at": "2099-01-01T05:00:00.000Z", "window_mins": 300}, "weekly": {"pct": 70, "resets_at": "2099-01-07T00:00:00.000Z", "window_mins": 10080}, "rate_limit_reached": null, "ordinary_usage_allowed": true, "reset_credits_available": 0, "credits": null}
   },
   "red": {
-    "claude": {"ok": true, "source": "claude-code-keychain", "plan": "max", "tier": null, "session": {"pct": 97, "resets_at": "2020-01-01T00:00:00+00:00", "severity": "critical"}, "weekly": {"pct": 50, "resets_at": "2099-01-07T00:00:00+00:00", "severity": "normal"}, "weekly_by_model": {"fable": {"pct": 99, "resets_at": "2099-01-07T00:00:00+00:00", "severity": "critical", "active": true}}, "extra_usage_enabled": false, "locked_reason": null},
-    "codex": {"ok": true, "plan": "plus", "five_hour": {"pct": 100, "resets_at": "2020-01-01T00:00:00.000Z", "window_mins": 300}, "weekly": {"pct": 96, "resets_at": "2099-01-07T00:00:00.000Z", "window_mins": 10080}, "rate_limit_reached": "primary", "ordinary_usage_allowed": false, "reset_credits_available": 0, "credits": null}
+    "claude": {"ok": true, "source": "claude-code-keychain", "plan": "max", "tier": null, "session": {"pct": 97, "resets_at": "<soon>", "severity": "critical"}, "weekly": {"pct": 50, "resets_at": "2099-01-07T00:00:00+00:00", "severity": "normal"}, "weekly_by_model": {"fable": {"pct": 99, "resets_at": "2099-01-07T00:00:00+00:00", "severity": "critical", "active": true}}, "extra_usage_enabled": false, "locked_reason": null},
+    "codex": {"ok": true, "plan": "plus", "five_hour": {"pct": 100, "resets_at": "<soon>", "window_mins": 300}, "weekly": {"pct": 96, "resets_at": "2099-01-07T00:00:00.000Z", "window_mins": 10080}, "rate_limit_reached": "primary", "ordinary_usage_allowed": false, "reset_credits_available": 0, "credits": null}
   },
   "unknown": {
     "claude": {"ok": false, "error": "no Claude OAuth token found (run `opencode auth login` for Anthropic, or log in to Claude Code)"},

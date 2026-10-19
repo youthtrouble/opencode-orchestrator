@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,9 +206,13 @@ func seeds(all ...seed) seed {
 	}
 }
 
+// soonPlaceholder in a cache fixture stands for a reset 10 minutes after generated_at: inside
+// the routing "soon" threshold, yet not passed, since a passed reset makes the cache stale.
+const soonPlaceholder = `"<soon>"`
+
 // seedCache writes the usage cache as the JS does (indent 2, no trailing newline) with
-// generated_at first. The time is fixed when the seed is built, so both runtimes of a pair
-// read the same document.
+// generated_at first and soonPlaceholder resolved. The time is fixed when the seed is built,
+// so both runtimes of a pair read the same document.
 func seedCache(fixture any, generatedAt time.Time) seed {
 	doc := jsjson.NewObject()
 	doc.Set("generated_at", jsjson.ISOString(generatedAt))
@@ -221,7 +226,8 @@ func seedCache(fixture any, generatedAt time.Time) seed {
 		if err != nil {
 			t.Fatal(err)
 		}
-		writeSandboxFile(t, sb, ".local/state/opencode/orchestrator/usage.json", string(data))
+		soon := `"` + jsjson.ISOString(generatedAt.Add(10*time.Minute)) + `"`
+		writeSandboxFile(t, sb, ".local/state/opencode/orchestrator/usage.json", strings.ReplaceAll(string(data), soonPlaceholder, soon))
 	}
 }
 

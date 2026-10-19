@@ -17,6 +17,10 @@
   exit codes, manifest files), including the walk's symlink and FIFO handling and UTF-16 key
   order, and `internal/runrecord` writes run records with the same names and bytes as
   `writeRunRecord`. The new `manifest` parity group runs in CI.
+- usage (JS and Go): a cached reading is stale once a routing window it holds (Claude session,
+  weekly or Fable weekly; Codex 5-hour or weekly) resets after the reading was taken, not only
+  after the 5-minute TTL. A conductor therefore relaunches right at a reset. When the post-reset
+  collection fails, the last good reading is kept and retried every 5 minutes, not on every read.
 
 ## 0.4.1 — 2026-10-18
 

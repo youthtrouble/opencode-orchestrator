@@ -3,10 +3,13 @@ package usage
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -60,6 +63,71 @@ func TestReadCached(t *testing.T) {
 			}
 			if got != c.want {
 				t.Errorf("got %s, want %s", got, c.want)
+			}
+		})
+	}
+}
+
+// windowsDoc is a cache generated a minute before fixedNow whose routing windows reset at the
+// given times, in the order claude session, claude weekly, Fable weekly, codex 5-hour, codex
+// weekly. Each is a JSON value, so null, a number or a missing resets_at can be written too.
+func windowsDoc(session, weekly, fable, fiveHour, codexWeekly string) string {
+	field := func(resetsAt string) string {
+		if resetsAt == "" {
+			return ""
+		}
+		return `,"resets_at":` + resetsAt
+	}
+	return `{"generated_at":"2026-10-18T19:59:00.000Z",` +
+		`"claude":{"ok":true,"session":{"pct":99` + field(session) + `},"weekly":{"pct":40` + field(weekly) + `},` +
+		`"weekly_by_model":{"fable":{"pct":30` + field(fable) + `}}},` +
+		`"codex":{"ok":true,"five_hour":{"pct":10` + field(fiveHour) + `},"weekly":{"pct":5` + field(codexWeekly) + `}}}`
+}
+
+// lastGoodDoc is a cache generated a minute before fixedNow whose claude entry is a last-good
+// reading carried forward over a failed collection (read_error) and whose codex entry is a
+// healthy reading.
+func lastGoodDoc(claudeSession, codexFiveHour string) string {
+	return `{"generated_at":"2026-10-18T19:59:00.000Z",` +
+		`"claude":{"ok":true,"session":{"pct":100,"resets_at":` + claudeSession + `},"last_good_at":"2026-10-18T19:40:00.000Z","read_error":"usage endpoint 429"},` +
+		`"codex":{"ok":true,"five_hour":{"pct":10,"resets_at":` + codexFiveHour + `}}}`
+}
+
+func TestReadCachedIsStaleOnceARoutingWindowHasReset(t *testing.T) {
+	const future, passed = `"2026-10-18T21:00:00.000Z"`, `"2026-10-18T20:00:00.000Z"` // fixedNow counts as passed
+	cases := []struct {
+		name      string
+		content   string
+		wantStale bool
+	}{
+		{"all windows reset in the future", windowsDoc(future, future, future, future, future), false},
+		{"claude session has reset", windowsDoc(passed, future, future, future, future), true},
+		{"claude weekly has reset", windowsDoc(future, passed, future, future, future), true},
+		{"Fable weekly has reset", windowsDoc(future, future, passed, future, future), true},
+		{"codex five_hour has reset", windowsDoc(future, future, future, passed, future), true},
+		{"codex weekly has reset", windowsDoc(future, future, future, future, passed), true},
+		{"Anthropic microsecond offset form has reset", windowsDoc(`"2026-10-18T19:59:30.123456+00:00"`, future, future, future, future), true},
+		{"a reset at generated_at was behind the reading", windowsDoc(`"2026-10-18T19:59:00.000Z"`, future, future, future, future), false},
+		{"a reset before generated_at was behind the reading", windowsDoc(`"2026-10-18T19:30:00.000Z"`, future, future, future, future), false},
+		{"a last-good reading cached before its reset is stale", lastGoodDoc(`"2026-10-18T19:59:30.000Z"`, future), true},
+		{"a last-good reading carried past its reset waits for the max age", lastGoodDoc(`"2026-10-18T19:58:00.000Z"`, future), false},
+		{"the other vendor resetting while a last-good reading waits is stale", lastGoodDoc(`"2026-10-18T19:58:00.000Z"`, `"2026-10-18T19:59:30.000Z"`), true},
+		{"missing, null, unparsable or numeric resets_at is ignored", windowsDoc("", "null", `"soon"`, "0", future), false},
+		{"a failed reading without windows is ignored", `{"generated_at":"2026-10-18T19:59:00.000Z","claude":{"ok":false,"error":"usage endpoint 429"}}`, false},
+		{"an old cache is stale whatever its windows", strings.Replace(windowsDoc(future, future, future, future, future), "19:59", "19:54", 1), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newSandbox(t)
+			cfg := s.config("")
+			s.writeFile(t, strings.TrimPrefix(cfg.UsageFile, s.home+"/"), c.content)
+			cached := ReadCached(cfg, MaxCacheAge)
+			if cached == nil {
+				t.Fatal("ReadCached returned nil")
+			}
+			stale, _ := cached.Get("stale")
+			if got := stale == true; got != c.wantStale {
+				t.Errorf("stale = %v, want %v", got, c.wantStale)
 			}
 		})
 	}
@@ -378,6 +446,68 @@ func TestGetRollsTheLastGoodWindowForwardOnRepeatedFailures(t *testing.T) {
 		}
 		if lastGoodAt := jsjson.Path(got, "claude", "last_good_at"); lastGoodAt != "2026-10-18T19:45:00.000Z" {
 			t.Errorf("at %s: claude last_good_at %v, want the 19:45 reading kept", jsjson.ISOString(now), lastGoodAt)
+		}
+	}
+}
+
+// After a reset, a failing feed is retried on the first read and then on the normal max-age
+// cadence, not on every read: the failed collection carries the expired window forward as
+// last-good with a fresh generated_at. The healthy codex feed (resets in 2099) never forces a
+// collection. Every collection fetches the Claude endpoint once, so its hits count them.
+func TestGetRetriesAFailingFeedAfterAResetOnTheMaxAgeCadence(t *testing.T) {
+	const red, renewed, limited = "2026-10-18T20:00:00+00:00", "2026-10-19T01:00:00+00:00", ""
+	var hits atomic.Int32
+	var claudeResetsAt atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		resetsAt := claudeResetsAt.Load().(string)
+		if resetsAt == limited {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		fmt.Fprintf(w, `{"limits":[{"kind":"session","percent":100,"resets_at":%q,"severity":"normal"}]}`, resetsAt)
+	}))
+	defer server.Close()
+	s := newSandbox(t)
+	s.writeFile(t, ".local/share/opencode/auth.json", `{"anthropic":{"type":"oauth","access":"tok-test"}}`)
+	fakeAppServer(t, s, map[int]string{
+		1: `{"id":1,"result":{}}`,
+		3: rpcResult(t, 2, "codex-account.json"),
+		4: rpcResult(t, 3, "codex-ratelimits.json"),
+	})
+	cfg := s.config(server.URL)
+
+	steps := []struct {
+		name          string
+		at            string
+		endpoint      string // the session resets_at the endpoint answers, limited for a 429
+		wantHits      int32
+		wantReadError bool
+	}{
+		{"a red reading before the reset is collected", "2026-10-18T19:58:00.000Z", red, 1, false},
+		{"within the max age before the reset it is reused", "2026-10-18T19:59:59.999Z", red, 1, false},
+		{"the first read after the reset collects; the 429 keeps the last good reading", "2026-10-18T20:00:30.000Z", limited, 2, true},
+		{"within the max age of that attempt nothing is collected", "2026-10-18T20:01:00.000Z", limited, 2, true},
+		{"exactly the max age after the attempt still nothing", "2026-10-18T20:05:30.000Z", limited, 2, true},
+		{"past the max age the failing feed is retried", "2026-10-18T20:05:30.001Z", limited, 3, true},
+		{"within the max age of the retry nothing is collected", "2026-10-18T20:07:00.000Z", renewed, 3, true},
+		{"the next retry recovers", "2026-10-18T20:10:30.002Z", renewed, 4, false},
+		{"and the recovered reading is reused", "2026-10-18T20:11:00.000Z", renewed, 4, false},
+	}
+	for _, step := range steps {
+		claudeResetsAt.Store(step.endpoint)
+		now, _ := jsjson.ParseDate(step.at)
+		cfg.Now = func() time.Time { return time.UnixMilli(now).UTC() }
+		got, err := Get(cfg, false)
+		if err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if hits.Load() != step.wantHits {
+			t.Errorf("%s: %d collections, want %d", step.name, hits.Load(), step.wantHits)
+		}
+		_, hasReadError := jsjson.Lookup(got, "claude", "read_error")
+		if hasReadError != step.wantReadError {
+			t.Errorf("%s: claude read_error present %v, want %v", step.name, hasReadError, step.wantReadError)
 		}
 	}
 }

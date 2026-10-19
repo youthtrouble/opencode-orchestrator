@@ -71,11 +71,33 @@ export async function collectUsage() {
   return usage;
 }
 
-export function readCachedUsage(maxAgeMs = 5 * 60 * 1000) {
+// The windows whose postures gate routing (see vendorPostures in routing.mjs). Once any of them
+// has reset, a cached reading misreports it (a red session that is now empty), so it is stale.
+function routingWindows(usage) {
+  const { claude, codex } = usage ?? {};
+  return [claude?.session, claude?.weekly, claude?.weekly_by_model?.fable, codex?.five_hour, codex?.weekly];
+}
+
+// Whether a routing window reset after `since` (the reading's generated_at) and at or before
+// `now`, both epoch ms. A reset at or before `since` was already behind the collection that
+// wrote the reading: either the reading is post-reset, or the collection failed and carried an
+// old window forward as last-good (read_error), in which case the retry waits for the normal
+// max age instead of re-collecting on every read. A resets_at that is absent or does not parse
+// never counts.
+export function anyWindowResetSince(usage, since, now) {
+  return routingWindows(usage).some((window) => {
+    const resetsAt = typeof window?.resets_at === "string" ? Date.parse(window.resets_at) : NaN;
+    return resetsAt > since && resetsAt <= now;
+  });
+}
+
+// The cached usage, a copy marked stale: true when it is older than maxAgeMs or any routing
+// window in it has reset since it was generated, or null when there is none.
+export function readCachedUsage(maxAgeMs = 5 * 60 * 1000, now = Date.now()) {
   try {
     const data = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
-    const age = Date.now() - Date.parse(data.generated_at);
-    if (age <= maxAgeMs) return data;
+    const generatedAt = Date.parse(data.generated_at);
+    if (now - generatedAt <= maxAgeMs && !anyWindowResetSince(data, generatedAt, now)) return data;
     return { ...data, stale: true };
   } catch {
     return null;

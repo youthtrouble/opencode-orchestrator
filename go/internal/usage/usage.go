@@ -82,18 +82,47 @@ func Collect(cfg Config) (*jsjson.Object, error) {
 }
 
 // ReadCached mirrors readCachedUsage: the cached document, a copy with "stale": true when it
-// is older than maxAge (or its generated_at does not parse), nil when there is none, it is
-// not JSON or it is JSON null.
+// is older than maxAge (or its generated_at does not parse) or any routing window in it has
+// reset since it was generated (see anyWindowResetSince), nil when there is none, it is not
+// JSON or it is JSON null.
 func ReadCached(cfg Config, maxAge time.Duration) *jsjson.Object {
 	data, err := readJSONFile(cfg.UsageFile)
 	if err != nil || data == nil {
 		return nil
 	}
+	now := cfg.Now().UnixMilli()
 	generatedAt, _ := jsjson.Path(data, "generated_at").(string)
-	if at, ok := jsjson.ParseDate(generatedAt); ok && cfg.Now().UnixMilli()-at <= maxAge.Milliseconds() {
+	if at, ok := jsjson.ParseDate(generatedAt); ok && now-at <= maxAge.Milliseconds() && !anyWindowResetSince(data, at, now) {
 		return data.(*jsjson.Object) // only an object can hold a parsable generated_at
 	}
 	return withStale(data)
+}
+
+// routingWindows are the paths of the windows whose postures gate routing (see
+// routing.VendorPostures). Once any of them has reset, a cached reading misreports it (a red
+// session that is now empty), so it is stale.
+var routingWindows = [][]string{
+	{"claude", "session"},
+	{"claude", "weekly"},
+	{"claude", "weekly_by_model", "fable"},
+	{"codex", "five_hour"},
+	{"codex", "weekly"},
+}
+
+// anyWindowResetSince mirrors the JS of the same name: whether a routing window reset after
+// since (the reading's generated_at) and at or before now, both epoch milliseconds. A reset at
+// or before since was already behind the collection that wrote the reading: either the reading
+// is post-reset, or the collection failed and carried an old window forward as last-good
+// (read_error), in which case the retry waits for maxAge instead of re-collecting on every
+// read. An absent or unparsable resets_at never counts.
+func anyWindowResetSince(usage any, since, now int64) bool {
+	for _, window := range routingWindows {
+		resetsAt, isString := jsjson.Path(jsjson.Path(usage, window...), "resets_at").(string)
+		if at, ok := jsjson.ParseDate(resetsAt); isString && ok && at > since && at <= now {
+			return true
+		}
+	}
+	return false
 }
 
 // withStale is `{...data, stale: true}`. A document that is not an object (a malformed

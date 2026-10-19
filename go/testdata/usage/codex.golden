@@ -3,12 +3,12 @@
   "plan": "plus",
   "five_hour": {
     "pct": 16,
-    "resets_at": "2026-10-19T00:20:19.000Z",
+    "resets_at": "2099-01-01T05:00:19.000Z",
     "window_mins": 300
   },
   "weekly": {
     "pct": 60,
-    "resets_at": "2026-10-24T22:46:43.000Z",
+    "resets_at": "2099-01-07T00:06:43.000Z",
     "window_mins": 10080
   },
   "rate_limit_reached": null,

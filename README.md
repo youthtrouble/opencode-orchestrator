@@ -348,7 +348,11 @@ Keep it out of that project's Git history too. This checkout's `.gitignore` excl
 
 Runtime usage cache is separately stored at `~/.local/state/opencode/orchestrator/usage.json`;
 the runtime does not retarget that path through `XDG_STATE_HOME`. Installer receipts/backups use
-the different `opencode-orchestrator` state directory described above.
+the different `opencode-orchestrator` state directory described above. A cached reading is reused
+for 5 minutes, or until a routing window it holds (Claude session, weekly or Fable weekly; Codex
+5-hour or weekly) resets. Then the next read collects again. If that collection fails, the last good
+reading is kept, marked with `last_good_at` and `read_error`, and retried every 5 minutes, not
+on every read.
 
 ## Incident log and keep-awake
 
