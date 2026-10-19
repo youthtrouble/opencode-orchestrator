@@ -582,14 +582,18 @@ subcommands, and delegate, the workers, the supervisor and the usage-limit flip 
 <script>` with the arguments the script gets.
 
 - **Select** with `ORCH_RUNTIME=go` in the environment of the opencode process that loads the
-  plugin. For the background service the plan quotes `opencode service set env ORCH_RUNTIME go`
-  then `opencode service restart` (and `opencode service unset env ORCH_RUNTIME` to undo); that
-  syntax is **unverified** until the S10 live check. A plugin option wins over the environment:
-  replace `"plugins": ["*"]` in `opencode.jsonc` with
-  `[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]` (optionally
-  `"binary": "/absolute/path/to/orch"`). Whether options reach an auto-discovered plugin is also
-  **unverified** until that check. The value is trimmed and case-insensitive; anything other than
-  `js` or `go` is a configuration error.
+  plugin; this is the supported switch. For the background service run
+  `opencode service set env ORCH_RUNTIME go`, then `opencode service restart` (undo with
+  `opencode service unset env ORCH_RUNTIME` and another restart); the S10 live check confirmed
+  both. The value is trimmed and case-insensitive; anything other than `js` or `go` is a
+  configuration error.
+- **Plugin options (known limitation)**: the plugin also reads `runtime` and `binary` options, and
+  an option wins over the environment. But in the S10 live check, object-form options in a
+  project `opencode.jsonc`
+  (`[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]`) did not reach
+  the plugin. The js runtime answered, and `opencode plugin list` showed no plugins. This is
+  probably an upstream opencode issue, so use `ORCH_RUNTIME` (and `ORCH_BIN`) until it is
+  resolved.
 - **Binary**: the option `binary` (a leading `~` is expanded), then `ORCH_BIN`, then
   `~/.local/bin/orch`, then each `PATH` entry. An explicit `binary` or `ORCH_BIN` that is not an
   executable file is an error, never skipped. The binary is resolved once when the plugin loads,

@@ -36,8 +36,10 @@ is planned for 0.6.0 behind a human gate.
   `version`), worker_status, supervisor status, the context hook and the red `execute.before`
   gate. README gains "Plugin runtime" (selection, binary resolution, fail-loudly policy,
   D-S10-1..7, rollback, how to tell which runtime answered); `go/README.md` and an
-  `opencode.jsonc` comment above `"plugins"` point to it. The `opencode service set env` syntax
-  and object-form options for an auto-discovered plugin are unverified until the S10 live check.
+  `opencode.jsonc` comment above `"plugins"` point to it. The S10 live check confirmed
+  `ORCH_RUNTIME` (including `opencode service set env`) as the supported switch; object-form
+  plugin options in a project `opencode.jsonc` did not reach the plugin (known limitation,
+  probably upstream).
 - Go port: the `kickoff` parity group gains the launching cases: headless conductor lanes on
   claude and opencode (runners settled and everything they wrote compared), the interactive
   `claude` and `opencode` launches (exit code passed through; a signal exits 0) and a dry run that
