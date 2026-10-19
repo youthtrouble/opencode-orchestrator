@@ -10,9 +10,10 @@
 // line, a credential-shaped string anywhere in the input (even in fields that would be discarded) or an
 // init apiKeySource other than "none" fails the run with no output.
 // The scan walks DIR recursively: JSON and JSONL files are decoded and every key and string value is
-// checked; other files are checked line by line, raw and with JSON escapes decoded. It prints only
-// `file:line rule`, never the matched text, and exits 1 on any hit. Without --deny-file the generic rules
-// still apply. Diagnostics never echo input: they name a file, a line and a rule.
+// checked, and every file is also checked line by line as raw text, so a duplicate JSON key cannot hide a
+// value. Every check also sees each layer of JSON escaping, decoded up to MAX_DECODE_ROUNDS deep; a line
+// escaped deeper fails with rule escape-depth. It prints only `file:line rule`, never the matched text,
+// and exits 1 on any hit. Without --deny-file the generic rules still apply. Diagnostics never echo input: they name a file, a line and a rule.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -71,12 +72,33 @@ function cwdSpellings(work) {
   return [...new Set([`/private${bare}`, bare])].sort((a, b) => b.length - a.length);
 }
 
-// Text that a reader of the file would see after JSON unescaping, so `-` or `\/` cannot hide a match.
+// One round of JSON unescaping, in a single pass as JSON.parse reads it: `\\u002d` becomes `\u002d`, the
+// next layer, not `\-`. The control escapes \n \t \b \f \r are not decoded, so they can split a match.
+const JSON_ESCAPE = /\\(?:u([0-9a-fA-F]{4})|([/\\"]))/g;
+const unescapeOnce = (text) =>
+  text.replace(JSON_ESCAPE, (_, hex, char) => (hex ? String.fromCharCode(Number.parseInt(hex, 16)) : char));
+
+// Bounded so a pathological line costs a fixed number of passes; four layers covers any escaping that
+// tooling plausibly stacks. The scan fails closed on deeper escaping (see escapedBeyondBound).
+const MAX_DECODE_ROUNDS = 4;
+
+// Every distinct layer a reader could see after repeated JSON unescaping, so `\u002d`, `\/` or a doubly
+// escaped `\\u002d` cannot hide a match.
 function decodedVariants(text) {
-  const decoded = text
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/\\([/\\"])/g, "$1");
-  return decoded === text ? [text] : [text, decoded];
+  const layers = [text];
+  for (let round = 0; round < MAX_DECODE_ROUNDS; round++) {
+    const next = unescapeOnce(layers[layers.length - 1]);
+    if (next === layers[layers.length - 1]) break;
+    layers.push(next);
+  }
+  return layers;
+}
+
+// True when the decoded layers stop at the round bound while the last one still unescapes further, so a
+// match could hide below what was checked.
+function escapedBeyondBound(layers) {
+  const last = layers[layers.length - 1];
+  return layers.length > MAX_DECODE_ROUNDS && unescapeOnce(last) !== last;
 }
 
 function credentialRule(text) {
@@ -288,9 +310,10 @@ function hasUnsafeApiKeySource(value) {
   return Object.values(value).some(hasUnsafeApiKeySource);
 }
 
-// Rule names that fire for one decoded JSON value (a JSONL line or a whole JSON file).
+// Rule names that fire for one decoded JSON value (a JSONL line or a whole JSON file). A decoded string
+// can still hold escapes when its source was escaped twice, so each one is checked at every layer.
 function jsonHits(value, rules) {
-  const strings = collectStrings(value, []);
+  const strings = collectStrings(value, []).flatMap(decodedVariants);
   const hits = rules.filter(([, leaks]) => strings.some(leaks)).map(([rule]) => rule);
   if (hasUnsafeApiKeySource(value)) hits.push("api-key-source");
   return hits;
@@ -308,6 +331,7 @@ function textHits(line, rules) {
   const variants = decodedVariants(line);
   const hits = rules.filter(([, leaks]) => variants.some(leaks)).map(([rule]) => rule);
   if (variants.some(hasUnsafeApiKeySourceText)) hits.push("api-key-source");
+  if (escapedBeyondBound(variants)) hits.push("escape-depth");
   return hits;
 }
 
@@ -328,6 +352,7 @@ function scanFile(file, rules) {
       if (line === "") return;
       const { value, error } = decodeJson(line);
       add(i + 1, error ? ["json-parse"] : jsonHits(value, rules));
+      add(i + 1, textHits(line, rules));
     });
   } else {
     text.split("\n").forEach((line, i) => add(i + 1, textHits(line, rules)));

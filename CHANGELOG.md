@@ -9,6 +9,9 @@
   `go/README.md` (plugin runtime, `orch` install); new `claude/README.md` covers the Claude Code
   front door. Fixed `go install ...@v0.5.0` (was `@go/v0.5.0`), removed pre-release wording, and
   documented that `flip gate --clear` alone does not restart a gated conductor.
+- testdata: the fixture redactor's scan also checks raw JSONL text and every escaping layer, so
+  duplicate keys and nested escapes can no longer hide a credential; committed fixtures re-scanned
+  clean (Sol S1/R3).
 
 ## 0.5.0 — 2026-10-19
 

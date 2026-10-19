@@ -207,6 +207,44 @@ for (const [name, files, rule] of [
   });
 }
 
+// S1/R3: JSON.parse keeps only the last duplicate key, and one parse leaves deeper escape layers intact,
+// so JSONL lines are also read as raw text and every string is checked at each escaping layer.
+const escapeLayer = (s) => s.replace(/\\/g, "\\\\");
+const ESCAPED_KEY = ANTHROPIC_KEY.replace("-", "\\u002d");
+for (const [name, line, deny, rule, secret] of [
+  ["a duplicate-key credential", `{"t":"${ANTHROPIC_KEY}","t":"kept"}`, undefined, "anthropic-key", ANTHROPIC_KEY],
+  ["a double-escaped credential", `{"t":"${escapeLayer(ESCAPED_KEY)}"}`, undefined, "anthropic-key", ANTHROPIC_KEY],
+  ["a triple-escaped credential", `{"t":"${escapeLayer(escapeLayer(ESCAPED_KEY))}"}`, undefined, "anthropic-key", ANTHROPIC_KEY],
+  ["a duplicate key carrying a deny literal", `{"who":"${MARKER}","who":"fixture"}`, `${MARKER}\n`, "deny-literal", MARKER],
+]) {
+  test(`scan flags ${name} without printing it`, () => {
+    const r = scanText({ "a.jsonl": line + "\n" }, { deny });
+    assert.equal(r.status, 1, r.out);
+    assert.deepEqual(rulesIn(r.out), [rule]);
+    assert.ok(!r.out.includes(secret) && !r.out.includes("fakefakefake"));
+  });
+}
+
+// H5: decoding stops at a fixed round bound; a line escaped deeper fails closed instead of passing.
+test("scan fails closed on a credential escaped past the decode bound without printing it", () => {
+  let deep = ESCAPED_KEY;
+  for (let layer = 1; layer < 8; layer++) deep = escapeLayer(deep);
+  const r = scanText({ "a.jsonl": `{"t":"${deep}"}\n` });
+  assert.equal(r.status, 1, r.out);
+  assert.ok(rulesIn(r.out).includes("escape-depth"), r.out);
+  assert.ok(!r.out.includes(ANTHROPIC_KEY) && !r.out.includes("fakefakefake"));
+});
+
+test("scan leaves invalid escapes inert", () => {
+  const r = scanText({ "a.jsonl": '{"t":"a\\\\x41 b\\\\u12 c"}\n', "a.md": "raw \\x41 and \\u12zz\n" });
+  assert.equal(r.status, 0, r.out);
+});
+
+test("scan passes JSONL whose escaped text holds no credential", () => {
+  const r = scanText({ "a.jsonl": JSON.stringify({ t: 'quoted "x" a\\/b \\u0041', nested: JSON.stringify({ msg: "line\nnext" }) }) + "\n" });
+  assert.equal(r.status, 0, r.out);
+});
+
 test("scan flags deny literals case-insensitively without printing them", () => {
   const r = scanText({ "a.stderr": `hello ${MARKER.toUpperCase()}\n` }, { deny: `${MARKER}\n` });
   assert.equal(r.status, 1);
