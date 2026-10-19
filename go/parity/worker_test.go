@@ -121,6 +121,7 @@ func (h *harness) testWorker(t *testing.T) {
 	h.testWorkerStopVictims(t)
 	t.Run("stop/PE-14", h.testWorkerStopGuard)
 	t.Run("start", h.testWorkerStart)
+	t.Run("detach", h.testWorkerDetach)
 }
 
 // testWorkerStopVictims stops live workers: a sleep that leads its own process group (the

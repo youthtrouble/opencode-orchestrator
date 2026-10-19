@@ -712,7 +712,7 @@ func TestPreviousWorkerKeepsAFalsyStateAsItIs(t *testing.T) {
 		{`"abc"`, `{"alive":false}`}, {`[1]`, `{"alive":false}`},
 		{`{"status":null}`, `{"status":null,"alive":false}`},
 	} {
-		if got := marshal(t, previousWorker(parse(t, tc.state))); got != tc.want {
+		if got := marshal(t, previousWorker(parse(t, tc.state), Alive)); got != tc.want {
 			t.Errorf("previousWorker(%s) = %s, want %s", tc.state, got, tc.want)
 		}
 	}

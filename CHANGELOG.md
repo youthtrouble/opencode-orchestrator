@@ -52,13 +52,19 @@
 - Go port: `orch worker status|stop` matches `bin/worker.mjs` byte for byte (stdout, exit codes,
   lane state and lock files read the same way), with new PE-14: `stop` signals only a stored pid
   of at least 2, where the JS would SIGINT every process of the user for pid `1` or `true`.
-  `orch worker start` is not ported yet (S6b). New `worker` parity group, run in CI.
+  New `worker` parity group, run in CI.
 - Go port: foreground `orch worker start` matches `bin/worker.mjs start` (stdout with the relayed
   bridge progress, stderr, exit codes, lane state and lock, mailbox, incidents) and runs
   `orch <harness>-exec` as its bridge. PE-10, PE-11 and PE-13 are extended to the worker: it never
   kills its bridge and waits at most 10 s for its pipes, records the Go bridge's report of an
   interrupted run, and survives a bridge that never reads its prompt where the JS dies of
-  `write EPIPE`. `start --detach` prints a not-implemented error (S6c).
+  `write EPIPE`.
+- Go port: `orch worker start --detach` matches `bin/worker.mjs`: the synchronous lane-locked
+  refusal `flip.mjs` relies on (stderr, exit 3, stdout empty), stale-lock removal, the 0600 run log,
+  the runner re-run without `--detach` in a session of its own, and keep-awake (`caffeinate` /
+  `systemd-inhibit`, `runtime.keep_awake`), printing `{lane, runner_pid, log_path, run_id,
+  keep_awake}`. The `worker` parity group gains multi-step detached cases (settle, a stopped
+  running worker under PE-11) over new `which`, `caffeinate` and `systemd-inhibit` fakes.
 
 ## 0.4.7 — 2026-10-19
 

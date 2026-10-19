@@ -7,8 +7,9 @@
 # on stdout and <case>.stderr on stderr (each if present), and the fake exits with the code in
 # <case>.exit. Instead of exiting, <case>.signal makes it kill itself with that signal (so
 # claude-exec sees a close code of null) and <case>.sleep makes it become /bin/sleep for that
-# many seconds (so it is still running when the bridge signals it). Shell builtins only: PATH
-# holds no coreutils.
+# many seconds (so it is still running when the bridge signals it); with <case>.pid present it
+# first writes its pid to $HOME/fake-claude/pid (outside the compared logs), so a case can
+# check that the process was signalled. Shell builtins only: PATH holds no coreutils.
 script="$HOME/fake-claude"
 if [ -f "$script/case" ]; then
   IFS= read -r case < "$script/case"
@@ -25,6 +26,7 @@ if [ -f "$script/case" ]; then
   fi
   if [ -f "$script/$case.sleep" ]; then
     IFS= read -r seconds < "$script/$case.sleep"
+    if [ -f "$script/$case.pid" ]; then printf '%s\n' $$ > "$script/pid"; fi
     exec /bin/sleep "$seconds"
   fi
   code=0

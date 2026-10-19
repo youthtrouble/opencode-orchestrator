@@ -1,0 +1,12 @@
+#!/bin/sh
+# Parity fake for systemd-inhibit, reached only through the fake which. Each argv element is
+# appended as one line to $HOME/fake-log/systemd-inhibit-argv.txt; it requires
+# "--what=idle:sleep --why=opencode-orchestrator" and then becomes the wrapped command (exec
+# keeps the runner's pid). Shell builtins only.
+for arg in "$@"; do printf '%s\n' "$arg" >> "$HOME/fake-log/systemd-inhibit-argv.txt"; done
+if [ "${1-}" != --what=idle:sleep ] || [ "${2-}" != --why=opencode-orchestrator ]; then
+  echo "parity fake systemd-inhibit: want --what=idle:sleep --why=opencode-orchestrator first (argv: $*)" >&2
+  exit 97
+fi
+shift 2
+exec "$@"

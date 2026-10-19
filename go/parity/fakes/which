@@ -1,0 +1,6 @@
+#!/bin/sh
+# Parity fake. It sits first on PATH so keep-awake (lib/keepawake.mjs, internal/keepawake)
+# never finds the real caffeinate or systemd-inhibit: `which NAME` exits 0 only when a case
+# created $HOME/fake-which/NAME, and 1 otherwise. Shell builtins only.
+[ $# -eq 1 ] && [ -e "$HOME/fake-which/$1" ] && exit 0
+exit 1

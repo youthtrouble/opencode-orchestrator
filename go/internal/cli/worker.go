@@ -11,6 +11,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/keepawake"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/worker"
@@ -24,15 +25,12 @@ var (
 // errResolveArgBoolean is path.resolve(true), the JS for a bare --cwd.
 var errResolveArgBoolean = &jsTypeError{"ERR_INVALID_ARG_TYPE", cliargs.ErrPathArgBoolean.Error()}
 
-// errWorkerDetachPending is what `orch worker start --detach` prints until slice S6c ports it.
-const errWorkerDetachPending = "orch worker start --detach: not implemented yet (S6c)"
-
 // Worker implements `orch worker start|status|stop` (bin/worker.mjs), byte-identical to the JS
 // except for the parity exceptions in go/README.md (stop signals only pids of at least 2,
-// PE-14). `start --detach` is not ported yet: once the start is validated it prints
-// errWorkerDetachPending and exits 2.
+// PE-14).
 func Worker(args []string, stdio Stdio) int {
-	opts, positional := cliargs.ParseArgs(decodeArgv(args), workerValueKeys, workerFlagKeys)
+	argv := decodeArgv(args) // process.argv.slice(2): parsed here, and passed on by --detach
+	opts, positional := cliargs.ParseArgs(argv, workerValueKeys, workerFlagKeys)
 	root, err := workerRoot(opts)
 	if err != nil {
 		return crash(stdio, err)
@@ -51,12 +49,13 @@ func Worker(args []string, stdio Stdio) int {
 		fmt.Fprintf(stdio.Err, "usage: %s start --brief FILE --harness codex|claude [--lane L] [...] | status | stop --lane L\n", cmdref.ScriptFile("worker"))
 		return 2
 	}
-	return workerStart(project, opts, stdio)
+	return workerStart(project, opts, argv, stdio)
 }
 
 // workerStart validates the start, then runs it in the foreground with the bridges of this
-// executable.
-func workerStart(project worker.Project, opts cliargs.Opts, stdio Stdio) int {
+// executable, or, with --detach, launches this executable as its detached runner. argv is the
+// unparsed command line as the JS reads it, which the runner receives.
+func workerStart(project worker.Project, opts cliargs.Opts, argv []string, stdio Stdio) int {
 	launch, err := project.PrepareStart(opts)
 	var refused *worker.UsageError
 	switch {
@@ -65,13 +64,13 @@ func workerStart(project worker.Project, opts cliargs.Opts, stdio Stdio) int {
 		return 2
 	case err != nil:
 		return workerCrash(stdio, err)
-	case opts.Truthy("detach"):
-		fmt.Fprintln(stdio.Err, errWorkerDetachPending)
-		return 2
 	}
 	self, err := os.Executable()
 	if err != nil {
 		return workerCrash(stdio, err)
+	}
+	if opts.Truthy("detach") {
+		return workerDetach(launch, self, argv, stdio)
 	}
 	code, err := launch.Foreground(worker.Runtime{
 		Self:   self,
@@ -81,6 +80,24 @@ func workerStart(project worker.Project, opts cliargs.Opts, stdio Stdio) int {
 		Now:    time.Now,
 		NewID:  mailbox.NewUUID,
 		Notify: func(c chan<- os.Signal) { signal.Notify(c, syscall.SIGINT, syscall.SIGTERM) },
+	})
+	if err != nil {
+		return workerCrash(stdio, err)
+	}
+	return code
+}
+
+// workerDetach launches the detached runner, kept awake unless the registry turns it off.
+func workerDetach(launch *worker.Launch, self string, argv []string, stdio Stdio) int {
+	code, err := launch.Detach(worker.DetachRuntime{
+		Self:   self,
+		Argv:   argv,
+		Stdout: stdio.Out,
+		Stderr: stdio.Err,
+		NewID:  mailbox.NewUUID,
+		KeepAwake: func(cmd string, args []string) (string, []string) {
+			return keepawake.Wrap(cmd, args, worker.KeepAwakeEnabled(os.Getenv))
+		},
 	})
 	if err != nil {
 		return workerCrash(stdio, err)

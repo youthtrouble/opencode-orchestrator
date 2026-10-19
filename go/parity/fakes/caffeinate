@@ -1,0 +1,12 @@
+#!/bin/sh
+# Parity fake for macOS caffeinate, reached only through the fake which. Each argv element is
+# appended as one line to $HOME/fake-log/caffeinate-argv.txt; it requires the keep-awake
+# assertions "-i -s" and then becomes the wrapped command (exec keeps the runner's pid).
+# Shell builtins only.
+for arg in "$@"; do printf '%s\n' "$arg" >> "$HOME/fake-log/caffeinate-argv.txt"; done
+if [ "${1-}" != -i ] || [ "${2-}" != -s ]; then
+  echo "parity fake caffeinate: want -i -s first (argv: $*)" >&2
+  exit 97
+fi
+shift 2
+exec "$@"

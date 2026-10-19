@@ -206,19 +206,7 @@ func (h *harness) testWorkerStart(t *testing.T) {
 	}
 	t.Run("cross-runtime", h.testWorkerCrossRuntime)
 	t.Run("PE-13/unread-prompt", h.testWorkerUnreadPrompt)
-	t.Run("detach/pending-S6c", h.testWorkerDetachPending)
 	t.Run("node-crash-block-reduction", testNodeCrashBlockReduction)
-}
-
-// testWorkerDetachPending asserts the S6c placeholder for a valid start with --detach; the JS
-// would launch a detached runner, so it is not run.
-func (h *harness) testWorkerDetachPending(t *testing.T) {
-	sb := h.newSandbox(t)
-	writeSeedFile(t, filepath.Join(sb.project, "b.md"), "brief\n")
-	o := h.run(t, sb, []string{h.orchBin, "worker", "start", "--brief", "b.md", "--harness", "claude", "--detach"}, nil, nil)
-	if o.exitCode != 2 || o.stdout != "" || o.stderr != "orch worker start --detach: not implemented yet (S6c)\n" || len(o.files) != 0 {
-		t.Errorf("orch: exit %d, stdout %q, stderr %q, files %v; want the S6c placeholder", o.exitCode, o.stdout, o.stderr, o.files)
-	}
 }
 
 // testWorkerCrossRuntime has one runtime's start write a lane and both runtimes' status read

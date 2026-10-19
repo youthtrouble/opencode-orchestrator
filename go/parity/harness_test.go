@@ -364,11 +364,18 @@ func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte, env
 		}
 		exitCode = exitErr.ExitCode()
 	}
+	return outcome{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+}
+
+// files collects what a run may have written: the project's .orchestrator/, the HOME state dir
+// and the fakes' logs.
+func (sb sandbox) files(t *testing.T) map[string]string {
+	t.Helper()
 	files := map[string]string{}
 	collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", files)
 	collectFiles(t, filepath.Join(sb.home, ".local", "state", "opencode", "orchestrator"), "state", files)
 	collectFiles(t, filepath.Join(sb.home, "fake-log"), "fakelog", files)
-	return outcome{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String(), files: files}
+	return files
 }
 
 // collectFiles adds every regular file under root to files, keyed "<label>/<relative path>".

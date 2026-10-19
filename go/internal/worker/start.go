@@ -152,14 +152,22 @@ func (l *Launch) unlockingAfter(try func() (any, error)) (any, error) {
 // laneLockedHint is the advice the lane-locked refusal carries.
 const laneLockedHint = "inspect worker state; remove the lock only after confirming the process is gone"
 
-// refuseLocked prints the lane-locked refusal on stderr: the previous state's status, pid and
-// whether that pid is alive (`prev && {...}`: a falsy state is printed as itself).
+// refuseLocked prints the lane-locked refusal of a foreground start: the previous state's
+// status, pid and whether that pid is alive, and the hint.
 func (l *Launch) refuseLocked(stderr io.Writer) (int, error) {
+	return l.printLaneLocked(stderr, previousWorker(l.project.ReadState(l.lane), Alive), laneLockedHint)
+}
+
+// printLaneLocked prints {error: "lane locked", lane, previous[, hint]} on stderr (hint is left
+// out when "") and returns ExitLaneLocked.
+func (l *Launch) printLaneLocked(stderr io.Writer, previous any, hint string) (int, error) {
 	refusal := jsjson.NewObject()
 	refusal.Set("error", "lane locked")
 	refusal.Set("lane", l.lane)
-	refusal.Set("previous", previousWorker(l.project.ReadState(l.lane)))
-	refusal.Set("hint", laneLockedHint)
+	refusal.Set("previous", previous)
+	if hint != "" {
+		refusal.Set("hint", hint)
+	}
 	data, err := jsjson.Marshal(refusal)
 	if err != nil {
 		return 1, err
@@ -168,9 +176,10 @@ func (l *Launch) refuseLocked(stderr io.Writer) (int, error) {
 	return ExitLaneLocked, nil
 }
 
-// previousWorker is `prev && {status: prev.status, pid: prev.pid, alive: alive(prev.pid)}`;
-// an undefined status or pid is left out, as JSON.stringify drops it.
-func previousWorker(prev any) any {
+// previousWorker is `prev && {status: prev.status, pid: prev.pid, alive: <alive>}` with alive
+// given by isAlive(prev.pid); an undefined status or pid is left out, as JSON.stringify drops
+// it, and a falsy state is printed as itself.
+func previousWorker(prev any, isAlive func(pid any) bool) any {
 	if !jsjson.Truthy(prev) {
 		return prev
 	}
@@ -180,7 +189,7 @@ func previousWorker(prev any) any {
 			out.Set(key, value)
 		}
 	}
-	out.Set("alive", Alive(jsjson.Path(prev, "pid")))
+	out.Set("alive", isAlive(jsjson.Path(prev, "pid")))
 	return out
 }
 
