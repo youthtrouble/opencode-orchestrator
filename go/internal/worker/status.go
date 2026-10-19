@@ -35,21 +35,35 @@ func (p Project) Status(lane any) ([]any, error) {
 	return out, nil
 }
 
-// statusLanes is the given lane when truthy, else the names ending in ".json" in the workers
-// directory with that suffix removed, in byte order (Node's readdirSync sorts with strcmp, as
-// os.ReadDir does), else none when the directory does not exist.
+// statusLanes is the given lane when truthy, else every lane of Lanes.
 func (p Project) statusLanes(lane any) ([]any, error) {
 	if jsjson.Truthy(lane) {
 		return []any{lane}, nil
 	}
+	names, err := p.Lanes()
+	if err != nil {
+		return nil, err
+	}
+	lanes := make([]any, len(names))
+	for i, name := range names {
+		lanes[i] = name
+	}
+	return lanes, nil
+}
+
+// Lanes is the JS lane listing: the names ending in ".json" in the workers directory with
+// that suffix removed, in byte order (Node's readdirSync sorts with strcmp, as os.ReadDir
+// does), or none when the directory does not exist. The error is Node's, for a workers
+// directory that exists but cannot be listed.
+func (p Project) Lanes() ([]string, error) {
 	if !nodefs.Exists(p.WorkersDir) {
-		return []any{}, nil
+		return []string{}, nil
 	}
 	entries, err := os.ReadDir(p.WorkersDir)
 	if err != nil {
 		return nil, nodefs.FileError(err, "scandir", p.WorkersDir)
 	}
-	lanes := []any{}
+	lanes := []string{}
 	for _, entry := range entries {
 		if name, isState := strings.CutSuffix(jsstr.DecodeUTF8([]byte(entry.Name())), ".json"); isState {
 			lanes = append(lanes, name)

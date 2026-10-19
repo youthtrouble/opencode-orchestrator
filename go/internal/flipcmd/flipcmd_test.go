@@ -321,7 +321,7 @@ func TestGateOnAPrimitiveIsTheStrictModeTypeError(t *testing.T) {
 		p := newTestProject(t)
 		writeFile(t, p.FlipPath, content)
 		_, err := p.Gate(opts("gate"))
-		var typeError *PropertyTypeError
+		var typeError *jsjson.PropertyError
 		if !errors.As(err, &typeError) || err.Error() != want {
 			t.Errorf("Gate() over %s = %v, want %q", content, err, want)
 		}

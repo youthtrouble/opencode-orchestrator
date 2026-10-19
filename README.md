@@ -489,7 +489,8 @@ create|verify|diff`, `orch incident record|list|report|share` (appending to the 
 `orch policy show|set|unattended`, `orch flip decide|run|pause|gate|status` (the same
 `.orchestrator/flip.json`; `flip run` adds `.orchestrator/` to `.git/info/exclude`, writes the
 continue brief and launches the conductor as `orch worker start --detach`, or records a pending
-launch when the lane is locked), `orch worker start|status|stop` (`start` runs `orch <harness>-exec` in the foreground, or with `--detach` launches itself as a detached, kept-awake runner logging to `.orchestrator/logs/`), and the three bridges `orch claude-exec`, `orch codex-exec`
+launch when the lane is locked), `orch supervisor status|stop|ack` (the same `.orchestrator/supervisor-state.json` and
+`supervisor-acks.json`; the supervisor daemon itself, `start` and `serve`, is not ported yet), `orch worker start|status|stop` (`start` runs `orch <harness>-exec` in the foreground, or with `--detach` launches itself as a detached, kept-awake runner logging to `.orchestrator/logs/`), and the three bridges `orch claude-exec`, `orch codex-exec`
 and `orch opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` command lines,
 result JSON and run records; `codex-exec` still passes `--approve-for-me` with the default
 `workspace-write` sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs`

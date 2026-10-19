@@ -142,11 +142,13 @@ func toSec(iso any) (sec int64, ok bool) {
 	return int64(math.Floor(float64(ms) / 1000)), true
 }
 
-// State is the lane's supervisor state as chooseEvent sees it: the run and next check last
-// recorded for the lane (empty and 0 when none) and the shared events map.
+// State is the lane's supervisor state as chooseEvent sees it: the run last recorded for the
+// lane ("" when none or not a string), its next_check as the JS value the state file holds
+// (nil when none; the supervisor passes it through unchanged, so it may be any JSON value),
+// and the shared events map.
 type State struct {
 	Run       string
-	NextCheck int64
+	NextCheck any
 	Events    *jsjson.Object
 }
 
@@ -199,12 +201,12 @@ func ChooseEvent(obs Observation, state State, acks *jsjson.Object, now int64) *
 		bucket := obs.QuietFor / QuietRealertSeconds // F4: re-alert every 30 min of continued quiet
 		return emitOnce(obs.Run+":quiet:"+itoa(obs.ProgressAt)+":"+itoa(bucket), "quiet")
 	}
-	due := now + obs.Interval
-	if state.Run == obs.Run && state.NextCheck != 0 {
+	var due any = float64(now + obs.Interval)
+	if state.Run == obs.Run && jsjson.Truthy(state.NextCheck) {
 		due = state.NextCheck
 	}
-	if now >= due {
-		return &Event{ID: obs.Run + ":check:" + itoa(due), Reason: "check"}
+	if jsjson.GreaterOrEqual(float64(now), due) {
+		return &Event{ID: obs.Run + ":check:" + jsjson.TemplateString(due), Reason: "check"}
 	}
 	return nil
 }

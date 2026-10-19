@@ -1,8 +1,6 @@
 package flipcmd
 
 import (
-	"fmt"
-
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flip"
@@ -13,31 +11,6 @@ import (
 
 // subjectReasonUnits is how many UTF-16 units of the reason the human's message subject keeps.
 const subjectReasonUnits = 80
-
-// PropertyTypeError is the TypeError strict-mode JS throws when the script assigns a property
-// to a primitive: `prev.awaiting_human = ...` on a flip.json holding a number, a non-empty
-// string or true.
-type PropertyTypeError struct {
-	Key    string
-	Target any
-}
-
-func (e *PropertyTypeError) Error() string {
-	return fmt.Sprintf("Cannot create property '%s' on %s '%s'", e.Key, typeOf(e.Target), jsjson.TemplateString(e.Target))
-}
-
-// typeOf is the JS typeof of a primitive JSON value.
-func typeOf(v any) string {
-	switch v.(type) {
-	case float64:
-		return "number"
-	case string:
-		return "string"
-	case bool:
-		return "boolean"
-	}
-	return "object"
-}
 
 // Gate records that the headless conductor stopped at a human gate, which the supervisor
 // must not relaunch past until a human clears it, and returns the line to print. With
@@ -110,7 +83,7 @@ func markAwaitingHuman(prev any, gate *jsjson.Object) error {
 		record.Delete("paused")
 	case []any:
 	default:
-		return &PropertyTypeError{Key: "awaiting_human", Target: prev}
+		return jsjson.CannotAssign(prev, "awaiting_human")
 	}
 	return nil
 }

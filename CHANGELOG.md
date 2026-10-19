@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Go port: `orch supervisor status|stop|ack` matches `bin/supervisor.mjs` byte for byte (stdout,
+  stderr, exit codes, `.orchestrator/supervisor-acks.json`), every state and acks shape included
+  (Object.prototype names acknowledged, `__proto__` included, as in the JS). The supervisor's lane
+  tick (phases, the two-phase intent, events, redispatch of budget-deferred lanes) is ported and
+  unit-tested with an injected clock; `start` and `serve` arrive in S8c and exit 2 until then.
+  New PE-16 (hand-edited non-object shapes). New `supervisor` parity group, run in CI.
 - Go port (`go/`, not yet used by the plugin or commands): `orch usage [--refresh] [--json]`
   produces output byte-identical to `bin/usage.mjs` and shares its usage cache in both directions,
   including keeping the last good reading when a refresh fails within 30 minutes of the last

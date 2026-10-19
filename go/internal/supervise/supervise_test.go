@@ -56,7 +56,7 @@ func TestSuperviseJS(t *testing.T) {
 			t.Fatalf("phase = %s, want running", obs.Phase)
 		}
 		expectEvent(t, ChooseEvent(obs, State{}, nil, t0+1), nil)
-		state := State{Run: "run1", NextCheck: t0 + standard}
+		state := State{Run: "run1", NextCheck: float64(t0 + standard)}
 		expectEvent(t, ChooseEvent(obs, state, nil, t0+standard), &Event{ID: fmt.Sprintf("run1:check:%d", t0+standard), Reason: "check"})
 	})
 
@@ -74,7 +74,7 @@ func TestSuperviseJS(t *testing.T) {
 	t.Run("F1: a definite delivery failure does not suppress the next due check", func(t *testing.T) {
 		obs := Observe(running(t, "running"), t0+2*standard, aliveWithLock)
 		events := parse(t, fmt.Sprintf(`{"run1:check:%d": {"status": "delivery_failed", "retry_after": %d}}`, t0+standard, t0+2*standard))
-		if ChooseEvent(obs, State{Run: "run1", NextCheck: t0 + standard, Events: events}, nil, t0+2*standard) == nil {
+		if ChooseEvent(obs, State{Run: "run1", NextCheck: float64(t0 + standard), Events: events}, nil, t0+2*standard) == nil {
 			t.Error("a check should be emitted")
 		}
 	})
@@ -82,7 +82,7 @@ func TestSuperviseJS(t *testing.T) {
 	t.Run("a delivered-but-unacknowledged progress reminder suppresses further checks", func(t *testing.T) {
 		obs := Observe(running(t, "running"), t0+2*standard, aliveWithLock)
 		events := parse(t, fmt.Sprintf(`{"run1:check:%d": {"status": "queued"}}`, t0+standard))
-		expectEvent(t, ChooseEvent(obs, State{Run: "run1", NextCheck: t0 + standard, Events: events}, nil, t0+2*standard), nil)
+		expectEvent(t, ChooseEvent(obs, State{Run: "run1", NextCheck: float64(t0 + standard), Events: events}, nil, t0+2*standard), nil)
 	})
 
 	t.Run("F4: quiet workers re-alert every 30 minutes with distinct ids", func(t *testing.T) {
@@ -111,6 +111,32 @@ func TestSuperviseJS(t *testing.T) {
 		}
 		if phase := Observe(running(t, "failed"), t0+5, Liveness{LockPresent: true}).Phase; phase != PhaseStaleLock {
 			t.Errorf("phase = %s, want stale_lock", phase)
+		}
+	})
+
+	t.Run("next_check is the JS value: compared with >= and printed as a template string", func(t *testing.T) {
+		obs := Observe(running(t, "running"), t0+1, aliveWithLock)
+		cases := []struct {
+			name      string
+			nextCheck any
+			wantID    string // "" for no event
+		}{
+			{"numeric string due", "123", "run1:check:123"},
+			{"fractional number due", 1.5, "run1:check:1.5"},
+			{"true counts as 1", true, "run1:check:true"},
+			{"unparsable string never due", "abc", ""},
+			{"future number not due", float64(t0 + 2), ""},
+			{"falsy 0 falls back to now + interval", 0.0, ""},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				got := ChooseEvent(obs, State{Run: "run1", NextCheck: c.nextCheck}, nil, t0+1)
+				if c.wantID == "" {
+					expectEvent(t, got, nil)
+					return
+				}
+				expectEvent(t, got, &Event{ID: c.wantID, Reason: "check"})
+			})
 		}
 	})
 
@@ -167,9 +193,8 @@ func TestGoldens(t *testing.T) {
 
 func stateOf(doc any) State {
 	run, _ := jsjson.Path(doc, "run").(string)
-	nextCheck, _ := jsjson.Path(doc, "next_check").(float64)
 	events, _ := jsjson.Path(doc, "events").(*jsjson.Object)
-	return State{Run: run, NextCheck: int64(nextCheck), Events: events}
+	return State{Run: run, NextCheck: jsjson.Path(doc, "next_check"), Events: events}
 }
 
 // observationJSON is the JS observe() result object, for comparison with the golden.

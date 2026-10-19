@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"syscall"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
@@ -35,7 +34,7 @@ func (s *State) Publish(changes *jsjson.Object) {
 	s.Fields.Set("updated_at", jsjson.ISOString(s.now()))
 	if err := s.write(); err != nil {
 		s.Fields.Set("state_storage", "unavailable")
-		s.Fields.Set("last_state_write_error", errorCode(err))
+		s.Fields.Set("last_state_write_error", nodefs.ErrorCode(err))
 		return
 	}
 	s.Fields.Set("state_storage", "available")
@@ -51,22 +50,5 @@ func (s *State) write() error {
 		return err
 	}
 	file := s.project.StatePath(jsjson.Path(s.Fields, "lane")) // a worker's lane is never null
-	tmp := file + ".tmp"
-	if err := nodefs.WriteFile(tmp, append(data, '\n')); err != nil {
-		return err
-	}
-	// rename(2) itself: os.Rename refuses a directory target with EEXIST before trying,
-	// where Node reports the EISDIR the system call gives.
-	return syscall.Rename(tmp, file)
-}
-
-// errorCode is `err.code || String(err)`. Every failure publish can meet carries an errno, and
-// Node gives each errno a code; Code knows only the errnos of its table, so for any other one
-// (and for an error without errno) this is an approximation of String(err): "Error: " and Go's
-// text, where Node would have written the code.
-func errorCode(err error) string {
-	if code := nodefs.Code(err); code != "" {
-		return code
-	}
-	return "Error: " + err.Error()
+	return nodefs.ReplaceFile(file, append(data, '\n'))
 }

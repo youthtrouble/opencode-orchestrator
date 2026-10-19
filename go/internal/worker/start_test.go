@@ -740,14 +740,3 @@ func TestRunIsSafeUnderConcurrentEvents(t *testing.T) {
 		t.Errorf("state:\n%s", got)
 	}
 }
-
-// Node gives every errno an err.code; Code knows only its table's, so for another errno the
-// state records an approximation of String(err) (S6a review F1).
-func TestErrorCodeFallsBackToTheErrorText(t *testing.T) {
-	if got := errorCode(syscall.EISDIR); got != "EISDIR" {
-		t.Errorf("errorCode(EISDIR) = %q", got)
-	}
-	if got := errorCode(syscall.EDOM); got != "Error: "+syscall.EDOM.Error() {
-		t.Errorf("errorCode(EDOM) = %q", got)
-	}
-}

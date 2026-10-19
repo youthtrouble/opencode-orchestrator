@@ -113,15 +113,39 @@ func AppendFile(path string, data []byte) error {
 // null }`: any JSON value the file holds, or nil when it cannot be read (missing, a
 // directory) or parsed (a BOM, bad JSON). Malformed UTF-8 is decoded as Node decodes it.
 func ReadJSONOrNull(path string) any {
+	value, _ := ReadJSON(path)
+	return value
+}
+
+// ReadJSON is ReadJSONOrNull that tells a file holding null (nil, true) from one that cannot
+// be read or parsed (nil, false), for the JS `readJson(f, fallback)` helpers, which return
+// the fallback only for the latter.
+func ReadJSON(path string) (value any, ok bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	value, err := jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
+	value, err = jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return value
+	return value, true
+}
+
+// ReplaceFile is the write-then-rename of the JS writeJson helpers: writeFileSync(path +
+// ".tmp", data), then renameSync onto path, so readers see the old or the new content and
+// never a partial file. A failed rename leaves the .tmp file, as in the JS.
+func ReplaceFile(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := WriteFile(tmp, data); err != nil {
+		return err
+	}
+	// rename(2) itself: os.Rename refuses a directory target with EEXIST before trying,
+	// where Node reports the EISDIR the system call gives.
+	if err := syscall.Rename(tmp, path); err != nil {
+		return RenameError(err, tmp, path)
+	}
+	return nil
 }
 
 // MkdirAll mirrors fs.mkdirSync(dir, {recursive: true}), failing with Node's errno and message.
@@ -216,6 +240,20 @@ func FileError(err error, operation, path string) error {
 	return &nodeError{fmt.Sprintf("%s, %s '%s'", message, operation, path), errno}
 }
 
+// RenameError is FileError for fs.renameSync(from, to), which Node reports against both
+// paths: "<message>, rename '<from>' -> '<to>'".
+func RenameError(err error, from, to string) error {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return err
+	}
+	message, ok := nodeErrnoMessages[errno]
+	if !ok {
+		return err
+	}
+	return &nodeError{fmt.Sprintf("%s, rename '%s' -> '%s'", message, from, to), errno}
+}
+
 // nodeError is a failure worded as Node words it, carrying the errno it came from.
 type nodeError struct {
 	message string
@@ -235,4 +273,15 @@ func Code(err error) string {
 	}
 	code, _, _ := strings.Cut(nodeErrnoMessages[errno], ":")
 	return code
+}
+
+// ErrorCode is the JS `err.code || String(err)`: Node's code for a filesystem failure, else
+// String(err) for the TypeErrors and RangeErrors jsjson models ("TypeError: <message>"). For
+// an errno outside Code's table, and any other error, it approximates String(err) as
+// "Error: " and Go's text, where Node would have given the errno's code.
+func ErrorCode(err error) string {
+	if code := Code(err); code != "" {
+		return code
+	}
+	return jsjson.ErrorString(err)
 }

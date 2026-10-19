@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 )
 
 func TestNodeFileErrorMessages(t *testing.T) {
@@ -254,6 +256,57 @@ func TestReadJSONOrNullReadsAnyValueAndNilOnFailure(t *testing.T) {
 	for name, path := range map[string]string{"missing": filepath.Join(dir, "absent"), "directory": dir} {
 		if got := ReadJSONOrNull(path); got != nil {
 			t.Errorf("%s: ReadJSONOrNull = %#v, want nil", name, got)
+		}
+	}
+}
+
+// Probed with Node v26.5.1: renameSync onto a directory prints
+// "Error: EISDIR: illegal operation on a directory, rename '<from>' -> '<to>'".
+func TestReplaceFileLeavesTheTmpFileAndNamesBothPathsOnAFailedRename(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "acks.json")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := ReplaceFile(target, []byte("{}\n"))
+	want := "EISDIR: illegal operation on a directory, rename '" + target + ".tmp' -> '" + target + "'"
+	if err == nil || err.Error() != want || Code(err) != "EISDIR" {
+		t.Fatalf("ReplaceFile onto a directory = %v (code %q), want %q", err, Code(err), want)
+	}
+	if data, err := os.ReadFile(target + ".tmp"); err != nil || string(data) != "{}\n" {
+		t.Errorf(".tmp = %q, %v; want the data left behind", data, err)
+	}
+}
+
+func TestReplaceFileReplacesTheContent(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "state.json")
+	writeFile(t, target)
+	if err := ReplaceFile(target, []byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "new\n" {
+		t.Errorf("content = %q", data)
+	}
+	if Exists(target + ".tmp") {
+		t.Error(".tmp left after a successful rename")
+	}
+}
+
+// Node gives every errno an err.code; Code knows only its table's, so for another errno the
+// result approximates String(err) (S6a review F1). V8's own errors give String(err).
+func TestErrorCodeIsTheCodeOrTheErrorString(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{syscall.EISDIR, "EISDIR"},
+		{syscall.EDOM, "Error: " + syscall.EDOM.Error()},
+		{jsjson.CannotAssign(7.0, "lane"), "TypeError: Cannot create property 'lane' on number '7'"},
+		{jsjson.CannotReadOfNull("wake"), "TypeError: Cannot read properties of null (reading 'wake')"},
+		{jsjson.ErrInvalidTime, "RangeError: Invalid time value"},
+	} {
+		if got := ErrorCode(tc.err); got != tc.want {
+			t.Errorf("ErrorCode(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 	}
 }

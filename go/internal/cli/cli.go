@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
@@ -63,20 +62,21 @@ var (
 	errFileArgBoolean = &jsTypeError{"ERR_INVALID_ARG_TYPE", `The "path" argument must be of type string or an instance of Buffer or URL. Received type boolean (true)`}
 )
 
-// jsErrorClass names the class the JS error would have: a TypeError for a value of the wrong
-// shape, the TypeError (with Node's code) the script raises, a SyntaxError for unparsable
+// jsErrorClass names the class the JS error would have: the TypeError or RangeError V8 throws
+// (jsjson), a TypeError for a value of the wrong shape, the TypeError (with Node's code) the script raises, a SyntaxError for unparsable
 // JSON, otherwise Error.
 func jsErrorClass(err error) string {
 	var mailboxShape *mailbox.ShapeError
 	var manifestShape *manifest.ShapeError
 	var incidentShape *incident.ShapeError
 	var policyType *policy.TypeError
-	var flipProperty *flipcmd.PropertyTypeError
 	var typeError *jsTypeError
 	var syntax *jsonSyntaxError
+	if class, modelled := jsjson.ErrorClass(err); modelled {
+		return class
+	}
 	switch {
-	case errors.As(err, &mailboxShape), errors.As(err, &manifestShape), errors.As(err, &incidentShape), errors.As(err, &policyType),
-		errors.As(err, &flipProperty):
+	case errors.As(err, &mailboxShape), errors.As(err, &manifestShape), errors.As(err, &incidentShape), errors.As(err, &policyType):
 		return "TypeError"
 	case errors.As(err, &typeError):
 		if typeError.code != "" {
