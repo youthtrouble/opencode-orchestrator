@@ -12,6 +12,8 @@
 - testdata: the fixture redactor's scan also checks raw JSONL text and every escaping layer, so
   duplicate keys and nested escapes can no longer hide a credential; committed fixtures re-scanned
   clean (Sol S1/R3).
+- go: `procs` marks a child reaped as soon as it exits and drains its pipes afterwards (at most the
+  PE-10 grace), so no signal can reach a reused process group during the drain (Sol S2/R2).
 
 ## 0.5.0 — 2026-10-19
 

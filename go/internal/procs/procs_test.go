@@ -224,17 +224,142 @@ func TestStdinDeliversTheBytes(t *testing.T) {
 
 // A child that exits without reading its stdin (codex rejecting its argv, say) closes the pipe
 // under a pending write: the EPIPE is dropped and the child's own exit code reported (PE-13).
+// The exit 0 case matters most: a copy error is reported only for a child that exited 0.
 func TestStdinUnreadByAnExitingChildIsNotAnError(t *testing.T) {
 	prompt := strings.Repeat("p", 1<<20) // far beyond any pipe buffer, so the write must fail
-	child, err := Start(Spec{Name: script(t, "exit 2"), Stdin: strings.NewReader(prompt), Grace: testGrace})
+	for _, exit := range []int{0, 2} {
+		t.Run("exit "+strconv.Itoa(exit), func(t *testing.T) {
+			child, err := Start(Spec{Name: script(t, "exit "+strconv.Itoa(exit)), Stdin: strings.NewReader(prompt), Grace: testGrace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, err := child.Wait()
+			if err != nil {
+				t.Fatalf("Wait error = %v; an unread stdin is not an error", err)
+			}
+			wantCode(t, code, intp(exit))
+		})
+	}
+}
+
+// Output the child writes just before it exits is all delivered: the drain after the reap
+// reads the pipes to EOF before Wait returns.
+func TestOutputWrittenJustBeforeExitIsKept(t *testing.T) {
+	const size = 100000 // more than a pipe buffer, so the child is still writing near its exit
+	body := "head -c " + strconv.Itoa(size) + " /dev/zero | tr '\\0' o; printf last; printf err >&2; exit 3"
+	var out, errOut strings.Builder
+	child, err := Start(Spec{Name: script(t, body), Stdout: &out, Stderr: &errOut, Grace: testGrace})
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, err := child.Wait()
 	if err != nil {
-		t.Fatalf("Wait error = %v; an unread stdin is not an error", err)
+		t.Fatal(err)
 	}
-	wantCode(t, code, intp(2))
+	wantCode(t, code, intp(3))
+	if want := strings.Repeat("o", size) + "last"; out.String() != want {
+		t.Errorf("stdout has %d bytes ending %q, want %d ending \"last\"", out.Len(), tail(out.String()), len(want))
+	}
+	if errOut.String() != "err" {
+		t.Errorf("stderr = %q, want \"err\"", errOut.String())
+	}
+}
+
+// One writer given as both Stdout and Stderr shares one pipe and one copy, so it receives both
+// streams, and a writer that is not safe for concurrent use (a strings.Builder) is safe here.
+func TestSharedStdoutAndStderrWriterGetsBothStreams(t *testing.T) {
+	var out strings.Builder
+	body := "printf out1; printf err1 >&2; printf out2; printf err2 >&2"
+	child, err := Start(Spec{Name: script(t, body), Stdout: &out, Stderr: &out, Grace: testGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(child.stdio.copies) != 1 {
+		t.Errorf("Start set up %d copies for one shared writer, want 1", len(child.stdio.copies))
+	}
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, intp(0))
+	if out.String() != "out1err1out2err2" {
+		t.Errorf("shared writer got %q, want \"out1err1out2err2\"", out.String())
+	}
+}
+
+func tail(s string) string {
+	return s[max(0, len(s)-8):]
+}
+
+// An *os.File is the child's own descriptor, not a pipe this process copies from: the child
+// sees a regular file on its stdout.
+func TestFileStdoutIsHandedToTheChild(t *testing.T) {
+	out, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	child, err := Start(Spec{Name: script(t, "[ -f /dev/fd/1 ] && echo a regular file"), Stdout: out, Grace: testGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(child.stdio.copies) != 0 {
+		t.Errorf("Start set up %d copies for an *os.File stdout", len(child.stdio.copies))
+	}
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, intp(0))
+	written, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(written) != "a regular file\n" {
+		t.Errorf("the child wrote %q to its stdout, want \"a regular file\\n\"", written)
+	}
+}
+
+// A child that fails to start (its Dir is missing, which only the exec finds) leaves no pipe
+// end open in this process.
+func TestFailedStartLeaksNoDescriptors(t *testing.T) {
+	fdDir := "/dev/fd"
+	if _, err := os.Stat("/proc/self/fd"); err == nil {
+		fdDir = "/proc/self/fd"
+	}
+	before := openDescriptors(t, fdDir)
+	for range 5 {
+		_, err := Start(Spec{
+			Name:   "/bin/sh",
+			Dir:    filepath.Join(t.TempDir(), "missing"),
+			Stdin:  strings.NewReader("in"),
+			Stdout: io.Discard,
+			Stderr: &strings.Builder{},
+			Grace:  testGrace,
+		})
+		var startErr *StartError
+		if !errors.As(err, &startErr) {
+			t.Fatalf("Start in a missing Dir = %v, want a *StartError", err)
+		}
+	}
+	if after := openDescriptors(t, fdDir); after != before {
+		t.Errorf("%d descriptors open after 5 failed starts, %d before", after, before)
+	}
+}
+
+func openDescriptors(t *testing.T, fdDir string) int {
+	t.Helper()
+	// Names only: darwin's /dev/fd cannot stat the descriptor that lists it.
+	dir, err := os.Open(fdDir)
+	if err != nil {
+		t.Skipf("cannot list open descriptors: %v", err)
+	}
+	defer dir.Close()
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		t.Skipf("cannot list open descriptors: %v", err)
+	}
+	return len(names)
 }
 
 // TestStdinCopyIsBoundedByGrace: a grandchild that inherited stdin and never reads it would
@@ -304,13 +429,14 @@ func grandchildPid(t *testing.T, printed []string) int {
 	return pid
 }
 
-// waitGone polls until pid no longer exists (an orphan is reaped by init), or fails.
+// waitGone polls until pid no longer exists (reaped by its parent, or by init for an orphan),
+// or fails.
 func waitGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(slack)
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {
-			t.Fatalf("process %d still exists %v after its group was signalled", pid, slack)
+			t.Fatalf("process %d still exists after %v", pid, slack)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -372,4 +498,70 @@ func TestSignalGroupAfterWaitDoesNothing(t *testing.T) {
 	if child.Pid() <= 0 {
 		t.Errorf("Pid() = %d", child.Pid())
 	}
+}
+
+// The child is reaped before its pipes are drained: once it has exited, SignalGroup sends
+// nothing, even to a grandchild in its group that still holds stdout and keeps Wait draining.
+func TestSignalGroupAfterTheReapSendsNothingDuringTheDrain(t *testing.T) {
+	const grace = 500 * time.Millisecond
+	record := filepath.Join(t.TempDir(), "signals")
+	recorder := script(t, `trap 'echo TERM >>"$1"' TERM; echo $$; echo ready; while :; do /bin/sleep 0.05; done`)
+	child, printed := startSession(t, recorder+" "+record+" &", grace)
+	grandchild := grandchildPid(t, printed)
+
+	type result struct {
+		code *int
+		err  error
+	}
+	waited := make(chan result, 1)
+	started := time.Now()
+	go func() {
+		code, err := child.Wait()
+		waited <- result{code, err}
+	}()
+	waitGone(t, child.Pid()) // reaped: a zombie still answers kill(pid, 0)
+	child.SignalGroup(syscall.SIGTERM)
+	select {
+	case <-waited:
+		t.Fatal("Wait returned before the grace for the grandchild's stdout; the test proves nothing")
+	default:
+	}
+
+	got := <-waited
+	elapsed := time.Since(started)
+	if got.err != nil {
+		t.Fatalf("Wait error = %v", got.err)
+	}
+	wantCode(t, got.code, intp(0))
+	if elapsed < grace || elapsed > grace+slack {
+		t.Errorf("Wait took %v with a grandchild holding stdout, want between %v and %v", elapsed, grace, grace+slack)
+	}
+	time.Sleep(200 * time.Millisecond) // the grandchild's trap runs after its current sleep
+	if signals := readRecord(t, record); signals != "" {
+		t.Fatalf("SignalGroup after the reap reached the grandchild: it recorded %q", signals)
+	}
+
+	// The recorder works: a TERM sent to it now is recorded.
+	if err := syscall.Kill(grandchild, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(slack)
+	for readRecord(t, record) != "TERM\n" {
+		if time.Now().After(deadline) {
+			t.Fatalf("the grandchild did not record a direct TERM within %v", slack)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func readRecord(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
 }
