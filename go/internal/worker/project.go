@@ -63,7 +63,14 @@ func (p Project) ReadState(lane any) any {
 // refuses to coerce (not an integer in the int32 range) throws ERR_INVALID_ARG_TYPE there,
 // which is not EPERM, so it is not alive. Signal 0 checks existence and sends nothing.
 func Alive(pid any) bool {
-	if !jsjson.Truthy(pid) {
+	return jsjson.Truthy(pid) && Signalable(pid)
+}
+
+// Signalable is process.kill(pid, 0) succeeding or failing with EPERM, without Alive's falsy
+// guard: the alive() of watch.mjs. Node's pid check is `pid == (pid | 0)`, so null and
+// undefined fail it while 0, false and "" pass and signal the caller's process group (alive).
+func Signalable(pid any) bool {
+	if pid == nil {
 		return false
 	}
 	n, ok := coercePid(pid)

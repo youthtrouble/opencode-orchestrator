@@ -91,6 +91,22 @@ func TestAliveCoercesAsProcessKill(t *testing.T) {
 	}
 }
 
+// watch.mjs's alive() lacks the falsy guard: the falsy pids Node's check lets through signal
+// the process group; null and undefined do not pass it.
+func TestSignalableHasNoFalsyGuard(t *testing.T) {
+	for _, tc := range []struct {
+		pid  string // JSON
+		want bool
+	}{{`0`, true}, {`""`, true}, {`false`, true}, {`null`, false}, {`1.5`, false}} {
+		if got := Signalable(parse(t, tc.pid)); got != tc.want {
+			t.Errorf("Signalable(%s) = %v, want %v", tc.pid, got, tc.want)
+		}
+	}
+	if Signalable(nil) {
+		t.Error("Signalable(undefined) is true")
+	}
+}
+
 func TestLanePathsInterpolateTheJSValue(t *testing.T) {
 	p := NewProject("/p")
 	for _, tc := range []struct {

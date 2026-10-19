@@ -31,7 +31,7 @@ func Watch(args []string, stdio Stdio) int {
 		Root:  root,
 		Home:  home,
 		Now:   time.Now,
-		Alive: worker.Alive,
+		Alive: worker.Signalable, // watch.mjs's alive() has no falsy guard
 		Routing: func() (*usage.Routing, error) {
 			cfg, err := usageConfig()
 			if err != nil {

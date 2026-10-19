@@ -4,6 +4,8 @@
 // happens in one place, here.
 package cmdref
 
+import "strings"
+
 // Script is the command line that runs the named orchestrator script, e.g.
 // Script("mailbox") is "node ~/.config/opencode/orchestrator/bin/mailbox.mjs".
 func Script(name string) string {
@@ -27,6 +29,27 @@ func MailboxReply() string {
 // human to run.
 func FlipGateClear() string {
 	return Script("flip") + " gate --clear"
+}
+
+// WatchFollow is the command line kickoff tells the human to watch the run with.
+func WatchFollow() string {
+	return Script("watch") + " --follow"
+}
+
+// KickoffUsage is the usage line `kickoff.mjs` prints for --help or without a brief.
+func KickoffUsage() string {
+	return "usage: " + ScriptFile("kickoff") + " --brief FILE [--brief FILE2] [--door auto|claude|opencode] [--headless] [--dry-run]"
+}
+
+// KickoffPrompt is the conductor's opening prompt kickoff builds (bin/kickoff.mjs l.42): ship
+// the main brief and, when there are side briefs, run them too as budget allows.
+func KickoffPrompt(main string, side []string) string {
+	sideText := ""
+	if len(side) > 0 {
+		sideText = " When budget allows, also run " + strings.Join(side, ", ") + " as side brief(s) with the cheapest adequate role."
+	}
+	return "Ship " + main + ". Plan first with the architect (size per the brief), then one slice at a time; flip or hand back per the contract at each brief boundary." +
+		sideText + " Record orchestrator defects as incidents."
 }
 
 // ConductorContinueBrief is the brief `flip run` writes to .orchestrator/briefs/

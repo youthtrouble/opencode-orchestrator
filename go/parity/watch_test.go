@@ -70,6 +70,7 @@ func (h *harness) testWatch(t *testing.T) {
 		{name: "empty"},
 		{name: "supervisor-alive", seed: watchProject("supervisor-state.json", fmt.Sprintf(`{"status":"running","pid":%d,"checked_at":%q}`, os.Getpid(), iso(0)))},
 		{name: "supervisor-dead", seed: watchProject("supervisor-state.json", fmt.Sprintf(`{"status":"running","pid":%d,"checked_at":%q}`, deadPid, iso(0)))},
+		{name: "supervisor-pid-zero", seed: watchProject("supervisor-state.json", fmt.Sprintf(`{"status":"running","pid":0,"checked_at":%q}`, iso(0)))}, // no falsy guard: alive
 		{name: "supervisor-no-checked-at", seed: watchProject("supervisor-state.json", `{"status":"stopped"}`)},
 		{name: "flip-flipped", seed: watchProject("flip.json", fmt.Sprintf(`{"from":"opencode","to":"claude","at":%q}`, iso(0)))},
 		{name: "flip-paused", seed: watchProject("flip.json", fmt.Sprintf(`{"paused":{"door":"opencode","at":%q}}`, iso(0)))},

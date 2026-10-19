@@ -502,7 +502,9 @@ the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exce
 doctor` runs the `doctor.mjs` checks with the same rows, plus its own binary and self-test rows, and
 runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--follow] [--interval
 20]` draws the `watch.mjs` dashboard line for line (mirroring its crash on a `flip.json` that holds
-only a human gate). `kickoff.mjs` is not ported yet, and the plugin still calls the JS scripts.
+only a human gate). `orch kickoff --brief FILE ...` runs the `kickoff.mjs` preflight, door choice and
+launch (mirroring its latent defects: `--dry-run` still runs the preflight, `--door` is not
+validated). The plugin still calls the JS scripts.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
 diffs every implemented command against the JS.
 

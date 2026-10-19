@@ -88,3 +88,65 @@ func TestCodexExecHelpIsTheScriptHeader(t *testing.T) {
 		t.Errorf("CodexExecHelp differs from the script header\n got: %q\nwant: %q", CodexExecHelp, want)
 	}
 }
+
+// kickoffSource is bin/kickoff.mjs.
+func kickoffSource(t *testing.T) string {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "kickoff.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(source)
+}
+
+// between returns the text of source between the first start and the end after it.
+func between(t *testing.T, source, start, end string) string {
+	t.Helper()
+	_, after, found := strings.Cut(source, start)
+	text, _, closed := strings.Cut(after, end)
+	if !found || !closed {
+		t.Fatalf("kickoff.mjs no longer contains %q ... %q", start, end)
+	}
+	return text
+}
+
+// kickoff.mjs builds the prompt from one template literal with a nested one for the side
+// briefs; rendering both from the source pins the text byte for byte.
+func TestKickoffPromptIsTheKickoffTemplate(t *testing.T) {
+	source := kickoffSource(t)
+	template := between(t, source, "const prompt = `", "`;\n")
+	head, rest, _ := strings.Cut(template, "${side.length ? `")
+	sideTemplate, tail, _ := strings.Cut(rest, "` : \"\"}")
+	render := func(main string, side []string) string {
+		sideText := ""
+		if len(side) > 0 {
+			sideText = strings.ReplaceAll(sideTemplate, `${side.join(", ")}`, strings.Join(side, ", "))
+		}
+		return strings.ReplaceAll(head, "${main}", main) + sideText + tail
+	}
+	for _, side := range [][]string{nil, {"b.md"}, {"b.md", "c.md"}} {
+		want := render("a.md", side)
+		if strings.Contains(want, "${") || strings.Contains(want, "`") {
+			t.Fatalf("the template has a substitution this test does not render: %q", want)
+		}
+		if got := KickoffPrompt("a.md", side); got != want {
+			t.Errorf("KickoffPrompt(a.md, %q) differs from kickoff.mjs\n got: %q\nwant: %q", side, got, want)
+		}
+	}
+}
+
+// kickoff.mjs prints its usage line from a string literal.
+func TestKickoffUsageIsTheKickoffUsageLine(t *testing.T) {
+	want := between(t, kickoffSource(t), `console.log("usage: `, `");`)
+	if got := KickoffUsage(); got != "usage: "+want {
+		t.Errorf("KickoffUsage() = %q, want %q", got, "usage: "+want)
+	}
+}
+
+// kickoff.mjs names the watch command in both its headless and interactive hints.
+func TestWatchFollowIsTheKickoffHint(t *testing.T) {
+	source := kickoffSource(t)
+	if got := WatchFollow(); strings.Count(source, got) != 2 {
+		t.Errorf("WatchFollow() = %q appears %d times in kickoff.mjs, want 2", got, strings.Count(source, got))
+	}
+}

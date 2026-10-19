@@ -4,7 +4,7 @@
 port is incremental (plan: `.orchestrator/plans/go-port.md`); until it is complete the JS runtime
 stays the default and both share the same `.orchestrator/` state.
 
-Implemented so far (`kickoff.mjs` is still JS-only):
+Implemented so far (every `bin/*.mjs` command; the plugin still calls the JS scripts):
 
 | Command | Replaces | Behaviour |
 |---|---|---|
@@ -25,6 +25,7 @@ Implemented so far (`kickoff.mjs` is still JS-only):
 | `orch supervisor start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | `bin/supervisor.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/supervisor-acks.json` (indent 2, written to `<file>.tmp` and renamed, as the JS `writeJson` does). `status` prints `supervisor-state.json` as `JSON.parse` reads it, whatever the value (`null`, a number, a string, an array), or `{"status": "not_started"}` when it cannot be read or parsed (missing, a directory, unparsable, a BOM), and never writes. `stop` creates `.orchestrator/` and an empty `supervisor.stop` and prints `stop requested; workers are unaffected`, whether or not a supervisor runs. `ack` refuses with `unknown event id` (exit 1) unless `--event` is truthy and names a truthy property of the state's `events`, read as a JS property: an Object.prototype name (`constructor`, `toString`, `__proto__`, ...) is present (mirrored); then it sets `acks[<event>] = {by: <--by or coordinator>, at}` (an existing key keeps its position; a bare `--event` is the key `true`, a bare `--by` writes `true`; `__proto__` without an own key of that name adds nothing and rewrites the file unchanged, as the JS prototype setter does) and prints `acknowledged (receipt, not acceptance)`. Usage: no command prints `commands: start \| serve \| status \| stop \| ack --event ID` (exit 2); any other command prints nothing and exits 0 (mirrored). `start` creates `.orchestrator/logs/`, prints `{"started":false,"reason":"already running","pid":N}` when the pid in `supervisor.lock` is alive, else removes `supervisor.stop`, launches this executable as `orch supervisor serve --cwd <root>` in a session of its own (wrapped in `caffeinate -i -s` or `systemd-inhibit` unless the registry's `runtime.keep_awake` is `false`) with its output appended to `logs/supervisor.log`, and prints `{"started":true,"supervisor_pid":N,"log":"<path>"}` (`supervisor_pid` left out when the command cannot be started). `serve` claims `supervisor.lock` (created exclusively with its pid; a lock whose pid is dead is taken over; a live one prints `a supervisor already owns this project`, exit 1), then every 5 s after each tick: looks at every worker lane (phases, the two-phase intent, events), re-dispatches budget-deferred lanes as `orch worker start --detach`, wakes the coordinator through the configured channels (`command`, `codex-queue`, `opencode-run`, `claude-resume` as `orch claude-exec`), evaluates the conductor flip (relaunching through `orch flip decide\|run`), and records the outcome in `supervisor-state.json` (a failed tick: `storage_error` persisted once by the next successful write, `storage_failures` counting). The stop file makes it record `status: "stopped"` and `stopped_at`, release the lock and exit 0; it has no signal handlers, so a killed serve leaves its lock for the next one. A state that is `null` or a primitive crashes as in the JS (C1). Differences: PE-16 (hand-edited non-object shapes), PE-17 (a missing `opencode`). |
 | `orch doctor` | `bin/doctor.mjs` | The same rows in the same order with the same texts (`OK  `/`WARN`/`FAIL`, name, `  —  detail` when the detail is truthy) and exit code (1 if any row is FAIL). Each probe (`opencode`/`codex`/`claude`/`node --version`, `codex login status`, `claude auth status`, `opencode auth list\|plugin list\|debug agents`) runs with a 20 s timeout and reads stdout then stderr; the usage feeds and routing come from a refreshed `orch usage`, rows pushed before a failure are kept and the failure adds `FAIL usage/routing`; the last 400 lines of `~/.local/share/opencode/log/opencode.log` are scanned for orchestrator `ERROR`s (cuts in UTF-16 units). Differences: PE-18 (`orch binary` and `orch self-test` rows; `unit tests` runs the Go tests). |
 | `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command, the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
+| `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b>` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else `orch flip pause --active <home>` and the message, exit 75), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in `.git/info/exclude`), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (its trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). |
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
 `orch` yet.
@@ -64,11 +65,12 @@ go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
 # chosen groups; ./parity/run.sh runs them all
 ./parity/run.sh --only \
-  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch
+  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff
 ```
 
 `.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`,
-`incident`, `policy`, `bridges`, `worker`, `flip`, `supervisor`, `doctor` and `watch` parity groups
+`incident`, `policy`, `bridges`, `worker`, `flip`, `supervisor`, `doctor`, `watch` and `kickoff`
+parity groups
 on macOS and Linux with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare
 against Node when it is available; fixed byte expectations run even without Node.
 
@@ -390,7 +392,23 @@ Groups:
   Normalised: the header's project basename and clock (and, for the stale cache, the re-collected
   usage time). `--follow --interval 1` runs each runtime until its second frame
   begins (5 s bound), SIGTERMs the pid it started and compares the first frame and the signal
-  death; the gate-only `flip.json` compares the first stderr line instead.
+  death; the gate-only `flip.json` compares the first stderr line instead. A supervisor-state pid of `0` is
+  alive in both (no falsy guard in `watch.mjs`'s `alive()`).
+
+- `kickoff`: `orch kickoff` against `bin/kickoff.mjs` in cases that never launch a conductor (each
+  stops at the usage, the brief check, the both-red path or `--dry-run`, or crashes before the
+  launch), with the project's `supervisor.lock` held by the test's pid so neither `supervisor
+  start` starts a serve, and both usage feeds failing so each refresh keeps the seeded cache's
+  readings: no arguments, `--help` with and without a brief, `--brief ""`, a missing brief, `--brief
+  --brief x`, a directory brief, a bare `--cwd` (C1); dry runs with the home door usable, the home
+  door red, `--door claude`, `--door auto` with Anthropic red, `--headless`, side briefs,
+  `--unattended` (`policy.json`), a human gate cleared, the exclude appended, already present,
+  without `.git` and with `.git` a file (the `ENOTDIR` crash after the supervisor line, C1); a registry with `conductor.home: "claude"` (a copied JS tree); `--door gemini`
+  and a bare `--door` (the mirrored TypeError after the preflight, C2, files compared); both red
+  with `--dry-run` (exit 75, no side effects) and without (`flip pause`: `flip.json`, the handoff,
+  exit 75); the registry missing (PE-2). Each case first checks that the JS printed its expected
+  line, so no case passes by both runtimes failing alike. Normalised: `generated_at`, fresh
+  flip and mailbox times and ids, the project path.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and
@@ -716,6 +734,13 @@ flipped) crashes a single render with `TypeError: Cannot read properties of unde
 'slice')` and makes `--follow` print that message every interval without ever drawing a frame; the
 `next:` line takes the rest of the `## Next action` heading line, so `## Next action (exact)`
 prints `next: (exact)`. A role whose model is not a string throws as in `orch doctor`.
+
+Those `orch kickoff` mirrors (plan go-s9 3.4, incidents recorded, fixed in JS and Go together after
+S12): `--dry-run` runs the whole preflight (clears the human gate, applies `--unattended`, starts
+the supervisor, edits `.git/info/exclude`) before printing the prompt; `--door` is not validated,
+so an unknown door (or a bare `--door`, the text `true`) crashes with `TypeError: Cannot read
+properties of undefined (reading 'overall')` after that preflight; the both-red path says the
+supervisor will relaunch but does not start it.
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 

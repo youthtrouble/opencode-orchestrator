@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Go port: `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto|claude|opencode] [--headless]
+  [--unattended] [--cwd DIR] [--dry-run]` mirrors `bin/kickoff.mjs`: brief checks, refreshed
+  routing, door choice, the both-red pause, the preflight (policy, gate, supervisor, git exclude),
+  and the headless (`orch worker start --detach`) or interactive (`claude`/`opencode`) launch, with
+  its three latent defects (dry-run side effects, unvalidated `--door`, both-red without a
+  supervisor start) recorded as incidents. New `kickoff` parity group (non-launching cases), run
+  in CI. `orch watch` now treats a pid of `0`, `false` or `""` as alive, as `watch.mjs`'s
+  `alive()` does (S9b review finding).
 - Go port: `orch watch [--cwd DIR] [--follow] [--interval 20]` mirrors `bin/watch.mjs` line for
   line, including its two latent defects (a `flip.json` holding only a human gate crashes the
   render; `## Next action (exact)` prints `next: (exact)`), both recorded as incidents. New
