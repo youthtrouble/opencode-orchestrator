@@ -478,10 +478,11 @@ node --test tests/*.test.mjs
 
 ## Go runtime (in progress)
 
-`go/` holds `orch`, a static Go binary that will replace `orchestrator/bin/*.mjs` one script at a
-time. The JS runtime stays the default: the plugin, the commands and the bridges do not call `orch`
-yet. Both runtimes share the same state, including the usage cache, so the two can run on the same
-machine. Implemented so far: `orch version`, `orch usage [--refresh] [--json]` (output
+`go/` holds `orch`, a static Go binary that replaces `orchestrator/bin/*.mjs` one script for one.
+Every script is now ported; what remains is switching the plugin to `orch` (S10), installing it
+(S11) and removing the JS runtime (S12). Until then the JS runtime stays the default: the plugin,
+the commands and the bridges do not call `orch` yet. Both runtimes share the same state, including
+the usage cache, so the two can run on the same machine. Implemented: `orch version`, `orch usage [--refresh] [--json]` (output
 byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
 plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
 post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
@@ -504,7 +505,8 @@ runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--f
 20]` draws the `watch.mjs` dashboard line for line (mirroring its crash on a `flip.json` that holds
 only a human gate). `orch kickoff --brief FILE ...` runs the `kickoff.mjs` preflight, door choice and
 launch (mirroring its latent defects: `--dry-run` still runs the preflight, `--door` is not
-validated). The plugin still calls the JS scripts.
+validated); its parity group covers the headless and interactive launches and a supervisor really
+started. The plugin still calls the JS scripts.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
 diffs every implemented command against the JS.
 

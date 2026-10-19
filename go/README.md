@@ -2,9 +2,10 @@
 
 `orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one. The
 port is incremental (plan: `.orchestrator/plans/go-port.md`); until it is complete the JS runtime
-stays the default and both share the same `.orchestrator/` state.
+stays the default and both share the same `.orchestrator/` state. Every command is ported; what
+remains is switching the plugin to `orch` (S10), installing it (S11) and removing the JS (S12).
 
-Implemented so far (every `bin/*.mjs` command; the plugin still calls the JS scripts):
+Implemented (every `bin/*.mjs` command; the plugin still calls the JS scripts):
 
 | Command | Replaces | Behaviour |
 |---|---|---|
@@ -82,7 +83,7 @@ design (PE-5).
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
 project directory containing `.git/`, with an environment of only `HOME`, `PATH`, `ORCH_HOME` and
-`ORCH_REGISTRY` (plus `ORCH_NO_POST_RUN_REFRESH=1` in the bridge, worker and flip cases,
+`ORCH_REGISTRY` (plus `ORCH_NO_POST_RUN_REFRESH=1` in the bridge, worker, flip and kickoff cases,
 PE-12). `PATH` is `parity/fakes` (stand-ins for `claude`, `codex`, `opencode` and `security` that
 fail unless a case scripts them, so no case reads the real keychain or calls a real endpoint, and
 for `which`, `caffeinate` and `systemd-inhibit`, so no case reaches the real keep-awake tools),
@@ -409,6 +410,18 @@ Groups:
   exit 75); the registry missing (PE-2). Each case first checks that the JS printed its expected
   line, so no case passes by both runtimes failing alike. Normalised: `generated_at`, fresh
   flip and mailbox times and ids, the project path.
+  (S9c-2) Then the launches, each asserting on both sides that it happened before comparing:
+  headless on claude (the `ok` fixture) and opencode (`opencode run` scripted), each runner
+  settled by the `runner_pid` its kickoff printed and everything it wrote compared
+  (`conductor-kickoff.md`, the lane state and log, the mailbox, the run record, the fake's argv);
+  the JS claude bridge's post-run refresh opens a codex app-server session orch's does not
+  (PE-12), so the app-server log must be orch's followed by at most that session's start, and
+  is then dropped. Interactive claude and opencode (the opencode fake's `--prompt` mode, scripted by
+  `$HOME/fake-opencode-tui/`; the fake's argv log, exit 3 and 4 passed through; a fake that kills itself with SIGTERM or SIGINT, exit 0). A dry run without the
+  lock, where each `supervisor start` really starts a serve in its sandbox: the serve's tick is
+  checked by the pid the kickoff printed, the serve stopped through its stop file and waited for
+  (killed by that pid after 20 s, failing the case); normalised: that pid, the cut log path and
+  the serve's fresh values.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and
@@ -740,7 +753,11 @@ S12): `--dry-run` runs the whole preflight (clears the human gate, applies `--un
 the supervisor, edits `.git/info/exclude`) before printing the prompt; `--door` is not validated,
 so an unknown door (or a bare `--door`, the text `true`) crashes with `TypeError: Cannot read
 properties of undefined (reading 'overall')` after that preflight; the both-red path says the
-supervisor will relaunch but does not start it.
+supervisor will relaunch but does not start it. One divergence is not mirrored: when `orch`
+cannot find its own executable (`os.Executable()` fails), each self-exec has no status and no
+output, so orch prints an empty `supervisor: ` line (and, headless, an empty answer and exit 1)
+where the JS, whose `spawnSync` result would then hold `null` output, dies of a `TypeError` on
+`.trim()`.
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 
@@ -767,7 +784,10 @@ its malformed-sequence grouping is not a claim of Node Buffer decoding parity. `
 `security` (macOS keychain, 30 s timeout), `sqlite3` and `opencode` (channel detection), and
 `codex app-server` (JSON-RPC, 20 s). The Claude usage request sends Node's fetch headers. Known
 JS defects are mirrored on purpose. They are listed in the S3 report, together with the
-malformed-input cases that are not mirrored.
+malformed-input cases that are not mirrored. One is not: a `codex app-server` that exits before
+reading its first request makes the JS die of an uncaught `Error: write EPIPE` (no error listener
+on the child's stdin; incident 1bb84b8fe3dd), where `orch` ignores the write error and times out
+as the JS otherwise would; the parity fake codex reads that request first, so no case races on it.
 
 Two lifecycle details deliberately differ from the JS without changing any output or cache byte.
 A `codex app-server` child that ignores SIGTERM is killed after a 1 s grace and reaped before

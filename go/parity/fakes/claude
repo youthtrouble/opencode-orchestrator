@@ -9,7 +9,10 @@
 # claude-exec sees a close code of null) and <case>.sleep makes it become /bin/sleep for that
 # many seconds (so it is still running when the bridge signals it); with <case>.pid present it
 # first writes its pid to $HOME/fake-claude/pid (outside the compared logs), so a case can
-# check that the process was signalled. Shell builtins only: PATH holds no coreutils.
+# check that the process was signalled.
+#
+# Shell builtins only (and /bin/sleep by its path): a fake must not depend on what else PATH
+# holds.
 # Canned answers (the doctor group), checked before every other mode: when
 # $HOME/fake-answers/claude/<argv joined by "-"> exists (e.g. --version, login-status,
 # debug-agents), it is printed on stdout with every line newline-terminated and the fake exits
@@ -44,5 +47,5 @@ if [ -f "$script/case" ]; then
   if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
   exit "$code"
 fi
-echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
+echo "parity fake ${0##*/}: not scripted for this case (argv: $*)" >&2
 exit 97

@@ -27,8 +27,8 @@ import (
 // exitBothRed is the exit code when neither vendor can run the conductor (EX_TEMPFAIL).
 const exitBothRed = 75
 
-// briefFile is where a headless kickoff writes the conductor's prompt, relative to the root.
-var briefFile = filepath.Join(".orchestrator", "briefs", "conductor-kickoff.md")
+// conductorBrief is where a headless kickoff writes the conductor's prompt, relative to the root.
+var conductorBrief = filepath.Join(".orchestrator", "briefs", "conductor-kickoff.md")
 
 // Args is kickoff's command line: the --brief values in order and the other options.
 type Args struct {
@@ -226,14 +226,14 @@ func doorLine(door, home string, headless bool, postures *routing.Postures) (str
 // lane through `orch worker start`, printing its answer and the watch hint. The exit code is
 // the worker's, or 1 when it gave none.
 func launchHeadless(door, prompt string, d Deps) (int, error) {
-	path := filepath.Join(d.Root, briefFile)
+	path := filepath.Join(d.Root, conductorBrief)
 	if err := nodefs.MkdirAll(filepath.Dir(path)); err != nil {
 		return 0, err
 	}
 	if err := nodefs.WriteFile(path, []byte(prompt+"\n")); err != nil {
 		return 0, err
 	}
-	args := []string{"worker", "start", "--brief", briefFile, "--lane", "conductor", "--harness", door, "--agent", "conductor", "--breadth", "broad", "--cwd", d.Root, "--detach"}
+	args := []string{"worker", "start", "--brief", conductorBrief, "--lane", "conductor", "--harness", door, "--agent", "conductor", "--breadth", "broad", "--cwd", d.Root, "--detach"}
 	if door == flip.DoorClaude {
 		args = append(args, "--permission-mode", "auto")
 	}

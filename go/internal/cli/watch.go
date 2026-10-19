@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -46,8 +47,9 @@ func Watch(args []string, stdio Stdio) int {
 		return 0
 	}
 	frame, err := render()
+	var routingErr *watch.RoutingError
 	switch {
-	case watch.IsRoutingError(err):
+	case errors.As(err, &routingErr):
 		return fail(stdio, "watch", err)
 	case err != nil:
 		return crash(stdio, err)

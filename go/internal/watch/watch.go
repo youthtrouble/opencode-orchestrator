@@ -6,7 +6,6 @@ package watch
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -384,10 +383,4 @@ func Delay(interval any) time.Duration {
 		seconds = jsjson.ToNumber(interval)
 	}
 	return procs.TimerDelay(seconds * 1000)
-}
-
-// IsRoutingError reports whether err is a failed getRouting.
-func IsRoutingError(err error) bool {
-	var routingErr *RoutingError
-	return errors.As(err, &routingErr)
 }

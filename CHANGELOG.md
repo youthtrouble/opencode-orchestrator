@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Go port: the `kickoff` parity group gains the launching cases: headless conductor lanes on
+  claude and opencode (runners settled and everything they wrote compared), the interactive
+  `claude` and `opencode` launches (exit code passed through; a signal exits 0) and a dry run that
+  really starts and then stops a supervisor serve. The fake `opencode` gains a `--prompt` mode
+  (`$HOME/fake-opencode-tui/`), and the fakes no longer call `basename`. `orch watch`'s routing
+  error is matched with `errors.As` (`watch.IsRoutingError` removed). Every `bin/*.mjs` script is
+  now ported; the plugin switch (S10), install (S11) and JS removal (S12) remain.
 - Go port: `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto|claude|opencode] [--headless]
   [--unattended] [--cwd DIR] [--dry-run]` mirrors `bin/kickoff.mjs`: brief checks, refreshed
   routing, door choice, the both-red pause, the preflight (policy, gate, supervisor, git exclude),

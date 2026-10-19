@@ -204,7 +204,8 @@ func TestNextActionVariants(t *testing.T) {
 func TestRoutingFailureIsARoutingError(t *testing.T) {
 	d := newProject(t).deps()
 	d.Routing = func() (*usage.Routing, error) { return nil, errors.New("feeds down") }
-	if _, err := Render(d); !IsRoutingError(err) || err.Error() != "feeds down" {
+	var routingErr *RoutingError
+	if _, err := Render(d); !errors.As(err, &routingErr) || err.Error() != "feeds down" {
 		t.Errorf("err = %v", err)
 	}
 }

@@ -8,8 +8,14 @@
 # Scripted `opencode run`: when $HOME/fake-opencode-run/case names a case, each argv element
 # is appended as one line to $HOME/fake-log/opencode-argv.txt, the physical working directory
 # is written to opencode-cwd.txt and CLAUDECODE (or <unset>) to opencode-env.txt. Then
-# <case>.jsonl, .stderr, .signal, .sleep and .exit act as in the claude fake. Shell builtins
-# only: PATH holds no coreutils.
+# <case>.jsonl, .stderr, .signal, .sleep and .exit act as in the claude fake.
+#
+# Scripted `opencode --prompt` (the TUI kickoff launches): when $HOME/fake-opencode-tui/exit
+# exists, each argv element is appended as one line to $HOME/fake-log/opencode-tui-argv.txt;
+# then, with $HOME/fake-opencode-tui/signal present, the fake kills itself with that signal,
+# else it exits with the code the exit file holds.
+#
+# Shell builtins only: a fake must not depend on what else PATH holds.
 # Canned answers (the doctor group), checked before every other mode: when
 # $HOME/fake-answers/opencode/<argv joined by "-"> exists (e.g. --version, login-status,
 # debug-agents), it is printed on stdout with every line newline-terminated and the fake exits
@@ -24,6 +30,16 @@ fi
 if [ "$1 $2" = "auth list" ] && [ -f "$HOME/fake-opencode/auth-list.txt" ]; then
   while IFS= read -r line; do printf '%s\n' "$line"; done < "$HOME/fake-opencode/auth-list.txt"
   exit 0
+fi
+tui="$HOME/fake-opencode-tui"
+if [ "$1" = --prompt ] && [ -f "$tui/exit" ]; then
+  for arg in "$@"; do printf '%s\n' "$arg" >> "$HOME/fake-log/opencode-tui-argv.txt"; done
+  if [ -f "$tui/signal" ]; then
+    IFS= read -r sig < "$tui/signal"
+    kill "-$sig" $$
+  fi
+  IFS= read -r code < "$tui/exit"
+  exit "$code"
 fi
 script="$HOME/fake-opencode-run"
 if [ "$1" = run ] && [ -f "$script/case" ]; then
@@ -50,5 +66,5 @@ if [ "$1" = run ] && [ -f "$script/case" ]; then
   if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
   exit "$code"
 fi
-echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
+echo "parity fake ${0##*/}: not scripted for this case (argv: $*)" >&2
 exit 97

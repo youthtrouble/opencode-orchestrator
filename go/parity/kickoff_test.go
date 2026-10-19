@@ -40,10 +40,10 @@ type kickoffCase struct {
 	stdout string
 }
 
-// testKickoff compares `orch kickoff` with bin/kickoff.mjs in cases that never launch a
+// testKickoff compares `orch kickoff` with bin/kickoff.mjs, first in cases that never launch a
 // conductor: each stops at the usage, the brief check, the both-red path or a dry run, or
 // crashes before the launch. The supervisor lock is held by this test, so neither
-// `supervisor start` starts a serve.
+// `supervisor start` starts a serve. The launching cases follow (testKickoffLaunches).
 func (h *harness) testKickoff(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	c := newFlipCaches(t)
@@ -101,6 +101,7 @@ func (h *harness) testKickoff(t *testing.T) {
 		t.Parallel()
 		h.testKickoffRegistryMissing(t, seeds(brief, c.green))
 	})
+	t.Run("launch", h.testKickoffLaunches)
 }
 
 // compareKickoff checks that the JS run printed the expected line (or nothing, for ""), then compares the pair.

@@ -17,7 +17,8 @@
 # $HOME/fake-codex-queue/exit exists, each argv element is appended as one line to
 # $HOME/fake-log/codex-queue-argv.txt and the fake exits with the code the file holds.
 #
-# Shell builtins only: PATH holds no coreutils.
+# Shell builtins only (and /bin/sleep by its path): a fake must not depend on
+# what else PATH holds.
 # Canned answers (the doctor group), checked before every other mode: when
 # $HOME/fake-answers/codex/<argv joined by "-"> exists (e.g. --version, login-status,
 # debug-agents), it is printed on stdout with every line newline-terminated and the fake exits
@@ -77,5 +78,9 @@ if [ "$1" = exec ] && [ -f "$script/case" ]; then
   if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
   exit "$code"
 fi
-echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
+# An unscripted app-server still reads the first request before it fails, as a real one would:
+# exiting first races the parent's write into a closed pipe (EPIPE), which macOS rarely and
+# Linux often loses.
+if [ "$1" = app-server ]; then IFS= read -r request || :; fi
+echo "parity fake ${0##*/}: not scripted for this case (argv: $*)" >&2
 exit 97
