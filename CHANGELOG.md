@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- docs: the root README now tells the story (why, benefits and costs, daily commands, how it works,
+  using it on a project, the mailbox in plain words, away mode) with `orch` commands throughout.
+  The technical reference moves to `orchestrator/README.md` (scripts, routing, budgets, flips,
+  supervisor, mailbox, policy, state files, install internals, troubleshooting, security) and
+  `go/README.md` (plugin runtime, `orch` install); new `claude/README.md` covers the Claude Code
+  front door. Fixed `go install ...@v0.5.0` (was `@go/v0.5.0`), removed pre-release wording, and
+  documented that `flip gate --clear` alone does not restart a gated conductor.
+
 ## 0.5.0 — 2026-10-19
 
 The Go runtime release. `orch`, one static Go binary, ports every `orchestrator/bin/*.mjs` script,

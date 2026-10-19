@@ -1,13 +1,16 @@
 # orch: Go runtime of the orchestrator
 
-`orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one. The
-port is incremental (plan: `.orchestrator/plans/go-port.md`); until it is complete the JS runtime
-stays the default and both share the same `.orchestrator/` state. Every command is ported and
-`install.sh` installs `orch` (see [Install](#install)); what remains is removing the JS (S12),
-planned for 0.6.0 behind a human gate. The plugin calls `orch` when its runtime is `go` (see
-"Plugin runtime" in the [README](../README.md#plugin-runtime)); `js` stays the default.
+`orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one,
+released as [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0)
+(2026-10-19). Every script is ported, `install.sh` installs `orch` (see [Install](#install)), and the
+plugin runs on it when its runtime is `go` (see [Plugin runtime](#plugin-runtime)). The JS runtime
+stays the default and both share the same `.orchestrator/` and usage state, so they can run side
+by side. What remains is removing the JS (S12), planned for 0.6.0 behind a human gate.
 
-Implemented (every `bin/*.mjs` command; the plugin calls `orch` when its runtime is `go`):
+For what the orchestrator does and how to use it, see the [root README](../README.md); for the
+scripts' own behaviour and state files, [orchestrator/README.md](../orchestrator/README.md).
+
+Commands (every `bin/*.mjs` script):
 
 | Command | Replaces | Behaviour |
 |---|---|---|
@@ -30,8 +33,7 @@ Implemented (every `bin/*.mjs` command; the plugin calls `orch` when its runtime
 | `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command, the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
 | `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b>` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else `orch flip pause --active <home>` and the message, exit 75), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in `.git/info/exclude`), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (its trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). |
 
-The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin calls `orch` when
-its runtime is `go`; see "Plugin runtime" in the [README](../README.md#plugin-runtime).
+The hidden `orch json-echo [--indent N]` exists for the parity harness.
 
 ## Build
 
@@ -57,40 +59,108 @@ outside a git checkout (a source tarball or `git archive`) records none and prin
 `../install.sh` builds `orch` from the checkout when Go 1.25+ is on `PATH` (`CGO_ENABLED=0 go build
 -trimpath -ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches
 `internal/version/VERSION`, and places it at `~/.local/bin/orch`, recorded in the install receipt.
-Without Go it downloads `orch_<VERSION>_<os>_<arch>` and `checksums.txt` from the GitHub release
-`v<VERSION>` with `curl` and places the asset only when its sha256 matches. `ORCH_BIN_DIR`
-(absolute) chooses another directory; `--skip-binary` installs without `orch`. The
-[README](../README.md#install) lists the refusals and the uninstall behaviour.
+`ORCH_BIN_DIR` (absolute) chooses another directory; `--skip-binary` installs without `orch`.
 
-After the 0.5.0 release is tagged, `orch` also installs without a checkout:
+Without Go it downloads, with `curl`, `orch_<VERSION>_<darwin|linux>_<arm64|amd64>` and
+`checksums.txt` from
+`https://github.com/youthtrouble/opencode-orchestrator/releases/download/v<VERSION>` (override the
+base with `ORCH_RELEASE_BASE_URL`, which must be `https://`), and places the asset only when its
+sha256 matches its `checksums.txt` entry. That is an integrity check only: the checksums come from
+the same release and nothing is signed.
+
+The installer refuses before any change when `orch` already exists at the destination;
+`ORCH_BIN_DIR` is relative, inside the config, checkout or installer state, or on another
+filesystem than the installer state; neither `go` nor `curl` is available; or there is no release
+asset for the platform. A failed download or checksum leaves a recoverable `preparing` receipt.
+If the directory is not on `PATH`, the plugin still finds `~/.local/bin/orch`; other locations
+need `ORCH_BIN=<path>`. Uninstall moves a recorded `orch` into its archive; see
+[orchestrator/README.md](../orchestrator/README.md#install-update-uninstall-and-recovery) for
+uninstall, upgrading from 0.4.x and recovery.
+
+Without a checkout:
 
 ```sh
-go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@go/v0.5.0
+go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
 ```
 
-That binary lands in `$(go env GOBIN)`, or `~/go/bin` when it is unset; the plugin finds it only
-through `ORCH_BIN` or `PATH`.
+The module lives in `go/`, so its tags are named `go/vX.Y.Z`, but `go install` takes the bare
+version. That binary lands in `$(go env GOBIN)`, or `~/go/bin` when it is unset; the plugin finds
+it only through `ORCH_BIN` or `PATH`.
+
+## Plugin runtime
+
+`plugins/orchestrator.ts` has two runtimes. `js` (the default) imports `orchestrator/lib/*.mjs` and
+runs `orchestrator/bin/*.mjs`. `go` runs every tool and hook through `orch` and never loads the JS:
+routing, effort, the budget gate, the mailbox, manifests and incidents are `orch` subcommands, and
+delegate, the workers, the supervisor and the usage-limit flip spawn `orch <script>` with the
+arguments the script gets.
+
+- **Select** with `ORCH_RUNTIME=go` in the environment of the opencode process that loads the
+  plugin; this is the supported switch. For the background service:
+  `opencode service set env ORCH_RUNTIME go`, then `opencode service restart` (undo with
+  `opencode service unset env ORCH_RUNTIME` and another restart); the S10 live check confirmed
+  both. The value is trimmed and case-insensitive; anything other than `js` or `go` is a
+  configuration error.
+- **Plugin options (known limitation):** the plugin also reads `runtime` and `binary` options, and
+  an option wins over the environment. In the S10 live check, object-form options in a project
+  `opencode.jsonc` (`[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]`)
+  did not reach the plugin: the js runtime answered and `opencode plugin list` showed no plugins.
+  This is probably an upstream opencode issue; use `ORCH_RUNTIME` (and `ORCH_BIN`) until it is
+  resolved.
+- **Binary:** the option `binary` (a leading `~` is expanded), then `ORCH_BIN`, then
+  `~/.local/bin/orch`, then each `PATH` entry. An explicit `binary` or `ORCH_BIN` that is not an
+  executable file is an error, never skipped. The binary is resolved once when the plugin loads, so
+  reload opencode after installing or moving `orch`. In go mode `orch` reads the registry
+  `ORCH_REGISTRY`, else `$ORCH_HOME/models.json`, else the installed `models.json`.
+- **Failure policy:** fail loudly, never fall back to JS. With an unknown runtime or no binary the
+  plugin still loads, every `orch_*` tool returns the configuration error (`orch binary not found
+  (looked in: ...)`), and the hooks degrade as when usage is unavailable (no budget block, no
+  subagent gate). The `execute.after` incident for that error cannot be recorded.
+- **Go-mode deviations** (accepted in the S10 plan):
+  - D-S10-1: `manifest_create` with no paths is a tool error (JS writes an empty manifest).
+  - D-S10-2: an `execute.after` incident without a known project directory names the plugin's
+    working directory as its project (JS records none).
+  - D-S10-3: incident context values travel as `--ctx k=v` strings, cut at a second `=`.
+  - D-S10-4: free text beginning with `--` that would travel as an argument is refused before
+    `orch` runs (bodies and details go on stdin and are exempt).
+  - D-S10-5 (PE-4): an incident's `version` is the `orch` version, not the checkout's HEAD.
+  - D-S10-6 (PE-11): an aborted or timed-out delegate shows the Go bridge's FAILED result instead
+    of the stderr tail.
+  - D-S10-7 (both runtimes, a fix): a command that cannot be started is a failed run (in go mode
+    an `orch <sub>: could not start ...` tool error) instead of an uncaught crash of the host.
+- **Rollback:** unset `ORCH_RUNTIME` (or set it, or the option, to `js`) and reload or restart.
+- **Which runtime answered:** `orch_usage_status` metadata carries `runtime` and `orch` (the binary
+  path); a new incident's `version` is the `orch` version in go mode (`0.5.0 (<rev>)`, or a bare
+  `0.5.0` for a binary built outside a checkout), and in js mode the checkout's `.git/HEAD` text
+  (for example `ref: refs/heads/main`) or `unknown`.
+
+`../tests/plugin-routing.test.mjs` and `../tests/plugin-tools.test.mjs` drive both runtimes through
+a fake opencode context against fakes; `../tests/plugin-orch-parity.test.mjs` runs each lib-backed
+tool and hook in both runtimes against the real `orch` (built into a temp dir, or `ORCH_TEST_BIN`)
+and compares the results. It skips only when neither `go` nor `ORCH_TEST_BIN` is available.
 
 ## Release checklist (maintainer, human-gated)
 
 Tagging and publishing are a human gate: no agent runs these steps.
 
-1. Bump `internal/version/VERSION` (it is `0.5.0` for this release).
-2. Date the release heading in `../CHANGELOG.md` (`## 0.5.0 — unreleased` becomes
-   `## 0.5.0 — <YYYY-MM-DD>`).
-3. On a clean tree, run `./scripts/build-all.sh`: it writes the four `dist/orch_0.5.0_*` assets
+Written for version `X.Y.Z`; 0.5.0 was released this way on 2026-10-19.
+
+1. Bump `internal/version/VERSION` to `X.Y.Z`.
+2. Date the release heading in `../CHANGELOG.md` (`## X.Y.Z — <YYYY-MM-DD>`).
+3. On a clean tree, run `./scripts/build-all.sh`: it writes the four `dist/orch_X.Y.Z_*` assets
    (darwin and linux, arm64 and amd64) and `dist/checksums.txt`.
-4. Tag the commit `v0.5.0` (the installer's download path) and `go/v0.5.0` (the Go module tag
-   `go install` resolves, since the module lives in `go/`).
-5. Publish a GitHub release for `v0.5.0` with the four `orch_0.5.0_*` assets and `checksums.txt`.
+4. Tag the commit `vX.Y.Z` (the installer's download path) and `go/vX.Y.Z` (the Go module tag,
+   since the module lives in `go/`).
+5. Publish a GitHub release for `vX.Y.Z` with the four `orch_X.Y.Z_*` assets and `checksums.txt`.
    The installer fetches
-   `https://github.com/youthtrouble/opencode-orchestrator/releases/download/v0.5.0/<asset>`; that
-   URL shape is unverified until this release exists.
+   `https://github.com/youthtrouble/opencode-orchestrator/releases/download/vX.Y.Z/<asset>`.
 6. In a throwaway HOME with no `go` on `PATH`, check that `./install.sh` downloads `orch`, verifies
    its checksum and places it; then check that
-   `go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@go/v0.5.0` works.
-7. Reinstall into your own live config (`./uninstall.sh` then `./install.sh`, see the root README
-   "Upgrading from 0.4.x") yourself; it is not part of any automated run.
+   `go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@vX.Y.Z` works (the bare
+   version, not the `go/` tag name).
+7. Reinstall into your own live config (`./uninstall.sh` then `./install.sh`; see "Upgrading from
+   0.4.x" in [orchestrator/README.md](../orchestrator/README.md#install-update-uninstall-and-recovery))
+   yourself; it is not part of any automated run.
 
 ## Environment
 

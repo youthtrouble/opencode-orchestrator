@@ -1,638 +1,329 @@
 # opencode-orchestrator
 
-Two-vendor, budget-aware engineering orchestration for **opencode v2**. A conductor turns an idea
-into bounded briefs, assigns models to roles, asks for independent review, runs verification, and
-records enough state to resume later. Usage windows steer work away from a constrained vendor.
+A global orchestrator for [opencode](https://opencode.ai) v2 that builds software the way a small
+senior team would: one model plans, another writes the code, a model from the *other* vendor reviews
+it, and a cheap model runs the real checks. It spends two subscriptions you already pay for, a
+Claude plan (through Claude Code) and a ChatGPT plan (through Codex), and watches both usage
+windows so work keeps moving when one of them runs low.
 
-- **Claude subscription via Claude Code:** Anthropic subscription work goes through the Claude Code
-  CLI bridge, not native subscription OAuth inside opencode. Native Anthropic API-key access is a
-  separate option, not this subscription setup.
-- **ChatGPT subscription via Codex / opencode:** OpenAI work can run natively through opencode's
-  ChatGPT sign-in, or through the Codex CLI bridge.
+Current release: [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0)
+(2026-10-19). MIT licensed.
 
-This is an inspectable collection of prompts, configuration, a plugin, dependency-free Node
-scripts and their Go port (`orch`), not a guarantee of unattended delivery. It has shipped itself
-once end to end (plan, build, cross-vendor review, verification, publish); see
-[verification and limitations](#verification-and-limitations).
+## Why it exists
 
-There are two front doors over the same project state:
+Two subscriptions give you two families of strong models and two separate usage budgets. Used by
+hand, you end up copying context between tools, reviewing your own model's work with the same
+model, and stalling whenever one window hits its cap. This project turns that into a routine:
 
-- `opencode` (default agent `conductor`): OpenAI-native conductor; Anthropic roles run through the Claude Code bridge.
-- `claude --agent conductor`: Anthropic-native conductor; OpenAI roles run through the Codex bridge.
+- **Right model for the job.** Frontier models (Claude Fable 5.1, GPT-6 Astra) plan. Capable models
+  (Claude Opus 5.5, GPT-6.1 Sol) write code. Cheaper models (Sonnet 5.5, Sol at medium, GPT-6 Luna)
+  review and verify. Effort scales with the size of the task, not a fixed setting.
+- **Independent review.** Code written by one vendor is reviewed by the other, against a sha256
+  manifest of exactly the files that were released. Nobody approves their own work.
+- **Budget awareness.** It reads the Claude session and Fable weekly windows and the Codex 5-hour
+  and weekly windows. Each vendor is green, amber or red; red work moves to the other vendor, and
+  coding is balanced toward whoever has more headroom.
+- **It keeps going without you.** Two front doors, opencode and Claude Code, hand the project back
+  and forth as budgets change. A per-project supervisor restarts a stopped conductor and resumes it
+  after a reset. Verified slices are pushed for you; releases, deletions, spending and deploys wait
+  for your answer.
+- **Everything is on disk.** Plans, briefs, reports, reviews, manifests, questions and the exact
+  next step live in `.orchestrator/` inside your project, so any session, either vendor or you can
+  pick up cold.
 
-When one vendor's window is exhausted, continue from the other door with `/continue`.
+## The catch
 
-## Daily operations (cheat sheet)
+- **Two paid subscriptions and three CLIs.** You need a Claude plan that includes Claude Code, a
+  ChatGPT plan that includes Codex, and `opencode`, `claude` and `codex` installed and logged in.
+- **macOS or Linux only.** Releases are checked on macOS; Linux and Node 22 are supported in
+  principle but not exercised.
+- **Claude runs through a bridge.** opencode v2 has no native Claude subscription sign-in, so Claude
+  work runs as `claude -p` (Claude Code print mode) sessions. They are separate processes with their
+  own context, not opencode subagents.
+- **Cross-vendor review needs both budgets.** When the reviewing vendor is red, review waits (other
+  slices continue) or a same-vendor review is used and labelled as such.
+- **Budgets are advisory.** Usage comes from each vendor's own feeds; when a reading is unavailable
+  the bridges proceed rather than block.
+- **Known Codex bridge issue.** On codex-cli 0.162.1 the Codex bridge (`/delegate-codex`,
+  Codex-backed workers) fails argument parsing before a model turn. Native OpenAI subagents inside
+  opencode are unaffected.
+- **The Go runtime is opt-in until 0.6.0**, and per-project plugin options do not reach the plugin
+  yet: switch runtimes with the `ORCH_RUNTIME` environment variable (see [Go runtime](#go-runtime)).
+- **It is not a sandbox.** Models run tools and shell commands with the permissions you grant, and
+  by default push verified slices to `main`.
 
-All paths assume the default install (`~/.config/opencode/orchestrator/bin`, abbreviated `$ORCH` below:
-`ORCH=~/.config/opencode/orchestrator/bin`).
+## How do I...
+
+**...use it on a project?** `cd` into the repo and run `opencode` (its default agent is the
+conductor) or `claude --agent conductor`. Describe what you want. That is all interactive use needs:
+the conductor plans, delegates, reviews and verifies, and asks you questions in the chat.
+
+**...know where to type `orch` commands?** In a normal terminal, or after `!` in Claude Code. Not
+in the opencode chat: there you just talk, and the conductor runs the same tools itself. `orch` is
+for checking on and steering runs when no chat is open.
+
+**...deal with the mailbox? Do I need to watch it?** Only when the conductor runs unattended in the
+background (after `orch kickoff --headless`, after a flip to the other vendor, overnight). Then it
+cannot ask you in a chat, so it uses the mailbox: a shared inbox file in your project,
+`.orchestrator/mailbox/messages.jsonl`, where background agents leave questions and notes for you
+and for each other, and where your answers go. Questions come in two kinds:
+
+- **Blocking:** releases, deleting code, spending money, deploying. The conductor asks, keeps
+  working on anything independent, and stops at a human gate only when nothing else is left.
+- **Continuing with an assumption:** product questions. The conductor writes its assumption into
+  `STATE.md` and the report, asks, and carries on. Answer when you can; it reads your reply on its
+  next turn.
+
+`orch watch` lists them under "QUESTIONS FOR YOU"; `orch mailbox inbox` prints each with its reply
+command.
+
+**...leave it running while I'm away?** From a terminal in the repo, with a brief written to
+`.orchestrator/briefs/<idea>.md`:
+
+```sh
+orch kickoff --brief .orchestrator/briefs/<idea>.md --headless --unattended
+```
+
+`--headless` runs the conductor in the background instead of opening a session in your terminal;
+`--unattended` applies the away-mode policy (push verified slices, continue past product questions).
+Releases, code deletion, spending and deploys still ask; force-pushes never happen. Change a
+project's policy with `orch policy set <key>=auto|ask`, for example `release=auto` (see the
+[policy reference](orchestrator/README.md#autonomy-policy-and-human-gates)). Telling an interactive
+conductor to "go unattended" is not a defined workflow; use kickoff.
+
+**...check in, answer, or unblock it?**
+
+```sh
+orch watch --follow                                     # one live screen; Ctrl-C to leave
+orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"  # the id, or its first 8 characters
+orch flip run --to opencode                             # after a gate: clear it and restart (or --to claude)
+```
+
+`orch flip gate --clear` removes a gate marker but does not restart a conductor that stopped at it;
+`orch flip run` or `orch kickoff` does both. Details are in [step 3](#3-while-it-runs).
+
+| Inside opencode / Claude Code (chat) | In a terminal (`orch`) |
+|---|---|
+| Describe what you want; answer questions in the chat | `orch kickoff --brief <file> --headless --unattended` to run in the background |
+| `/usage`, `/plan <idea>`, `/ship <idea>`, `/brief` (opencode) | `orch watch --follow`, `orch usage --refresh` to check in |
+| `/continue` (opencode) to resume from `STATE.md` | `orch mailbox inbox`, `orch mailbox reply <id> "..."` to answer |
+| The conductor runs the same tools for you | `orch flip run --to <door>`, `orch worker stop --lane conductor` to steer |
+
+## Daily commands
+
+`orch` is the orchestrator's command-line tool, installed to `~/.local/bin` (put that directory on
+your `PATH`). Run these from inside your project.
 
 | You want to | Command |
 |---|---|
-| Start a run (picks the door by budget; use `--unattended` before leaving) | `node $ORCH/kickoff.mjs --brief .orchestrator/briefs/<brief>.md [--brief <side>.md] [--headless] [--unattended]` |
-| One live screen: budgets, routing, lanes, flip, mailbox, questions | `node $ORCH/watch.mjs --follow` |
-| See questions waiting for you | `node $ORCH/mailbox.mjs inbox` |
-| Answer one | `node $ORCH/mailbox.mjs reply <id> "your answer"` |
-| Budgets and routing right now | `node $ORCH/usage.mjs --refresh` |
-| What the conductor may do without asking | `node $ORCH/policy.mjs show` / `policy.mjs unattended` / `policy.mjs set release=auto` |
-| Release a human gate (after you acted) | `node $ORCH/flip.mjs gate --clear` |
-| Flip state / force a door | `node $ORCH/flip.mjs status` / `flip.mjs run --to claude` |
-| Workers and supervisor | `node $ORCH/worker.mjs status` · `supervisor.mjs start|status|stop` |
-| Take the wheel interactively (stop the headless lane first) | `node $ORCH/worker.mjs stop --lane conductor` then `claude --agent conductor` or `opencode` + `/continue` |
-| What went wrong lately (orchestrator defects) | `node $ORCH/incident.mjs report` |
-| Health check | `node $ORCH/doctor.mjs` |
+| Start a run (picks the door by budget) | `orch kickoff --brief .orchestrator/briefs/<name>.md [--headless] [--unattended]` |
+| See everything on one screen | `orch watch --follow` |
+| See questions waiting for you | `orch mailbox inbox` |
+| Answer one | `orch mailbox reply <id> "your answer"` |
+| Budgets and routing right now | `orch usage --refresh` |
+| What the conductor may do without asking | `orch policy show` |
+| Restart the conductor on a door | `orch flip run --to claude` (or `--to opencode`) |
+| Pause the background conductor | `orch flip gate --reason "paused"` then `orch worker stop --lane conductor` |
+| Supervisor | `orch supervisor status` / `start` / `stop` |
+| Recent orchestrator defects | `orch incident report` |
+| Health check | `orch doctor` |
 
-## Requirements
+Without `orch`, every command also exists as `node ~/.config/opencode/orchestrator/bin/<name>.mjs`.
 
-- macOS or Linux, Bash 3.2+, Node 22+, Git, opencode v2, Claude Code and Codex on `PATH`.
-- Access to the configured models through your own subscriptions; authenticate each CLI separately.
-- Config and installer state on the same filesystem, so backup/restore can use atomic renames.
-- The current runtime expects `~/.config/opencode`. Nondefault `XDG_CONFIG_HOME` is rejected by the
-  installer; installing elsewhere would not retarget the runtime's hardcoded home-relative paths.
-- Optional: Go 1.25+ on `PATH`, so the installer builds the `orch` binary from the checkout.
-  Without Go it downloads the release asset with `curl`, which works only once 0.5.0 is published.
-  `./install.sh --skip-binary` installs the JS runtime only, without `orch`.
+## How it works
 
-Release checks used macOS, Node v26.5.1, opencode v2.0.32, Claude Code 2.1.287 and codex-cli 0.162.1.
-Linux and Node 22 are supported assumptions, not independently exercised release environments.
-No npm install is required to run the orchestrator.
+```text
+  you: idea or brief
+        |
+        v
+  conductor  ---- opencode door (OpenAI-native) <-> Claude Code door (Anthropic-native)
+        |         reads budgets, .orchestrator/STATE.md and the mailbox
+        |
+        +--> planner   Fable 5.1 / GPT-6 Astra      writes plans/ and bounded briefs/
+        +--> coder     Opus 5.5 / GPT-6.1 Sol       one slice, checks, report, manifest
+        +--> reviewer  the other vendor             reviews the manifest's bytes
+        +--> verifier  Sonnet 5.5 / GPT-6 Luna      runs the real checks
+        |
+        v
+  STATE.md updated, slice pushed, next brief
+```
 
-## Install
+**The conductor** never writes product code. It plans with a frontier model, hands each bounded
+brief to a coder, sends the result to the other vendor for review, has a verifier run the real
+checks, and records the next step. All routing comes from one file,
+[`orchestrator/models.json`](orchestrator/models.json): roles, tiers, thresholds, effort policy and
+autonomy.
 
-Intended repository: <https://github.com/youthtrouble/opencode-orchestrator>.
-Inspect the checkout before running:
+**Budgets.** A vendor is amber at 60% used and red at 85%. The 5-hour window decides routing; a
+weekly cap only matters once it is red. Fable is used only while Claude's frontier posture is green.
+
+**Two front doors.** `opencode` runs the OpenAI-native conductor and reaches Claude through
+`claude -p`. `claude --agent conductor` runs the Anthropic-native conductor and reaches OpenAI
+through Codex. Only one drives a project at a time. At each brief boundary the conductor checks the
+budgets: if its own vendor is red it flips to the other door; the away door hands back once home
+(opencode by default) has been green for 10 minutes. If both are red it pauses, and the supervisor
+relaunches it at the first reset.
+
+**Background runs.** A headless conductor runs as the worker lane `conductor`. Each lane has a
+two-hour limit by default; when one ends early or fails, the supervisor relaunches the conductor,
+which resumes from `STATE.md`. Background processes are kept awake with `caffeinate` (macOS) or
+`systemd-inhibit` (Linux); a closed laptop lid still sleeps unless you run in clamshell mode with
+power and an external display.
+
+## Use it on a project
+
+### 1. Install once
+
+Prerequisites: macOS or Linux, Bash 3.2+, Node 22+, Git, opencode v2, Claude Code, Codex, and
+optionally Go 1.25+ (to build `orch` locally; without Go the installer downloads it).
 
 ```sh
-git clone https://github.com/youthtrouble/opencode-orchestrator opencode-orchestrator
-cd opencode-orchestrator
+git clone https://github.com/youthtrouble/opencode-orchestrator ~/Developer/opencode-orchestrator
+cd ~/Developer/opencode-orchestrator
 claude auth login
 codex login
 opencode auth login openai --method chatgpt-token-sharing
-./install.sh
+./install.sh           # links the config into ~/.config/opencode and installs orch to ~/.local/bin
+./install-claude.sh    # links the Claude Code agents and skill into ~/.claude
+orch doctor            # expect OK rows; WARN means look closer, FAIL exits nonzero
 ```
 
-Installation defaults to **managed-entry symlinks**, not a symlink of the whole config directory.
-The installer creates a real `~/.config/opencode` directory and links `AGENTS.md`, `opencode.jsonc`,
-`agents`, `commands`, `skills`, `plugins`, `orchestrator`, `install.sh` and `uninstall.sh` to the
-checkout. Global runtime files such as `service.json` therefore stay outside the checkout. Keep the
-checkout at a stable path. Documentation and root integration tests stay in the checkout.
+If the shell cannot find `orch`, add `~/.local/bin` to your `PATH`. Keep the checkout where it is:
+`~/.config/opencode` links back to it. `./install.sh --help` lists
+`--copy`, `--force` and `--skip-binary`; `./uninstall.sh` restores your previous config. Details,
+updates and recovery are in [orchestrator/README.md](orchestrator/README.md#install-update-uninstall-and-recovery).
+
+### 2. Start a project
+
+**Talk to it.** In your project directory run `opencode` (the default agent is the conductor) or
+`claude --agent conductor`, and describe what you want. Useful commands inside opencode: `/usage`,
+`/plan <idea>`, `/ship <idea>`, `/continue`. In this mode the conductor asks you questions in the
+chat.
+
+**Or hand it a brief and let it run.** Write a short brief (outcome, acceptance criteria,
+constraints, rough size) to `.orchestrator/briefs/<name>.md`, or ask the conductor for one with
+`/brief`, then:
 
 ```sh
-./install.sh --copy   # Copy managed entries instead of linking them
-./install.sh --force  # Preserve an existing config before installing
+orch kickoff --brief .orchestrator/briefs/<name>.md                          # interactive, best door
+orch kickoff --brief .orchestrator/briefs/<name>.md --headless --unattended  # background, you leave
 ```
 
-Any existing target—including a regular file or broken symlink—is refused without `--force`.
-Force does **not** merge configs or delete the old one: it moves the old target into private backup
-storage. Stop affected opencode sessions/background service, supervisors and workers before using
-`--force`, so they cannot keep writing into the moved config. Custom configuration, agents/plugins,
-runtime files such as `service.json`, and package/dependency files including `node_modules` move
-with the old target; they are not merged into the new installation and need restoration or explicit
-manual reconciliation. Copy mode excludes history, dependencies, logs and runtime state, and refuses symlinks
-inside managed source entries rather than following unknown data.
+Kickoff refreshes budgets, starts the supervisor, adds `.orchestrator/` to `.git/info/exclude`,
+picks the door whose vendor has headroom (home first) and launches the conductor. Extra `--brief`
+files run as side work when budget allows. `--door claude|opencode` forces a door; `--dry-run`
+shows the choice without launching (it still runs the preflight). If both vendors are red it
+records a pause, exits 75, and the supervisor starts the run at the first reset.
 
-Installer state lives in `$XDG_STATE_HOME/opencode-orchestrator`, defaulting to
-`~/.local/state/opencode-orchestrator`. The state directory is private (0700), receipts are 0600,
-and state inside the checkout/config is rejected. There can be only one active installation receipt.
+### 3. While it runs
 
-After deployment, the installer runs `opencode reload`, then the doctor at the **installed**
-`~/.config/opencode/orchestrator/bin/doctor.mjs` path. Missing prerequisites are checked before
-mutations. A reload or doctor failure returns nonzero and preserves the installed target, receipt
-and backup for recovery; it is not reported as a successful installation.
-
-The installer also builds the Go `orch` binary from the checkout (`CGO_ENABLED=0 go build -trimpath
--ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches `go/internal/version/VERSION`,
-and places it at `~/.local/bin/orch`; set `ORCH_BIN_DIR` (absolute) to choose another directory.
-Without Go 1.25+ on `PATH` it downloads the release asset instead, with `curl`:
-`orch_<VERSION>_<darwin|linux>_<arm64|amd64>` and `checksums.txt` from
-`https://github.com/youthtrouble/opencode-orchestrator/releases/download/v<VERSION>` (override the
-base with `ORCH_RELEASE_BASE_URL`, which must be `https://`). The asset's sha256 must match its
-`checksums.txt` entry before it is placed. That is an integrity check only: the checksums come from
-the same release and nothing is signed. The download works only once the 0.5.0 release exists; until
-then install Go or pass `--skip-binary`. The installer refuses before any change when `orch` already
-exists at the destination, `ORCH_BIN_DIR` is relative, inside the config, checkout or installer
-state, or on another filesystem than the installer state, when neither `go` nor `curl` is available,
-or when there is no release asset for the platform. A failed download or checksum leaves the
-recoverable `preparing` receipt. `./install.sh --skip-binary` installs exactly as before, without
-`orch`. If the directory is not on `PATH`, the plugin still finds `~/.local/bin/orch`; other
-locations need `ORCH_BIN=<path>`.
-
-### Upgrading from 0.4.x
-
-An active 0.4.x installation has no `orch` in its receipt, and a reinstall is not migrated
-automatically. Either uninstall and reinstall (`./uninstall.sh`, then `./install.sh`), so the
-receipt records the binary, or build it by hand into the default location:
+**Answering questions.** A background conductor asks through the mailbox (see
+[the mailbox](#how-do-i) above). Run these in the project directory:
 
 ```sh
-(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch ./cmd/orch)
+orch watch --follow                    # live screen; "QUESTIONS FOR YOU" is listed at the top
+orch mailbox inbox                     # the open questions, each with its reply command
+orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"   # the id or its first 8 characters
 ```
 
-A hand-built `orch` is not tracked by the receipt: uninstall leaves it in place, and a later
-`./install.sh` refuses while it exists (remove it, set `ORCH_BIN_DIR`, or pass `--skip-binary`).
+**Clearing a gate.** A conductor stopped at a human gate stays stopped; the supervisor will not
+relaunch it. Do the thing it asked for (or answer it), then start it again: `orch flip run --to
+opencode` (or `--to claude`) or rerun `orch kickoff`. Both clear the gate. `orch flip gate --clear`
+only removes the marker.
 
-### Uninstall and recover
+**Restarting or moving the conductor.** `orch flip run --to claude` (or `--to opencode`) writes a
+continue brief and starts that door's conductor in the background. If a conductor is still running,
+the launch is queued until it stops; stop it first with `orch worker stop --lane conductor` to move
+now.
+
+**Pausing.** Stopping the conductor alone is not enough: the supervisor relaunches a stopped
+conductor. Mark the project as waiting for you first, then stop it:
 
 ```sh
-./uninstall.sh
-# Or, while installed:
-bash ~/.config/opencode/uninstall.sh
+orch flip gate --reason "paused by me"
+orch worker stop --lane conductor
 ```
 
-Uninstall verifies the receipt, target identity, managed contents/link destinations and backup
-identity. It restores the previous config when one existed and archives the removed installation
-and receipt under a unique private `uninstalled-*` directory. It never recursively deletes an
-installation. Known runtime additions are preserved in that archive; backups are never placed in
-tracked source. Repeating uninstall with no active receipt is a no-op. A recorded `orch` binary
-is moved into that archive as `removed-binary`. It is left in place, with a message, when it is
-not a regular file, when an interrupted install never placed it (a different file now sits at
-the destination), or when the archive already holds a `removed-binary`. Uninstall code from
-0.4.x ignores the `binary` receipt field, so after a downgrade `orch` stays where it was.
+Resume with `orch flip run --to <door>` or `orch kickoff ...`. `orch supervisor stop` stops all
+background supervision for the project (workers keep running). To take the wheel yourself, pause as
+above, then open `opencode` and type `/continue`, or `claude --agent conductor` and ask it to
+continue from `STATE.md`.
 
-Changed/unrecognized targets, missing/replaced backups and invalid receipts are refused. Preserve
-and reconcile local changes before retrying; do not delete recovery state to bypass a refusal.
-Symlink-source Git updates are expected; copy-mode local content/mode changes are detected.
-Uninstall needs only Bash and Node and does not run service commands. Reload opencode separately
-when ready to use the restored config.
+### 4. Where things live in your project
 
-For an "Installed config changed" refusal:
-
-1. Stop affected processes. Make a private backup of the current config and installer state outside
-   the checkout; preserve the opaque original backup and do not edit the receipt/fingerprint.
-2. Keep the installed root directory in place so its identity remains valid. Inspect the reported
-   changes against the version originally installed, not an updated checkout.
-3. Move only identified local additions (for example, newly created package/dependency files) into
-   private holding storage. Restore only known managed entries/link destinations/permissions to
-   their installed state, preserving changed content first, then retry uninstall.
-4. If the installed state cannot be established, or target/backup identity is unrecognized, stop
-   for manual recovery. Do not blindly delete unfamiliar files or bypass ownership checks.
-
-A failed install normally remains recoverable with `./uninstall.sh`. An interrupted operation can
-leave `operation.lock`; confirm no installer is running before manually reconciling a stale lock.
-Low-level storage failures before receipt persistence may require manual recovery. Do not assume
-power-loss durability or delete an opaque backup because a command failed.
-
-### Claude Code side (Anthropic-native conductor)
-
-```sh
-./install-claude.sh          # symlinks claude/agents/*.md and claude/skills/orchestrator into ~/.claude
-claude --agent conductor     # in any repo
-./install-claude.sh --uninstall
-```
-
-The Claude Code conductor uses the same `.orchestrator/` state, mailbox, manifests and bridges.
-Its subagents: `architect` / `architect-hard` (Fable 5.1 high / max), `coder` / `coder-hard`
-(Opus 5.5 medium / xhigh), `verifier` and `researcher` (Sonnet 5.5 low), and a same-vendor
-`reviewer` used only when the OpenAI window is red. Cross-vendor review goes through the Codex
-bridge or `codex review`.
-
-### Update
-
-The Git checkout is the source of truth; `~/.config/opencode` only holds links to it plus runtime
-files. Edit in the checkout, commit, push. For a symlink installation, pull updates in the
-**checkout**, review them, run both test suites, then reload and check health:
-
-```sh
-git pull
-node --test orchestrator/tests/*.test.mjs
-node --test tests/*.test.mjs
-(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch ./cmd/orch)
-opencode reload
-node ~/.config/opencode/orchestrator/bin/doctor.mjs
-```
-
-Copy installations do not follow Git updates: uninstall first, update the checkout, then reinstall
-with `--copy` (and `--force` if the restored previous config occupies the target). Preserve local
-changes before uninstalling. The older nested `orchestrator/bin/setup.sh` is a legacy auth/setup
-helper, not the reversible installer documented here.
-
-## One-command runs
-
-```sh
-node ~/.config/opencode/orchestrator/bin/kickoff.mjs --brief .orchestrator/briefs/<brief>.md [--brief <side-brief>.md] [--headless]
-node ~/.config/opencode/orchestrator/bin/watch.mjs --follow
-```
-
-`kickoff` refreshes budgets, starts the project supervisor, excludes `.orchestrator/` from git, picks
-the door whose vendor has headroom (home first), and launches the conductor with the right prompt,
-interactive by default or as a headless `conductor` lane with `--headless`. If both vendors are red
-it records a pause and the supervisor starts the run by itself at the first reset. `watch` is one
-refreshing screen: budgets, routing, supervisor, flip state, lanes, mailbox, incidents, next action.
-
-## First run and the conductor loop
-
-Run `opencode` from the project you want to work on, not necessarily this checkout. The installed
-default agent is `conductor`. Start with `/usage`, then `/plan <idea>` or `/ship <idea>`.
-
-1. **Orient:** read project `AGENTS.md`, `.orchestrator/STATE.md`, mailbox and current budgets.
-2. **Plan:** a planner writes bounded briefs with acceptance criteria and explicit scope.
-3. **Build:** a coder implements one slice, runs checks, writes a report and hashes release files.
-4. **Review:** the other vendor reviews that fingerprint; the author fixes findings and releases
-   a new manifest. Nobody approves their own work. If the other vendor is unavailable, disclose
-   the unmet cross-vendor gate rather than treating same-vendor review as equivalent.
-5. **Verify:** run the real checks; unrun checks stay "not run", unmet criteria stay "partial".
-6. **Record:** update the continuation cursor and mailbox so another session can resume.
-
-What the conductor may do without asking is the autonomy policy (`models.json` -> `autonomy`,
-overridable per project): by default it pushes verified slices to `main` itself (`push_to_main:
-auto`), asks before releases, code deletion, spending and deployments (`ask`), and never
-force-pushes (`force_push: never`); see [Answering the conductor and running
-unattended](#answering-the-conductor-and-running-unattended). Prompts and permission rules are not
-a security sandbox for every external CLI or tool.
-
-## Roles and routing
-
-`orchestrator/models.json` is the strict-JSON source of truth: `vendors` define labels, windows and
-tiers; `roles.*.prefer` defines fallback order; `thresholds` defines budget posture. `$comment`
-describes the schema. These are the prepared registry's configured defaults, not a promise that
-every model ID is available on every account:
-
-| Role               | Preferred model                                                                 | Main fallback                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Planner            | Claude Fable 5.1 while Claude's frontier posture is green; else Claude Opus 5.5 | GPT-6.1 Sol. A `size=hard` planning delegation takes a frontier tier that is not red: Fable, else GPT-6 Astra |
-| Coder              | Claude Opus 5.5                                                                 | GPT-6.1 Sol; it goes first when it has more than 15 points more five-hour headroom                            |
-| Reviewer           | Other vendor's mid tier: Sonnet 5.5 or GPT-6.1 Sol, medium                      | Other vendor's cheap tier; then same-vendor mid tier, explicitly marked                                       |
-| Verifier           | Claude Sonnet 5.5                                                               | GPT-6 Luna; then Claude Haiku 5.5                                                                             |
-| Researcher         | Claude Sonnet 5.5                                                               | GPT-6 Luna                                                                                                    |
-| Explorer / utility | Claude Haiku 5.5                                                                | GPT-6 Luna                                                                                                    |
-
-Reasoning effort is not pinned to a model: an explicit `effort` wins, otherwise `effort_policy`
-picks it from the task `size` given to `delegate` (planner: medium -> high, hard -> max; coder:
-medium -> medium, large -> high, hard -> xhigh), and the tier's own `variant`/`effort` is the last
-fallback. Native subagents run at their model's default effort, so large and hard tasks go through
-the CLI bridges, where the policy effort applies.
-
-Native OpenAI subagents include `architect-oai`, `coder-oai`, `reviewer-oai`, `verifier-oai` and
-`researcher-oai`. When routing selects a native agent, `delegate` returns which subagent to call
-rather than launching the CLI bridge. Claude subscription work uses the Claude Code bridge.
-
-Budget defaults are **amber at 60% used**, **red at 85% used**, judged on the raw percentage. An
-imminent reset never makes a window greener: a reset within `soon_minutes` (20) is only reported as
-resetting soon. A rate-limit lock makes the window red. The five-hour window (Claude session, Codex
-five-hour) drives routing; a weekly cap blocks its vendor only when red. Role resolution uses a
-frontier tier (Fable) only while that vendor's frontier posture is green; Claude's frontier posture
-also counts the model-scoped Fable weekly window. When both vendors can serve the coder, verifier,
-researcher, explorer or utility role at an equivalent tier, the one with more five-hour headroom
-wins if it leads by more than `balance_margin` (15) points; otherwise the registry order decides.
-
-One override can start frontier work near a cap: a `delegate` call with `role: planner` and `size:
-hard` that names no harness (nor a `gpt-*`, `o<digit>…` or `claude*` model, which implies one)
-replaces a non-frontier planner with the first frontier tier whose vendor is available and whose
-frontier posture is **not red** (amber or unknown included), Anthropic (Fable) before OpenAI (GPT-6
-Astra). With an explicit harness this override does not apply: the routed role is kept if it is on
-that harness's vendor, otherwise that vendor's registry tier for the role is used (the frontier tier
-for a planner), whatever its posture; the bridges' own budget check still applies.
-
-Red roles route to another usable vendor or pause. Cross-vendor review may be unavailable even
-when coding can continue. The CLI bridges refuse known-red budgets with exit 75 unless explicitly
-forced. **This is advisory, not a hard quota:** automatic routing avoids unavailable feeds, but
-bridge budget checks can proceed when usage is unknown. Check `/usage` before expensive work;
-do not use force as the routine response to a red window.
-
-To change policy, edit `thresholds`, tier fields or role preference lists in `models.json`, keep
-valid JSON, run the unit tests, and reload opencode. The plugin syncs native model choices from
-the registry; audit static agent/config fallbacks too when changing model IDs. No personal
-subscription tier/catalog observations are needed in public configuration.
-
-## Commands and tools
-
-| Command                               | Purpose                                                      |
-| ------------------------------------- | ------------------------------------------------------------ |
-| `/usage`                              | Refresh usage and explain routing                            |
-| `/plan`, `/brief`                     | Plan work and write bounded worker briefs                    |
-| `/ship`                               | Follow the build/review/verify loop                          |
-| `/review`                             | Request independent review and verification                  |
-| `/delegate-claude`, `/delegate-codex` | Request a bounded task on a specific CLI harness             |
-| `/continue`, `/handoff`               | Resume or write continuation state                           |
-| `/retro`                              | Inspect recent run/review outcomes                           |
-| `/audit-orchestrator`                 | Recheck model catalogs, CLI compatibility and policy sources |
-
-The plugin registers the `orch` namespace (often displayed as `orch_*`):
-
-| Tool                                 | Purpose                                                                      |
-| ------------------------------------ | ---------------------------------------------------------------------------- |
-| `usage_status`                       | Cached/fresh usage and role routing                                          |
-| `delegate`                           | Route a bounded brief or direct the conductor to a native subagent           |
-| `codex_review`                       | Invoke Codex's review harness; CLI compatibility must be verified separately |
-| `mailbox_post`, `mailbox_list`       | Write/read project messages                                                  |
-| `manifest_create`, `manifest_verify` | SHA-256 release fingerprints and verification                                |
-| `worker_start`, `worker_status`      | Detached worker launch and lane state                                        |
-| `supervisor`                         | Start/status/stop/ack supervision                                            |
-| `incident`                           | Record a redacted orchestrator incident for the next audit                   |
-
-The same building blocks are available as `node ~/.config/opencode/orchestrator/bin/<script>.mjs`
-(or `orch <script>`; see [Go runtime](#go-runtime-orch)).
-Relevant scripts include `usage`, `claude-exec`, `codex-exec`, `opencode-exec`, `worker`,
-`supervisor`, `mailbox`, `manifest`, `incident`, `policy`, `flip`, `kickoff`, `watch` and `doctor`;
-read their source headers for arguments. The presence of a tool does not mean its external CLI path
-has passed end-to-end verification.
-
-## Answering the conductor and running unattended
-
-A headless conductor cannot ask you interactively. Its questions land in the mailbox; answer them in one line:
-
-```sh
-node ~/.config/opencode/orchestrator/bin/mailbox.mjs inbox                 # open questions + the exact reply command
-node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply <id> "answer"   # posts your answer and acknowledges
-```
-
-`watch.mjs` shows open questions at the top. The autonomy policy decides what never needs a question:
-by default verified slices are pushed to `main` automatically; releases, code deletion, spend and deploys
-ask but do not block other slices. `policy.mjs show|set|unattended` edits it per project
-(`.orchestrator/policy.json`); `kickoff --unattended` applies the away-mode defaults.
-
-## Flipping between the two doors
-
-One conductor drives a project at a time. `models.json` -> `conductor.home` names the default door
-(opencode). Rules:
-
-| Situation at a brief boundary | Active conductor |
+| Path in `.orchestrator/` | What it is |
 |---|---|
-| its own vendor is red | flips to the other door (forced; also triggered automatically when its model dies on a usage-limit error) |
-| it is the away door and home is stably green (green for `green_grace_minutes` after the reset) | hands back home |
-| it is the away door, home still red | keeps going |
-| both red | writes the remaining briefs, runs `flip.mjs pause`, stops; the supervisor (if running) relaunches automatically: the home door if it comes back first, otherwise the other door |
+| `STATE.md` | Where things stand and the exact next action |
+| `plans/`, `briefs/` | The plan and the bounded briefs each slice is built from |
+| `reports/`, `reviews/` | What each coder did; what each reviewer found |
+| `manifests/` | sha256 fingerprints of the files each slice released |
+| `mailbox/` | Questions, notes and handoffs (`messages.jsonl`) |
+| `runs/`, `workers/`, `logs/` | One record per model run, background lane state, logs |
+| `flip.json` | Which door drives, pauses and human gates |
+| `policy.json` | This project's autonomy overrides (`orch policy set release=auto`) |
+| `supervisor.json` | Optional wake channels for the supervisor |
 
-A headless conductor that reaches a human gate (push, deploy, spend, product question) records it with `flip.mjs gate`; the supervisor leaves it alone until a human clears it (`flip.mjs gate --clear`, `kickoff`, or a flip). `flip.mjs run` posts a `handoff`, records `.orchestrator/flip.json`, and starts the other door's
-conductor headless as worker lane `conductor` (lane lock = single driver). A headless conductor
-cannot ask you questions; they land in the mailbox as `question` messages. Flips never happen
-mid-brief: a slice finishes where it started, and hand-back is delayed by at most one brief.
+`.orchestrator/` is private: kickoff keeps it out of Git through `.git/info/exclude`. Your budgets
+cache and the incident log live in `~/.local/state/opencode/orchestrator/`.
 
-## Background workers and supervisor
+### 5. Switch to the Go runtime (optional)
 
-Write a bounded project brief first. From the conductor, `worker_start` accepts `brief`, `harness`
-(`claude` or `codex`), optional `lane`, `model`, `effort`, `resume` and `breadth`. Workers maintain
-lane locks/state/logs and are instructed to publish a report and mailbox release. Check actual
-state/messages rather than assuming every successful run published its report.
-
-Start supervision with `supervisor` action `start`; inspect `status`, stop it with `stop`, and
-acknowledge a reminder with action `ack` plus its event ID. Stopping the supervisor does not stop
-workers. The shell worker script also has `stop --lane <lane>`.
-
-Optional wake channels are configured in the **project's** `.orchestrator/supervisor.json`:
-
-```json
-{
-  "wake": [
-    { "type": "opencode-run", "session": "<session-id>" },
-    { "type": "codex-queue", "thread": "<thread-id>" },
-    { "type": "claude-resume", "session": "<session-id>" }
-  ],
-  "auto_redispatch_deferred": false
-}
-```
-
-Choose only channels you need and replace placeholders. `command` channels can also invoke an
-explicit `argv` array; treat that file as executable configuration. The supervisor attempts a
-mailbox notification before external delivery; wake delivery is best-effort, not exactly-once.
-Acknowledgement means receipt, not acceptance/completion. Deferred-worker redispatch defaults on
-when `auto_redispatch_deferred` is omitted; the example disables it to avoid surprise work after
-a reset. Enable it deliberately only after verifying the relevant bridge.
-
-## Layout and state
-
-```text
-checkout/
-  AGENTS.md, opencode.jsonc     operating contract and native fallback config
-  agents/, commands/, skills/  role prompts and conductor workflow
-  plugins/orchestrator.ts      tools, budget injection, model synchronization (js or go runtime)
-  orchestrator/
-    models.json                routing/configuration source of truth
-    bin/, lib/                 CLI adapters, usage, routing and coordination
-    tests/                     fast runtime unit tests (doctor runs these)
-  tests/                       installer integration matrix and plugin tests (fake opencode context)
-  go/                          Go runtime (`orch`); see "Go runtime (`orch`)"
-  install.sh, uninstall.sh     reversible config management
-```
-
-Each work project's private `.orchestrator/` holds `STATE.md`, `plans/`, `briefs/`, `reports/`,
-`reviews/`, `manifests/`, `mailbox/`, `runs/`, `workers/`, `logs/`, `flip.json`, the `policy.json`
-autonomy overrides and supervisor state/config.
-Keep it out of that project's Git history too. This checkout's `.gitignore` excludes
-`.orchestrator/`, `service.json`, log files and `node_modules/`.
-
-Runtime usage cache is separately stored at `~/.local/state/opencode/orchestrator/usage.json`;
-the runtime does not retarget that path through `XDG_STATE_HOME`. Installer receipts/backups use
-the different `opencode-orchestrator` state directory described above. A cached reading is reused
-for 5 minutes, or until a routing window it holds (Claude session, weekly or Fable weekly; Codex
-5-hour or weekly) resets. Then the next read collects again. If that collection fails, the last good
-reading is kept, marked with `last_good_at` and `read_error`, and retried every 5 minutes, not
-on every read.
-
-## Incident log and keep-awake
-
-Orchestrator defects (tool/contract mismatches, misroutes, budget surprises, bridge crashes, flips,
-and corrections the human gives about the workflow) are appended, redacted, to
-`~/.local/state/opencode/orchestrator/incidents.jsonl` by the bridges, worker, supervisor, plugin and
-the `orch_incident` tool. `incident.mjs report` groups them by fingerprint; the audit skill turns
-repeats into fixes. Nothing is uploaded: `incident.mjs share --out file.json` writes a sanitized
-bundle you can attach to an issue by hand if you choose.
-
-Detached workers and the supervisor are wrapped in `caffeinate -i -s` on macOS (`systemd-inhibit`
-on Linux) so long runs survive idle sleep; the assertion ends with the process. A laptop lid still
-sleeps the machine unless it is in clamshell mode. Disable with `runtime.keep_awake: false` in
-`orchestrator/models.json`.
-
-## Audit and troubleshoot
-
-Run `/audit-orchestrator` when models or CLI versions change. It loads `skills/orchestrator-audit`,
-checks official sources/live catalogs, updates registry/config, and calls for tests and smoke runs.
-Some smoke runs spend model quota: respect budget and approval rules. The retained audit skill has
-legacy examples that assume the global config is a Git repo; with managed links, do Git operations
-in the checkout instead, and review any suggested service/commit commands before executing them.
-
-Start diagnostics with:
+The opencode plugin uses the JS scripts by default. To run every tool and hook through `orch`
+instead, set `ORCH_RUNTIME` for the opencode service and restart it:
 
 ```sh
-node ~/.config/opencode/orchestrator/bin/doctor.mjs
-node ~/.config/opencode/orchestrator/bin/usage.mjs --refresh
+opencode service set env ORCH_RUNTIME go
+opencode service restart
+# undo:
+opencode service unset env ORCH_RUNTIME
+opencode service restart
 ```
 
-The doctor checks binaries, login/feed availability, routing, config/plugin/agents, fast unit tests
-and recent plugin errors. Its `orch binary` row runs `orch version` on `ORCH_BIN`, else
-`~/.local/bin/orch`, else the first `orch` on `PATH`, and only warns when none is found. Expect `OK`
-rows, including `OK unit tests — pass N`, N being the number of tests in `orchestrator/tests/`.
-`WARN` can indicate unclear login or recent plugin errors; `FAIL` produces a nonzero exit. An all-OK
-doctor does not test an actual delegated model turn, installation reversal or long unattended
-operation.
+The variable must be in the environment of the opencode process that loads the plugin.
+`orch_usage_status` reports which runtime answered. Both runtimes share the same state, so you can
+switch at any time.
 
-| Symptom                     | Check                                                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Missing binary/login        | Install the CLI, then use its own login flow; do not paste tokens into configuration                                                                                 |
-| Claude usage unavailable    | Check Claude Code login and keychain/credential access; do not share credential contents                                                                             |
-| Codex usage unavailable     | Check Codex login and `app-server` compatibility                                                                                                                     |
-| Routing paused              | Inspect `/usage` and reset times; both vendors may be constrained                                                                                                    |
-| Plugin/agents missing       | Check managed links, `opencode plugin list`, `opencode debug agents`, then reload                                                                                    |
-| Installer refusal/failure   | Preserve private receipt/backup, reconcile changes, then use the recovery instructions above                                                                         |
-| Doctor unit-test row fails  | Run `node --test orchestrator/tests/*.test.mjs` in the checkout for details; installer tests belong in root `tests/`, outside the doctor's 20-second unit-test limit |
-| Codex bridge argument error | See known issue below; an available usage feed is not proof that exec/review flags work                                                                              |
+## Go runtime
 
-## Security and data access
-
-Read the scripts before granting access to an account or repository:
-
-- Claude usage collection first checks legacy opencode Anthropic OAuth auth files. It then tries
-  the macOS keychain entry named `Claude Code-credentials` and a Claude Code credentials-file
-  fallback. It sends a bearer token to `https://api.anthropic.com/api/oauth/usage` and normalizes
-  usage windows; it does not intentionally write that token into the usage cache.
-- Codex usage collection starts local `codex app-server` over stdio and requests `account/read`
-  and `account/rateLimits/read`. Codex owns authentication and its vendor network traffic; this
-  repository does not implement a separate OpenAI HTTP usage client.
-- Provider availability checks inspect local opencode credential metadata/legacy auth storage or
-  CLI login status. Usage cache includes account-specific plan/tier/limit information: keep it private.
-- Delegation sends the brief/prompt and selected repository context to the selected model through
-  opencode or a vendor CLI. Those harnesses can run tools, MCP servers, shell commands and web
-  requests. Audit/research also visits documentation/catalog hosts. **There is no blanket promise
-  that all traffic goes only to Anthropic and OpenAI.**
-- Project run records can contain prompt excerpts, final responses, commands, changed paths and
-  resumable identifiers; logs/mailbox/reports/backups may contain private content. Ignoring files
-  in Git is not access control or automatic redaction. Restrict local access and sanitize anything
-  you share. Never commit credentials, runtime state or recovery backups.
-
-Review permissions for every delegated harness. `opencode.jsonc` sets the opencode shell permission
-for `git push*` to ask for approval and denies `git push --force*`; that permission rule is separate
-from the conductor's autonomy policy, and separate CLI/tool permissions still matter. Manifests
-identify released bytes; they do not prove that a review occurred, that those bytes are safe or that
-a model will follow instructions.
-
-## Verification and limitations
-
-- **Verified:** the fast unit suite (`orchestrator/tests/`: routing, flip, supervision, incident
-  and usage-cache tests); a separate temporary-HOME suite (`tests/`) with stubbed external
-  commands for the installer and the plugin in both runtimes; the Go build, vet, gofmt, tests
-  and JS-vs-Go parity harness (`go/`, in CI on macOS and Linux); strict registry JSON;
-  syntax/privacy checks; initial packaging environment health checks, not a fresh verification of
-  the current live environment. Installer integration tests do not touch real config or
-  authenticate a model.
-- **Observed initial packaging issue:** Codex exec delegation on codex-cli 0.162.1 failed argument
-  parsing (exit 2) before a model turn. This is a historical observation from the initial packaging
-  environment, not a newly reproduced bug on the latest live CLIs. The retained bridge is unchanged.
-  Do not assume `/delegate-codex`, Codex-backed workers or the separate review invocation are
-  validated because the doctor/usage feed passes. Native OpenAI subagents are a separate path.
-- **Not verified:** the installer's `orch` download (tested only against a stubbed `curl`) and
-  `go install ...@go/v0.5.0`, both of which need the published 0.5.0 release; a real install over
-  an existing user config, Linux/Node 22 execution, all bridge/review combinations, arbitrary
-  storage/power failures, or long unattended runs on large repositories. Independent cross-vendor
-  release review and publication are separate gates.
-
-Run both suites from the checkout; installer integration is intentionally outside the doctor's
-fast unit-test set, not omitted from release verification:
+`orch` is one static Go binary that replaces every `orchestrator/bin/*.mjs` script with byte-for-byte
+parity, checked in CI by a parity harness. `./install.sh` builds it (or downloads the release
+asset and checks its sha256) into `~/.local/bin`; `--skip-binary` opts out. Without a checkout:
 
 ```sh
-node --test orchestrator/tests/*.test.mjs
-node --test tests/*.test.mjs
+go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
 ```
 
-The Go checks are listed in [CONTRIBUTING.md](CONTRIBUTING.md).
-`tests/plugin-orch-parity.test.mjs` builds `orch` with Go into a temp dir (about 30 s with its
-cases), or uses `ORCH_TEST_BIN`; without either it skips. Under a temp `HOME`, set `GOCACHE` to a
-shared cache so each run does not fill a new one.
-
-## Go runtime (`orch`)
-
-`go/` holds `orch`, a static Go binary that replaces `orchestrator/bin/*.mjs` one for one. Every
-script is ported, the plugin runs on `orch` when you opt in (see [Plugin runtime](#plugin-runtime)),
-`install.sh` installs `orch` (see [Install](#install)) and the doctor reports it in its `orch
-binary` row. What remains is removing the JS runtime (S12), planned for 0.6.0 behind a human gate.
-Until then the JS runtime stays the default, and the commands, skills and docs still name the
-`bin/*.mjs` scripts. Both runtimes share the same state, including the usage cache, so the two can
-run on the same machine.
-
-After the 0.5.0 release is tagged, `orch` can also be installed without a checkout:
-
-```sh
-go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@go/v0.5.0
-```
-
-`go install` puts the binary in `$(go env GOBIN)`, or `~/go/bin` when that is unset, not in
-`~/.local/bin`, so point the plugin at it with `ORCH_BIN=<path>` or put that directory on `PATH`.
-
-Implemented: `orch version`, `orch usage [--refresh] [--json]` (output byte-identical to
-`bin/usage.mjs`, including the rolling 30-minute last good reading), the plugin-facing `orch
-routing`, `orch budget gate` and `orch effort`, `orch mailbox post|list|ack|reply|inbox` (appending
-to the same `.orchestrator/mailbox/` files), `orch manifest create|verify|diff`, `orch incident
-record|list|report|share` (appending to the same incident log), `orch policy show|set|unattended`,
-`orch flip decide|run|pause|gate|status` (the same `.orchestrator/flip.json`; `flip run` adds
-`.orchestrator/` to `.git/info/exclude`, writes the continue brief and launches the conductor as
-`orch worker start --detach`, or records a pending launch when the lane is locked), `orch supervisor
-start|serve|status|stop|ack` (the same `.orchestrator/supervisor-state.json`, `supervisor-acks.json`
-and `supervisor.lock`; `serve` relaunches through `orch flip`, `orch worker` and `orch
-claude-exec`), `orch worker start|status|stop` (`start` runs `orch <harness>-exec` in the
-foreground, or with `--detach` launches itself as a detached, kept-awake runner logging to
-`.orchestrator/logs/`), and the three bridges `orch claude-exec`, `orch codex-exec` and `orch
-opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` command lines, result JSON and
-run records; `codex-exec` still passes `--approve-for-me` with the default `workspace-write`
-sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs` does), each byte-identical
-to its `bin/*.mjs` script when both read the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart
-from the documented exceptions. `orch doctor` runs the `doctor.mjs` checks with the same rows (both
-print `orch binary`), plus a self-test row, and runs the Go tests instead of `node --test` (PE-18).
-`orch watch [--cwd DIR] [--follow] [--interval 20]` draws the `watch.mjs` dashboard line for line
-(mirroring its crash on a `flip.json` that holds only a human gate). `orch kickoff --brief FILE ...`
-runs the `kickoff.mjs` preflight, door choice and launch (mirroring its latent defects: `--dry-run`
-still runs the preflight, `--door` is not validated); its parity group covers the headless and
-interactive launches and a supervisor really started.
-[go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
-diffs every implemented command against the JS.
+That puts `orch` in `$(go env GOBIN)` or `~/go/bin`; put it on `PATH` or point the plugin at it with
+`ORCH_BIN`. The JS runtime stays the default until 0.6.0, when it is planned to be removed.
 
 ### Plugin runtime
 
-`plugins/orchestrator.ts` has two runtimes. `js` (the default) imports `orchestrator/lib/*.mjs` and
-runs `orchestrator/bin/*.mjs`, as before. `go` runs every tool and hook through `orch` and never
-loads the JS: routing, effort, the budget gate, the mailbox, manifests and incidents are `orch`
-subcommands, and delegate, the workers, the supervisor and the usage-limit flip spawn `orch
-<script>` with the arguments the script gets.
+The plugin's runtime is `js` (default) or `go`, chosen by `ORCH_RUNTIME` as shown in
+[step 5](#5-switch-to-the-go-runtime-optional). The plugin also accepts `runtime` and `binary`
+options, but object-form options in a project `opencode.jsonc` did not reach the plugin in live
+testing (probably an upstream opencode issue), so use `ORCH_RUNTIME` and `ORCH_BIN`. In go mode a
+missing binary fails loudly; it never falls back to JS. Binary resolution, failure policy and the
+accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 
-- **Select** with `ORCH_RUNTIME=go` in the environment of the opencode process that loads the
-  plugin; this is the supported switch. For the background service run
-  `opencode service set env ORCH_RUNTIME go`, then `opencode service restart` (undo with
-  `opencode service unset env ORCH_RUNTIME` and another restart); the S10 live check confirmed
-  both. The value is trimmed and case-insensitive; anything other than `js` or `go` is a
-  configuration error.
-- **Plugin options (known limitation)**: the plugin also reads `runtime` and `binary` options, and
-  an option wins over the environment. But in the S10 live check, object-form options in a
-  project `opencode.jsonc`
-  (`[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]`) did not reach
-  the plugin. The js runtime answered, and `opencode plugin list` showed no plugins. This is
-  probably an upstream opencode issue, so use `ORCH_RUNTIME` (and `ORCH_BIN`) until it is
-  resolved.
-- **Binary**: the option `binary` (a leading `~` is expanded), then `ORCH_BIN`, then
-  `~/.local/bin/orch`, then each `PATH` entry. An explicit `binary` or `ORCH_BIN` that is not an
-  executable file is an error, never skipped. The binary is resolved once when the plugin loads,
-  so reload opencode after installing or moving `orch`. In go mode `orch` reads the registry
-  `ORCH_REGISTRY`, else `$ORCH_HOME/models.json`, else the installed `models.json`.
-- **Failure policy**: fail loudly, never fall back to JS. With an unknown runtime or no binary the
-  plugin still loads, every `orch_*` tool returns the configuration error (`orch binary not found
-  (looked in: ...)`), and the hooks degrade as when usage is unavailable (no budget block, no
-  subagent gate). The `execute.after` incident for that error cannot be recorded.
-- **Go-mode deviations** (accepted in the S10 plan):
-  - D-S10-1: `manifest_create` with no paths is a tool error (JS writes an empty manifest).
-  - D-S10-2: an `execute.after` incident without a known project directory names the plugin's
-    working directory as its project (JS records none).
-  - D-S10-3: incident context values travel as `--ctx k=v` strings, cut at a second `=`.
-  - D-S10-4: free text beginning with `--` that would travel as an argument is refused before
-    `orch` runs (bodies and details go on stdin and are exempt).
-  - D-S10-5 (PE-4): an incident's `version` is the `orch` version, not the checkout's git HEAD.
-  - D-S10-6 (PE-11): an aborted or timed-out delegate shows the Go bridge's FAILED result instead
-    of the stderr tail.
-  - D-S10-7 (both runtimes, a fix): a command that cannot be started is a failed run (in go mode
-    an `orch <sub>: could not start ...` tool error) instead of an uncaught crash of the host.
-- **Rollback**: unset `ORCH_RUNTIME` (or set it, or the option, to `js`) and reload or restart.
-- **Which runtime answered**: `orch_usage_status` metadata carries `runtime` and `orch` (the
-  binary path); a new incident's `version` is the `orch` version in go mode (`0.5.0 (<rev>)`, or
-  a bare `0.5.0` for a binary built outside a git checkout), and in js mode is the
-  checkout's `.git/HEAD` text (for example `ref: refs/heads/main`) or `unknown`.
+## Keeping it healthy
 
-`tests/plugin-routing.test.mjs` and `tests/plugin-tools.test.mjs` drive both runtimes through a
-fake opencode context against fakes; `tests/plugin-orch-parity.test.mjs` runs each lib-backed
-tool and hook in both runtimes against the real `orch` (built into a temp dir, or
-`ORCH_TEST_BIN`) and compares the results. It skips only when neither `go` nor `ORCH_TEST_BIN`
-is available.
+- `orch doctor` checks binaries, logins, usage feeds, routing, config, plugin, agents and tests.
+- `orch incident report` groups orchestrator defects (misroutes, bridge crashes, flips, your
+  corrections) recorded locally and redacted. Nothing is uploaded.
+- `/audit-orchestrator` in opencode re-verifies model ids, limits and CLI flags against official
+  sources, updates `models.json` and reruns the tests. `/retro` reviews recent runs.
+- Update: `git pull` in the checkout, run the tests, `opencode reload`, `orch doctor`.
 
-## Design notes
+## Documentation map
 
-Policy stays in one JSON registry; pure routing logic is testable without account access. Small
-CLI adapters isolate vendor interfaces, while project-local files carry resumable state across
-harnesses. Managed links separate published code from global runtime writes; private receipts and
-archive-first removal favor recoverability over aggressive cleanup. Budget-aware routing and
-cross-vendor review are deliberate guardrails, not substitutes for human approval and real tests.
+| Document | Covers |
+|---|---|
+| [orchestrator/README.md](orchestrator/README.md) | Scripts and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
+| [go/README.md](go/README.md) | The `orch` binary: commands, building, install, plugin runtime, parity harness, release checklist |
+| [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
+| [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
-Licensed under [MIT](LICENSE). See [CONTRIBUTING.md](CONTRIBUTING.md) and [CHANGELOG.md](CHANGELOG.md).
+Licensed under [MIT](LICENSE).
+
