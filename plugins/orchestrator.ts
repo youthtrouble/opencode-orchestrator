@@ -24,16 +24,24 @@ async function lib(name: string) {
   return import(pathToFileURL(path.join(ORCH, "lib", name)).href);
 }
 
+// A spawn failure (e.g. ENOENT) resolves with code -1 and the error text in stderr instead of
+// raising an uncaught "error" event in the opencode host.
 function run(cmd: string, args: string[], { cwd, input, signal, timeoutMs = 2 * 60 * 60 * 1000 }: { cwd: string; input?: string; signal?: AbortSignal; timeoutMs?: number }) {
   return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
     const child = spawn(cmd, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CLAUDECODE: undefined } });
-    let stdout = "", stderr = "";
-    child.stdout.on("data", (c) => (stdout += c));
-    child.stderr.on("data", (c) => (stderr += c));
+    let stdout = "", stderr = "", settled = false;
     const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
     const onAbort = () => { try { child.kill("SIGTERM"); } catch { /* gone */ } };
+    const finish = (result: { code: number; stdout: string; stderr: string }) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); signal?.removeEventListener("abort", onAbort); resolve(result);
+    };
+    child.stdout.on("data", (c) => (stdout += c));
+    child.stderr.on("data", (c) => (stderr += c));
     signal?.addEventListener("abort", onAbort, { once: true });
-    child.on("close", (code) => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); resolve({ code: code ?? 1, stdout, stderr }); });
+    child.on("error", (err) => finish({ code: -1, stdout, stderr: err.message }));
+    child.on("close", (code) => finish({ code: code ?? 1, stdout, stderr }));
+    child.stdin.on("error", () => { /* the child exited or never started; "error"/"close" report it */ });
     if (input !== undefined) child.stdin.end(input); else child.stdin.end();
   });
 }
@@ -44,6 +52,145 @@ function lastJson(text: string): Json | null {
   return null;
 }
 
+// ---- Runtime adapter: the JS libs or the Go `orch` binary behind one interface ------------
+type RuntimeName = "js" | "go";
+type CachedRouting = { usage: Json; stale: boolean; prompt: () => Promise<string> };
+interface OrchRuntime {
+  name: RuntimeName;
+  binary: string | null;
+  routing(refresh: boolean): Promise<any>;
+  cachedRouting(): Promise<CachedRouting | null>;
+  effortFor(registry: Json, role: string, size: string): Promise<string | null>;
+  budgetGate(vendor: "openai" | "anthropic", force: boolean): Promise<any>;
+  registry(): any;
+}
+
+/** The plugin's runtime configuration (runtime name or orch binary) is unusable. */
+class OrchConfigError extends Error {
+  constructor(message: string) { super(message); this.name = "OrchConfigError"; }
+}
+
+/** An `orch` subcommand exited with a code the caller does not accept. */
+class OrchCommandError extends Error {
+  subcommand: string; code: number; stderr: string;
+  constructor(subcommand: string, code: number, stderr: string) {
+    const last = stderr.split("\n").map((l) => l.trim()).filter(Boolean).pop() || "(no stderr)";
+    super(`orch ${subcommand} exited ${code}: ${last}`);
+    this.name = "OrchCommandError"; this.subcommand = subcommand; this.code = code; this.stderr = stderr;
+  }
+}
+
+function selectRuntime(options: any, env: NodeJS.ProcessEnv): RuntimeName {
+  const isSet = (value: unknown) => value !== undefined && value !== "";
+  const chosen = isSet(options.runtime) ? options.runtime : isSet(env.ORCH_RUNTIME) ? env.ORCH_RUNTIME : "js";
+  if (chosen === "js" || chosen === "go") return chosen;
+  throw new OrchConfigError(`unknown orchestrator runtime "${chosen}" (expected "js" or "go")`);
+}
+
+function isExecutableFile(file: string) {
+  try {
+    if (!fs.statSync(file).isFile()) return false;
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false; // missing, unreadable or not executable
+  }
+}
+
+// Explicit configuration (option `binary`, ORCH_BIN) that does not apply is an error, never a skip.
+function resolveOrchBinary(options: any, env: NodeJS.ProcessEnv): string {
+  const explicit: [string, string | undefined][] = [["option binary", options.binary ? path.resolve(options.binary) : undefined], ["ORCH_BIN", env.ORCH_BIN || undefined]];
+  for (const [source, file] of explicit) {
+    if (file === undefined) continue;
+    if (isExecutableFile(file)) return file;
+    throw new OrchConfigError(`orch binary from ${source} is not an executable file: ${file}`);
+  }
+  const searched = [path.join(os.homedir(), ".local", "bin", "orch"), ...String(env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, "orch"))];
+  const found = searched.find(isExecutableFile);
+  if (found) return found;
+  throw new OrchConfigError(`orch binary not found (looked in: ${searched.join(", ")})`);
+}
+
+async function createJsRuntime(): Promise<OrchRuntime> {
+  const usageLib = await lib("usage.mjs");
+  return {
+    name: "js",
+    binary: null,
+    routing: (refresh) => usageLib.getRouting({ refresh }),
+    async cachedRouting() {
+      const usage = usageLib.readCachedUsage(5 * 60 * 1000);
+      if (!usage) return null;
+      return {
+        usage,
+        stale: Boolean(usage.stale),
+        prompt: async () => {
+          const reg = usageLib.loadRegistry();
+          const { resolveRoles, summarizeForPrompt } = await lib("routing.mjs");
+          return summarizeForPrompt(resolveRoles(usage, reg, { channels: usageLib.detectChannels() }), usage);
+        },
+      };
+    },
+    effortFor: async (registry, role, size) => (await lib("routing.mjs")).effortFor(registry, role, size),
+    budgetGate: async (vendor, force) => (await lib("budget.mjs")).budgetGate(vendor, { force }),
+    registry: () => usageLib.loadRegistry(),
+  };
+}
+
+// "budget gate --vendor openai" -> "budget gate": the tokens before the first flag.
+function subcommandOf(args: string[]) {
+  const firstFlag = args.findIndex((a) => a.startsWith("--"));
+  return (firstFlag === -1 ? args : args.slice(0, firstFlag)).join(" ");
+}
+
+function createGoRuntime(bin: string): OrchRuntime {
+  async function callOrch(args: string[], { input, okCodes = [0], timeoutMs = 30 * 1000 }: { input?: string; okCodes?: number[]; timeoutMs?: number } = {}) {
+    const res = await run(bin, args, { cwd: process.cwd(), input, timeoutMs });
+    if (!okCodes.includes(res.code)) throw new OrchCommandError(subcommandOf(args), res.code, res.stderr);
+    return res;
+  }
+  return {
+    name: "go",
+    binary: bin,
+    async routing(refresh) {
+      const res = await callOrch(["routing", "--json", ...(refresh ? ["--refresh"] : [])], { timeoutMs: 60 * 1000 });
+      return JSON.parse(res.stdout);
+    },
+    async cachedRouting() {
+      const res = await callOrch(["routing", "--cached", "--json"], { okCodes: [0, 3] });
+      if (res.code === 3) return null; // no cache yet
+      const r = JSON.parse(res.stdout);
+      return { usage: r.usage, stale: r.usage.stale === true, prompt: async () => r.prompt };
+    },
+    async effortFor(_registry, role, size) {
+      const effort = (await callOrch(["effort", "--role", role, "--size", size])).stdout.trim();
+      return effort === "null" ? null : effort;
+    },
+    async budgetGate(vendor, force) {
+      return JSON.parse((await callOrch(["budget", "gate", "--vendor", vendor, ...(force ? ["--force"] : [])])).stdout);
+    },
+    // The registry orch itself reads; no subcommand needed for a file read.
+    registry: () => JSON.parse(fs.readFileSync(process.env.ORCH_REGISTRY || path.join(process.env.ORCH_HOME || ORCH, "models.json"), "utf8")),
+  };
+}
+
+// Selection or resolution failed: every method throws, so tools error and hooks degrade. `name`
+// is the selected runtime, or "js" when selection failed (never surfaced: no method returns).
+function createBrokenRuntime(name: RuntimeName | null, error: OrchConfigError): OrchRuntime {
+  const fail = (): never => { throw error; };
+  return { name: name ?? "js", binary: null, routing: async () => fail(), cachedRouting: async () => fail(), effortFor: async () => fail(), budgetGate: async () => fail(), registry: fail };
+}
+
+async function createRuntime(options: any): Promise<OrchRuntime> {
+  let name: RuntimeName | null = null;
+  try {
+    name = selectRuntime(options, process.env);
+    return name === "js" ? await createJsRuntime() : createGoRuntime(resolveOrchBinary(options, process.env));
+  } catch (err) {
+    if (err instanceof OrchConfigError) return createBrokenRuntime(name, err);
+    throw err;
+  }
+}
+
 const ROLE_TO_NATIVE_AGENT: Record<string, string> = { planner: "architect-oai", coder: "coder-oai", reviewer: "reviewer-oai", verifier: "verifier-oai", researcher: "researcher-oai", explorer: "explore", utility: "general" };
 const NATIVE_AGENT_TIER: Record<string, string> = { "architect-oai": "frontier", "coder-oai": "strong", build: "strong", conductor: "strong", general: "mid", "reviewer-oai": "mid", "verifier-oai": "cheap", "researcher-oai": "cheap", explore: "cheap", title: "cheap", summary: "cheap", compaction: "cheap" };
 
@@ -52,12 +199,12 @@ export default {
   async setup(ctx: any) {
     const options = ctx.options ?? {};
     const cwdOf = (input: any, c: any) => path.resolve(input?.cwd || c?.directory || c?.worktree || c?.location?.directory || ctx.location?.directory || process.cwd());
-    const usageLib = await lib("usage.mjs");
+    const rt = await createRuntime(options);
     let lastSummary = "";
     let refreshing: Promise<unknown> | null = null;
 
     async function routing(refresh = false) {
-      const r = await usageLib.getRouting({ refresh });
+      const r = await rt.routing(refresh);
       lastSummary = r.prompt;
       return r;
     }
@@ -79,7 +226,7 @@ export default {
         input: { type: "object", properties: { refresh: { type: "boolean", description: "Force a fresh read (default: use cache <= 5 min)" } } },
         async execute(input: any) {
           const r = await routing(Boolean(input?.refresh));
-          return { content: r.prompt, metadata: { postures: r.resolved.postures, roles: r.resolved.roles, generated_at: r.usage.generated_at } };
+          return { content: r.prompt, metadata: { postures: r.resolved.postures, roles: r.resolved.roles, generated_at: r.usage.generated_at, runtime: rt.name, orch: rt.binary } };
         },
       });
 
@@ -120,9 +267,8 @@ export default {
           let harness = input.harness && input.harness !== "auto" ? input.harness : null;
           // An explicit model name decides the harness when none was given (gpt-* -> codex, claude-* -> claude).
           if (!harness && input.model) harness = /^gpt-|^o\d/i.test(input.model) ? "codex" : /^claude/i.test(input.model) ? "claude" : null;
-          const { effortFor } = await lib("routing.mjs");
           const size = input.size || r.registry.effort_policy?.default_size || "medium";
-          const policyEffort = effortFor(r.registry, input.role, size);
+          const policyEffort = await rt.effortFor(r.registry, input.role, size);
           const bigTask = size === "large" || size === "hard";
           // size=hard planning may use a frontier tier even when its weekly posture is amber (never red).
           if (!harness && input.role === "planner" && size === "hard" && role && role.tier !== "frontier") {
@@ -170,7 +316,7 @@ export default {
         input: { type: "object", properties: { cwd: { type: "string" }, base: { type: "string", description: "Base branch to diff against (default: uncommitted changes)" }, instructions: { type: "string", description: "Extra review focus" }, model: { type: "string" }, force: { type: "boolean" } } },
         async execute(input: any, c: any) {
           const cwd = cwdOf(input, c);
-          const budget = await (await lib("budget.mjs")).budgetGate("openai", { force: Boolean(input.force) });
+          const budget = await rt.budgetGate("openai", Boolean(input.force));
           if (!budget.allowed) return { content: `Refused: ${budget.note}` };
           const args = ["review", "--skip-git-repo-check"];
           if (input.base) args.push("--base", input.base); else args.push("--uncommitted");
@@ -285,10 +431,10 @@ export default {
     await ctx.session.hook("context", async (e: any) => {
       if (!PRIMARY.has(String(e.agent))) return;
       try {
-        const cached = usageLib.readCachedUsage(5 * 60 * 1000);
+        const cached = await rt.cachedRouting();
         if (!cached || cached.stale) refreshSoon();
-        if (!lastSummary && cached) { const reg = usageLib.loadRegistry(); const { resolveRoles, summarizeForPrompt } = await lib("routing.mjs"); lastSummary = summarizeForPrompt(resolveRoles(cached, reg, { channels: usageLib.detectChannels() }), cached); }
-        if (lastSummary) e.system.push({ type: "text", text: `<orchestrator_budget updated="${cached?.generated_at || "unknown"}">\n${lastSummary}\nRules: never start frontier-planning or large batches when the relevant window is red; prefer the vendor with headroom; schedule heavy work after the nearest reset; cross-vendor review is the default. Use orch_usage_status for fresh numbers.\n</orchestrator_budget>` });
+        if (!lastSummary && cached) lastSummary = await cached.prompt();
+        if (lastSummary) e.system.push({ type: "text", text: `<orchestrator_budget updated="${cached?.usage.generated_at || "unknown"}">\n${lastSummary}\nRules: never start frontier-planning or large batches when the relevant window is red; prefer the vendor with headroom; schedule heavy work after the nearest reset; cross-vendor review is the default. Use orch_usage_status for fresh numbers.\n</orchestrator_budget>` });
       } catch { /* never block the turn on budget data */ }
     });
 
@@ -346,7 +492,7 @@ export default {
     // ---- 3. Keep native agent models in sync with models.json ----------------------------
     if (options.syncModelsFromRegistry !== false) {
       try {
-        const reg = usageLib.loadRegistry();
+        const reg = rt.registry();
         const tiers = reg.vendors.openai.tiers;
         await ctx.agent.transform((e: any) => {
           for (const [id, tier] of Object.entries(NATIVE_AGENT_TIER)) {

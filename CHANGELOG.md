@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- plugin: runtime switch groundwork. `plugins/orchestrator.ts` selects its runtime from the
+  plugin option `runtime`, then `ORCH_RUNTIME`, else `js` (only `js` and `go` are accepted); in
+  `go` mode it resolves `orch` from the option `binary`, `ORCH_BIN`, `~/.local/bin/orch`, then
+  `PATH`, and a bad configuration fails loudly (tools error, hooks degrade) instead of falling
+  back. Routing, cached routing, effort, the codex_review budget gate and the model-sync registry
+  go through a runtime adapter; `orch_usage_status` metadata gains `runtime` and `orch`; a spawn
+  failure now resolves with code -1 instead of an uncaught error. `js` (the default) is
+  unchanged. New `tests/plugin-routing.test.mjs` drives the plugin through a fake opencode
+  context. go mode not yet complete (S10b): mailbox, manifests, incidents and the bridge, worker,
+  supervisor and flip spawns still use the JS libs and scripts.
 - Go port: the `kickoff` parity group gains the launching cases: headless conductor lanes on
   claude and opencode (runners settled and everything they wrote compared), the interactive
   `claude` and `opencode` launches (exit code passed through; a signal exits 0) and a dry run that
