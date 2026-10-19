@@ -3,6 +3,8 @@
 package parity
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -27,6 +29,7 @@ const doctorAgentsLoaded = `[{"id":"conductor"},{"id":"architect-oai"},{"id":"co
 // case asserts PE-18 (orch's extra rows and its Go unit-test row) and compares the rest.
 func (h *harness) testDoctor(t *testing.T) {
 	green, _ := readCacheFixtures(t).Get("green")
+	pathEnv := "PATH=" + h.pathWithoutGo(t)
 	healthyWithoutLog := seeds(
 		doctorAnswer("opencode", "--version", "1.2.3"),
 		doctorAnswer("codex", "--version", "codex-cli 0.9.0\nsecond line"),
@@ -73,6 +76,7 @@ func (h *harness) testDoctor(t *testing.T) {
 				js:        []string{h.node, filepath.Join(h.orchJS, "bin", "doctor.mjs")},
 				orch:      []string{h.orchBin, "doctor"},
 				seed:      c.seed,
+				env:       []string{pathEnv},
 				normalize: normalizeGeneratedAt,
 			}
 			js, orch := h.runPair(t, inv)
@@ -83,20 +87,20 @@ func (h *harness) testDoctor(t *testing.T) {
 	}
 	t.Run("registry-missing", func(t *testing.T) {
 		t.Parallel()
-		h.testDoctorRegistryMissing(t, healthy)
+		h.testDoctorRegistryMissing(t, healthy, pathEnv)
 	})
 }
 
 // testDoctorRegistryMissing runs doctor over a copied JS tree without models.json (the JS reads
 // <ROOT>/models.json whatever ORCH_REGISTRY says). Both print Node's ENOENT line as the
 // usage/routing failure.
-func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed) {
+func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed, pathEnv string) {
 	root := h.jsTreeWithRegistry(t, registryMissing)
 	inv := invocation{
 		js:        []string{h.node, filepath.Join(root, "bin", "doctor.mjs")},
 		orch:      []string{h.orchBin, "doctor"},
 		seed:      healthy,
-		env:       []string{"ORCH_HOME=" + root, "ORCH_REGISTRY=" + filepath.Join(root, "models.json")},
+		env:       []string{pathEnv, "ORCH_HOME=" + root, "ORCH_REGISTRY=" + filepath.Join(root, "models.json")},
 		normalize: normalizeGeneratedAt,
 	}
 	js, orch := h.runPair(t, inv)
@@ -111,6 +115,26 @@ func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed) {
 		t.Errorf("js: no %q in %q", want, js.stdout)
 	}
 	compareOutcomes(t, js, orch)
+}
+
+// pathWithoutGo is the fakes followed by a directory holding only node and sqlite3, so neither
+// runtime can find a go toolchain: the harness PATH holds the directories of node and sqlite3,
+// which may also hold a go (a system go on Linux CI, Homebrew's bin on macOS). Without it
+// orch's unit tests row would run `go test` in the checkout under the sandbox HOME, its result,
+// and whether a toolchain is downloaded into a read-only module cache, depending on the machine.
+func (h *harness) pathWithoutGo(t *testing.T) string {
+	t.Helper()
+	tools := t.TempDir()
+	linkTool := func(target string) {
+		if err := os.Symlink(target, filepath.Join(tools, filepath.Base(target))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkTool(h.node)
+	if sqlite, err := exec.LookPath("sqlite3"); err == nil {
+		linkTool(sqlite)
+	}
+	return h.fakesDir + ":" + tools
 }
 
 var (
@@ -130,7 +154,7 @@ func maskJSUnitTests(t *testing.T, stdout string) string {
 }
 
 // maskOrchRows requires orch's PE-18 rows (its binary, selfTestRow and a Go unit-test row not
-// run, there being no go on the parity PATH), removes the first two and masks the third.
+// run, there being no go on pathWithoutGo), removes the first two and masks the third.
 func maskOrchRows(t *testing.T, stdout, repo, selfTestRow string) string {
 	t.Helper()
 	notRun := "WARN unit tests  —  not run (no go toolchain or module at " + filepath.Join(repo, "go") + ")"
