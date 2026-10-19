@@ -87,12 +87,35 @@ func TestParseMailbox(t *testing.T) {
 }
 
 func TestParseIncident(t *testing.T) {
-	args := ParseIncident([]string{"record", "--kind", "bug", "--ctx", "a=1", "--json", "--ctx", "b=2", "--summary", "s"})
+	args, err := ParseIncident([]string{"record", "--kind", "bug", "--ctx", "a=1", "--json", "--ctx", "b=2", "--summary", "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	assertEqual(t, args, IncidentArgs{
 		Command: "record",
 		Opts:    Opts{"kind": valueOpt("bug"), "json": flagOpt, "summary": valueOpt("s")},
 		Ctx:     []string{"a=1", "b=2"},
 	})
+}
+
+// TestParseIncidentBareCtx pins the JS loop: a bare --ctx replaces the list with true, so a
+// later --ctx value throws (Node: "TypeError: opts.ctx.push is not a function"), whatever the
+// command; a trailing bare --ctx only marks the list.
+func TestParseIncidentBareCtx(t *testing.T) {
+	args, err := ParseIncident([]string{"list", "--ctx", "a=1", "--json", "--ctx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertEqual(t, args, IncidentArgs{Command: "list", Opts: Opts{"json": flagOpt}, CtxFlag: true})
+	for _, argv := range [][]string{
+		{"record", "--ctx", "--ctx", "a=b", "--summary", "s"},
+		{"frob", "--ctx", "--ctx", "a=b"},
+		{"list", "--ctx", "a", "--ctx", "--ctx", "b"},
+	} {
+		if _, err := ParseIncident(argv); !errors.Is(err, ErrCtxAfterBareCtx) || err.Error() != "opts.ctx.push is not a function" {
+			t.Errorf("ParseIncident(%q) error = %v", argv, err)
+		}
+	}
 }
 
 func TestParseManifest(t *testing.T) {

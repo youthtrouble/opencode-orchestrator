@@ -1,6 +1,7 @@
 package cliargs
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 )
@@ -42,25 +43,44 @@ func (a MailboxArgs) ProjectRoot(getenv func(string) string) (string, error) {
 // IncidentArgs is what the argv loop of bin/incident.mjs produces.
 type IncidentArgs struct {
 	Command string   // first token: record | list | report | share
-	Opts    Opts     // flags and values share one namespace, as in the JS
+	Opts    Opts     // flags and values share one namespace, as in the JS; ctx is kept apart
 	Ctx     []string // every --ctx key=value, in order
+	// CtxFlag is set when the last --ctx was bare: the JS then holds true instead of the list
+	// (Ctx is nil), and only `record`, which maps over it, fails.
+	CtxFlag bool
 }
 
+// ErrCtxAfterBareCtx is the TypeError message of the JS argv loop when a --ctx value follows
+// a bare --ctx: the list has become true and has no push. It fails every command.
+var ErrCtxAfterBareCtx = errors.New("opts.ctx.push is not a function")
+
 // ParseIncident mirrors bin/incident.mjs: the same flag rule as the mailbox, but a flag is
-// stored in Opts as true; `--ctx` repeats. Outstanding parity deviation: a bare `--ctx` is
-// recorded as Opts["ctx"] while values keep collecting; JS replaces its array with true and
-// then throws. Reconcile before releasing the incident command.
-func ParseIncident(argv []string) IncidentArgs {
+// stored in Opts as true; `--ctx` repeats, and a bare `--ctx` replaces the list with true.
+func ParseIncident(argv []string) (IncidentArgs, error) {
 	command, rest := splitCommand(argv)
 	args := IncidentArgs{Command: command, Opts: Opts{}, Ctx: []string{}}
-	scanKeyedOptions(rest, func(key string) { args.Opts[key] = flagOpt }, func(key, value string) {
+	var err error
+	scanKeyedOptions(rest, func(key string) {
 		if key == "ctx" {
-			args.Ctx = append(args.Ctx, value)
+			args.Ctx, args.CtxFlag = nil, true
 		} else {
+			args.Opts[key] = flagOpt
+		}
+	}, func(key, value string) {
+		switch {
+		case err != nil: // the JS has already thrown
+		case key != "ctx":
 			args.Opts[key] = valueOpt(value)
+		case args.CtxFlag:
+			err = ErrCtxAfterBareCtx
+		default:
+			args.Ctx = append(args.Ctx, value)
 		}
 	})
-	return args
+	if err != nil {
+		return IncidentArgs{}, err
+	}
+	return args, nil
 }
 
 // scanKeyedOptions is the loop bin/mailbox.mjs and bin/incident.mjs share: `--k` takes the next

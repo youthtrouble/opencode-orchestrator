@@ -21,6 +21,57 @@
   weekly or Fable weekly; Codex 5-hour or weekly) resets after the reading was taken, not only
   after the 5-minute TTL. A conductor therefore relaunches right at a reset. When the post-reset
   collection fails, the last good reading is kept and retried every 5 minutes, not on every read.
+- Go port: `orch incident record|list|report|share` and `orch policy show|set|unattended` match
+  `bin/incident.mjs` and `bin/policy.mjs` byte for byte (stdout, exit codes, incident log, share
+  bundle, `policy.json`): the same redaction, fingerprints (JS `toLowerCase`, final sigma
+  included) and report order (a port of Node 26's V8 sort; Node 22/24 may order malformed short
+  logs differently, PE-5), the registry read exactly as `policy.mjs`
+  reads it, and an explicitly empty `HOME` kept as Node keeps it. Entries carry `orch`'s version
+  (PE-4). The new `incident` and `policy` parity groups run in CI.
+- Contract: no sleep-waiting while independent work exists; re-read the mailbox between waits.
+
+## 0.4.7 — 2026-10-19
+
+- Contract: pipelining. A slice waiting for a review the other vendor cannot give yet no longer
+  idles the conductor; it starts the next independent slice and queues the review.
+- usage: keep the last good reading for 30 minutes when a refresh fails (a 429, say) and show its
+  age.
+- routing: skip preferences whose tier is missing from the registry (was a TypeError in
+  balancing).
+- worker: detach checks the lane lock synchronously; the supervisor launches a flip target that
+  never started.
+
+## 0.4.6 — 2026-10-18
+
+- routing: the 5-hour window steers routing; a weekly cap blocks a vendor only when red; coding is
+  balanced across vendors by 5-hour headroom.
+- routing: role resolution uses frontier tiers only on a green weekly posture and routine planning
+  falls to Opus 5.5; a `size=hard` planning delegation may still take the first frontier tier that
+  is not red (amber or unknown included), Fable before GPT-6 Astra, which is reserved for it.
+- codex-exec: a completed turn with no tool calls and a tool-host failure message is a failure
+  (`tool_host_unavailable`).
+
+## 0.4.5 — 2026-10-18
+
+- README operations cheat sheet; keep-README-current rule in the contracts and in review.
+
+## 0.4.4 — 2026-10-18
+
+- Autonomy policy (`policy.mjs`; verified slices are pushed automatically), `mailbox.mjs
+  reply|inbox`, and `watch.mjs` shows open questions.
+
+## 0.4.3 — 2026-10-18
+
+- Human-gate state (`flip.mjs gate`) that the supervisor never relaunches.
+- flip: a pending launch when the lane is still locked; the supervisor performs it after release.
+- Headless rule: subagents run in the foreground only; the supervisor resumes a conductor that
+  exited without a handoff.
+- mailbox: `ack` accepts unique id prefixes; claude-exec no longer records "success" as an error.
+
+## 0.4.2 — 2026-10-18
+
+- No reset grace when starting work (an imminent reset no longer makes a window greener); relaunch
+  failed or deferred conductor lanes; session-limit text is a deferral.
 
 ## 0.4.1 — 2026-10-18
 

@@ -15,6 +15,8 @@ Implemented so far (the rest of `bin/*.mjs` is still JS-only):
 | `orch effort --role ROLE [--size SIZE]` | `effortFor()` in `lib/routing.mjs` | The effort-policy value as plain text, or `null`; exit 2 on bad flags or without `--role`. |
 | `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --json` prints the whole message instead of `{id, at}` (PE-3). Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
 | `orch manifest create\|verify\|diff` | `bin/manifest.mjs` | Byte-identical output, exit codes and manifest files: the same walk (symlinks, FIFOs and other non-regular entries inside a walked directory are skipped and never opened; an explicit symlink argument is followed), UTF-16 key order and `manifest_sha256`. Uncaught JS errors print only their error line. |
+| `orch incident record\|list\|report\|share` | `bin/incident.mjs` | Byte-identical output, exit codes, incident log lines and share bundle: the same redaction (home directory, `/Users/<name>`, `/home/<name>`, emails, tokens, uuids, `ses_` ids, with JS white space and a 2000-unit cut), fingerprint (JS `toLowerCase`, final sigma included) and report order (V8's TimSort, `internal/jssort`, so ties and incomparable timestamps order as in Node). Appends to `~/.local/state/opencode/orchestrator/incidents.jsonl` like the mailbox does; an explicitly empty `HOME` is kept as Node keeps it (the log is then relative to the working directory and redaction uses an empty home), never replaced by the account's home. Entries carry `orch`'s version instead of the checkout's git HEAD (PE-4). `share` writes no `project` key and uploads nothing. |
+| `orch policy show\|set key=value...\|unattended [--cwd DIR]` | `bin/policy.mjs` | Byte-identical output, exit codes and `.orchestrator/policy.json`: the registry's `autonomy` (without `$comment`) overridden by the project file; `set` refuses `key=never` except `force_push`, and any `force_push` other than `never`. The registry is read as `JSON.parse` of the file, then `.autonomy`, as the JS does (Node's fs errors, a `SyntaxError`, a `TypeError` for `null`, no autonomy for any other shape); `set` has written its file when that fails. A `policy.json` holding an array makes `set` fail instead (PE-6). |
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
 `orch` yet.
@@ -42,7 +44,7 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 |---|---|---|
 | `ORCH_HOME` | `~/.config/opencode/orchestrator` | The orchestrator tree (the JS `ROOT`). |
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
-| `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. |
+| `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
 
 ## Checks
 
@@ -50,14 +52,17 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 cd go
 go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
-./parity/run.sh --only json,usage,mailbox,manifest   # chosen parity groups; ./parity/run.sh runs them all
+./parity/run.sh --only json,usage,mailbox,manifest,incident,policy   # chosen groups; ./parity/run.sh runs them all
 ```
 
-`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox` and `manifest` parity groups on macOS and Linux
-with `CGO_ENABLED=0` and Node installed. Malformed prompt byte tests also compare against Node
+`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`, `incident` and `policy` parity groups on macOS and Linux
+with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare against Node
 when it is available; fixed byte expectations run even without Node.
 
 ## Parity harness
+
+Use Node 26 (`referenceNodeMajor`), as CI does: on Node 22 or 24 one case reports SKIP by
+design (PE-5).
 
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
@@ -91,6 +96,21 @@ Groups:
   `--root` with `../x`, duplicates, `--baseline`, `--out` outside `.orchestrator`; verify and
   diff over hand-made manifests of every shape (prototype keys such as `constructor`, arrays,
   strings, null). Only `created_at` is normalised, in its exact place and format.
+- `incident`: every `orch incident` subcommand against `bin/incident.mjs`: `record` with every
+  flag, bare flags, `--detail -` with malformed UTF-8, every `--ctx` form (duplicates, `a=b=c`,
+  `=x`, index-like and `__proto__` keys), `--cwd` forms and each crash in the JS order; `list`,
+  `report` and `share` over seeded logs (ties, projects, more than 100 entries, hand-edited lines
+  of every shape), all filters including bare ones, `--out`, and every command with `HOME=""`
+  (the log then lives under the sandbox project), the PE-5 regression case, and a live run of
+  `testdata/jssort/gen.mjs` that must reproduce `orders.json` on Node 26 or later. Normalised: a new entry's `at` and
+  `version` (PE-4), its `project` when it is the sandbox's temp directory name, the receipt's
+  `at`, the bundle's `generated_at` and the HOME prefix of the log path in the usage line.
+- `policy`: every `orch policy` command against `bin/policy.mjs` over override files of every
+  shape (none, unparsable, BOM, `null`, string, array, own `__proto__`, a directory), `--cwd` in
+  every position, refusals and `force_push`, the TypeErrors of a primitive `policy.json`, and
+  `show`/`set` against a copy of the JS tree whose `models.json` is missing, a directory, `null`,
+  unparsable, BOM-prefixed or of another shape (orch reads the same file through
+  `ORCH_REGISTRY`). Nothing is normalised.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`) and declare that it ends in an uncaught JS exception (`crash`, below).
@@ -110,7 +130,9 @@ prints only the error line:
 - C1 also covers Node's own coded and type errors with fixed text, such as
   `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received undefined`
   (`manifest verify` without a file) and `TypeError: Cannot convert undefined or null to object`
-  (a manifest without `files`). Paths in these messages use the physical working directory, as
+  (a manifest without `files`), `TypeError: opts.ctx.push is not a function` (an incident `--ctx`
+  value after a bare `--ctx`) and `TypeError: Cannot set properties of null (setting 'a')` (a
+  `policy.json` holding `null`). Paths in these messages use the physical working directory, as
   `process.cwd()` does, not `$PWD`.
 - C2, malformed hand-edited state (a message whose `kind` is not a string, `refs` missing, ...):
   both stderrs must contain a line starting `TypeError: `; V8's wording is not reproduced.
@@ -118,13 +140,41 @@ prints only the error line:
 The other documented differences, each asserted by its own parity case:
 
 - PE-1: a UTF-16 slice that splits a surrogate pair (the reply subject cut at 140 units, the inbox
-  body at 400) or a string message spread into one key per code unit gives U+FFFD in Go. Text
+  body at 400, an incident summary at 300, redacted text at 2000, the fingerprint input at 200) or a
+  string message spread into one key per code unit gives U+FFFD in Go. Hashes are identical (Node
+  hashes a lone surrogate as U+FFFD). With an empty `HOME` the JS home pattern is empty and
+  matches between the halves of every astral character, splitting them the same way. Text
   output is identical (Node prints a lone surrogate as U+FFFD); JSON escapes differ: the JS writes
   `"\ud83d"`, `orch` the raw U+FFFD.
-- PE-2: the crash output above. A manifest file that `JSON.parse` rejects prints a
-  `SyntaxError: ` line in both runtimes; the message after the class differs.
+- PE-2: the crash output above. A manifest file or (for `orch policy`) a registry that
+  `JSON.parse` rejects prints a `SyntaxError: ` line in both runtimes; the message after the
+  class differs.
 - PE-3: `orch mailbox post --json` prints the whole message it appended; the JS ignores
   `--json`. As in `list`, only a bare `--json` counts (`--json x` is the value of a key).
+- PE-4: an incident's `version` is `orch version` (e.g. `0.5.0 (8b23cd3)`); the JS writes its
+  checkout's `.git/HEAD`, trimmed to 40 characters (`ref: refs/heads/main`), or `unknown` when
+  there is none.
+- PE-5, reference V8 (approved by the human, mailbox 0b533797): the report comparator is
+  inconsistent for equal counts whose `last` values are equal or incomparable, so the order
+  depends on every comparison the sort makes, and V8's sort differs between Node release lines.
+  `orch` reproduces `Array.prototype.sort` of V8 14.6, i.e. Node 26 (`internal/jssort`: binary
+  insertion up to 7 elements, then runs, the merge-stack rules and adaptive galloping; goldens from
+  v26.5.1, also checked on v26.7.0), against 1611 sorts of up to 6000 elements with four
+  inconsistent comparators and a consistent one, and 25 summaries of 60 to 224 groups. Node 22
+  (V8 12.4) and Node 24 (V8 13.6) order 13 of those 1611 sorts differently, all with 3 to 7
+  elements under an inconsistent comparator. In `incident report` and `share` that happens only
+  when a hand-edited log holds `at` values that do not compare (non-ISO strings, numbers,
+  booleans, missing): the regression case `"t0"`, `true`, `"2"` gives fp `1,0,2` on Node 26 and
+  in `orch`, `2,1,0` on Node 22 and 24. Logs written by either runtime (ISO `at`) order the same on
+  22, 24 and 26 (20,000-sort probe). The parity harness and CI use Node 26; the JS tools still
+  support Node 22+. Under an older Node the harness skips the live jssort differential with a
+  PE-5 message and compares the regression case with the summary put in fp order.
+- PE-6: relational comparisons with object or array operands (`--since` against an object `at`)
+  are false in `orch`; the JS compares their string forms. `policy set` on a `policy.json`
+  holding an array exits 1 with a `TypeError:` line; the JS rewrites the array and succeeds.
+- PE-7: `toLowerCase` of code points Go's Unicode 15.0 tables do not know, or whose case
+  properties changed since (U+0295, U+1171E), follows Go, not Node's newer ICU data. The test of
+  `jsstr.ToLower` against every code point lists them (196 with Node v26.5.1 / Unicode 17.0).
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 
@@ -168,3 +218,14 @@ trailing newline. Regenerate after adding an input and commit inputs and goldens
 
 `testdata/usage/*.golden` are generated by `node testdata/usage/gen.mjs` through the JS
 normalizers, from the redacted feed recordings beside them (no tokens, no account identifiers).
+
+`testdata/incident/corpus.json` is generated by `node testdata/incident/gen.mjs` (last run with
+Node v26.5.1) through `lib/incident.mjs`, with `HOME` set to a fixture path inside the script:
+redaction and fingerprint cases and seeded, tie-heavy `summarize` inputs with their outputs.
+`testdata/incident/mixed-at-80.jsonl` is the cross-vendor reviewer's fixture: Python's
+`rng = random.Random(0)`, then for `i in range(80)` the entry `{"fp": str(i), "at": i if
+rng.randrange(2) else "t"+str(i), "component": "c", "kind": "note", "summary": "s"}`, then
+`rng.shuffle(entries)`, one compact JSON line each. `testdata/jssort/orders.json` is generated by
+`node testdata/jssort/gen.mjs`: the sha256 of each order V8 produces.
+`testdata/jsstr/lower.json` is generated by `node testdata/jsstr/gen-lower.mjs`: the
+`toLowerCase` of every code point and the final-sigma context sets as Node observes them.

@@ -58,6 +58,22 @@ func TestObjectReassignmentKeepsPositionAndIndexKeysComeFirst(t *testing.T) {
 	}
 }
 
+func TestObjectDeleteThenSetAppends(t *testing.T) {
+	o := NewObject()
+	for _, key := range []string{"a", "b", "c"} {
+		o.Set(key, key)
+	}
+	o.Delete("a")
+	o.Delete("absent")
+	o.Set("a", "again")
+	if got, want := strings.Join(o.Keys(), ","), "b,c,a"; got != want {
+		t.Errorf("Keys() = %s, want %s", got, want)
+	}
+	if o.Len() != 3 {
+		t.Errorf("Len() = %d, want 3", o.Len())
+	}
+}
+
 func TestFormatNumber(t *testing.T) {
 	cases := []struct {
 		in   float64

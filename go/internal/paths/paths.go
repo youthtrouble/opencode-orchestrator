@@ -4,7 +4,6 @@ package paths
 
 import (
 	"fmt"
-	"os"
 	"os/user"
 	"path/filepath"
 )
@@ -15,28 +14,23 @@ type Paths struct {
 	// OrchHome is the JS ROOT: the orchestrator tree holding models.json and bin/. The JS
 	// derives it from its own script location; orch reads ORCH_HOME, defaulting to the
 	// installed tree.
-	OrchHome      string
-	RegistryFile  string // ORCH_REGISTRY, default <OrchHome>/models.json (JS REGISTRY_FILE)
-	StateDir      string // ~/.local/state/opencode/orchestrator (JS STATE_DIR)
-	UsageFile     string // <StateDir>/usage.json (JS USAGE_FILE)
-	IncidentsFile string // <StateDir>/incidents.jsonl (JS INCIDENTS)
+	OrchHome     string
+	RegistryFile string // ORCH_REGISTRY, default <OrchHome>/models.json (JS REGISTRY_FILE)
+	StateDir     string // ~/.local/state/opencode/orchestrator (JS STATE_DIR)
+	UsageFile    string // <StateDir>/usage.json (JS USAGE_FILE)
 }
 
 // Resolve computes Paths from the environment variables HOME, ORCH_HOME and ORCH_REGISTRY.
-// HOME is used as given, falling back to the OS user home if absent or empty, like
-// os.homedir(); ORCH_HOME and ORCH_REGISTRY are made absolute, like the JS path.resolve.
+// HOME is used as given, falling back to the user database's home if absent or empty;
+// ORCH_HOME and ORCH_REGISTRY are made absolute, like the JS path.resolve. Unlike
+// os.homedir(), an empty HOME counts as absent here; where that matters (the incident log,
+// which must never land in a home the caller emptied HOME to avoid), use NodeHome.
 func Resolve(getenv func(string) string) (Paths, error) {
 	home := getenv("HOME")
 	if home == "" {
 		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			// On Unix UserHomeDir only consults HOME; Node also consults the user database.
-			current, lookupErr := user.Current()
-			if lookupErr != nil {
-				return Paths{}, fmt.Errorf("paths: home directory: %w", lookupErr)
-			}
-			home = current.HomeDir
+		if home, err = userHome(); err != nil {
+			return Paths{}, err
 		}
 	}
 	orchHome, err := absOrDefault(getenv("ORCH_HOME"), filepath.Join(home, ".config", "opencode", "orchestrator"))
@@ -47,15 +41,46 @@ func Resolve(getenv func(string) string) (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("paths: ORCH_REGISTRY: %w", err)
 	}
-	stateDir := filepath.Join(home, ".local", "state", "opencode", "orchestrator")
+	stateDir := StateDirIn(home)
 	return Paths{
-		Home:          home,
-		OrchHome:      orchHome,
-		RegistryFile:  registry,
-		StateDir:      stateDir,
-		UsageFile:     filepath.Join(stateDir, "usage.json"),
-		IncidentsFile: filepath.Join(stateDir, "incidents.jsonl"),
+		Home:         home,
+		OrchHome:     orchHome,
+		RegistryFile: registry,
+		StateDir:     stateDir,
+		UsageFile:    filepath.Join(stateDir, "usage.json"),
 	}, nil
+}
+
+// NodeHome is os.homedir(): HOME exactly as set, even when it is empty; only an unset HOME
+// falls back to the user database's home.
+func NodeHome(lookupEnv func(string) (string, bool)) (string, error) {
+	if home, set := lookupEnv("HOME"); set {
+		return home, nil
+	}
+	return userHome()
+}
+
+// userHome is the current user's home from the user database, as Node reads it when HOME is
+// unset (os.UserHomeDir only consults HOME on Unix).
+func userHome() (string, error) {
+	current, err := user.Current()
+	if err != nil {
+		return "", fmt.Errorf("paths: home directory: %w", err)
+	}
+	return current.HomeDir, nil
+}
+
+// StateDirIn is the orchestrator state directory under home (JS STATE_DIR); an empty home
+// gives the relative path Node's path.join gives.
+func StateDirIn(home string) string {
+	return filepath.Join(home, ".local", "state", "opencode", "orchestrator")
+}
+
+// IncidentsFileIn is the incident log under home (JS INCIDENTS). Pass the home NodeHome
+// returns: for an explicitly empty HOME the log is relative to the working directory, as in
+// the JS, never the user's own log.
+func IncidentsFileIn(home string) string {
+	return filepath.Join(StateDirIn(home), "incidents.jsonl")
 }
 
 func absOrDefault(value, fallback string) (string, error) {

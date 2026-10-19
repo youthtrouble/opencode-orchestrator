@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -12,10 +11,6 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/manifest"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
-
-// errPathArgUndefined is Node's message for path.resolve(undefined), which the JS reaches when
-// verify or diff is given too few files.
-var errPathArgUndefined = errors.New(`The "paths[0]" argument must be of type string. Received undefined`)
 
 // jsonSyntaxError is a manifest file JSON.parse rejects. V8's wording is not reproduced.
 type jsonSyntaxError struct {
@@ -132,19 +127,25 @@ func manifestDiff(positional []string, stdio Stdio) int {
 // readManifest is JSON.parse(readFileSync(path.resolve(positional[i]), "utf8")).
 func readManifest(positional []string, i int) (any, error) {
 	if i >= len(positional) {
-		return nil, errPathArgUndefined
+		return nil, errPathArgUndefined // too few files: path.resolve(undefined)
 	}
 	file, err := nodefs.Resolve(positional[i])
 	if err != nil {
 		return nil, err
 	}
+	return parseJSONFile(file)
+}
+
+// parseJSONFile is JSON.parse(fs.readFileSync(file, "utf8")): Node's fs errors, a
+// *jsonSyntaxError for text JSON.parse rejects, and otherwise a value of any shape.
+func parseJSONFile(file string) (any, error) {
 	data, err := nodefs.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	m, err := jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
+	value, err := jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
 	if err != nil {
 		return nil, &jsonSyntaxError{err}
 	}
-	return m, nil
+	return value, nil
 }

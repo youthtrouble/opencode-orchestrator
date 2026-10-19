@@ -1,12 +1,9 @@
 // Package mailbox is the durable, append-only mailbox between the agents and harnesses working
 // on one project (lib/mailbox.mjs). Messages live in <project>/.orchestrator/mailbox/
-// messages.jsonl, acknowledgements in acks.jsonl; both runtimes append to the same files, so
-// each line is written with a single write on an O_APPEND descriptor and the files are never
-// rewritten.
+// messages.jsonl, acknowledgements in acks.jsonl, both read and appended through package jsonl.
 //
-// The files may be edited by hand. Reading mirrors the JS: unparsable lines and falsy JSON
-// values are dropped, every other value is kept whatever its shape. Where a shape makes the JS
-// throw a TypeError, the functions here return a *ShapeError.
+// The files may be edited by hand, so values of any shape are read back. Where a shape makes
+// the JS throw a TypeError, the functions here return a *ShapeError.
 package mailbox
 
 import (
@@ -14,14 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsonl"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 )
 
@@ -101,7 +96,7 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	msg.Set("body", d.Body)
 	msg.Set("refs", refs)
 	msg.Set("thread", thread)
-	if err := b.append("messages.jsonl", msg); err != nil {
+	if err := jsonl.Append(filepath.Join(b.Dir, "messages.jsonl"), msg); err != nil {
 		return nil, err
 	}
 	return msg, nil
@@ -121,7 +116,7 @@ func (b *Mailbox) ResolveID(idOrPrefix string) (string, error) {
 // `ack` without --id: it matches exactly any message without an id, resolving to undefined,
 // and otherwise behaves as the prefix "undefined".
 func (b *Mailbox) resolveID(idOrPrefix *string) (*string, error) {
-	msgs, err := b.read("messages.jsonl")
+	msgs, err := jsonl.Read(filepath.Join(b.Dir, "messages.jsonl"))
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +177,7 @@ func (b *Mailbox) Ack(r AckRequest) (*jsjson.Object, error) {
 	}
 	entry.Set("at", jsjson.ISOString(b.Now()))
 	entry.Set("note", r.Note)
-	if err := b.append("acks.jsonl", entry); err != nil {
+	if err := jsonl.Append(filepath.Join(b.Dir, "acks.jsonl"), entry); err != nil {
 		return nil, err
 	}
 	return entry, nil
@@ -202,23 +197,23 @@ type Query struct {
 // null). Limit follows JS slice(-limit): 0, NaN and +Inf keep everything, a negative limit
 // drops that many of the oldest, -Inf keeps nothing.
 func (b *Mailbox) List(q Query) ([]*jsjson.Object, error) {
-	msgs, err := b.read("messages.jsonl")
+	msgs, err := jsonl.Read(filepath.Join(b.Dir, "messages.jsonl"))
 	if err != nil {
 		return nil, err
 	}
-	acks, err := b.read("acks.jsonl")
+	acks, err := jsonl.Read(filepath.Join(b.Dir, "acks.jsonl"))
 	if err != nil {
 		return nil, err
 	}
-	ackedBy := map[any]*orderedSet{}
+	ackedBy := map[any]*jsjson.OrderedSet{}
 	for _, a := range acks {
-		key := sameValueZeroKey(jsjson.Lookup(a, "id"))
+		key := jsjson.SameValueZeroKey(jsjson.Lookup(a, "id"))
 		if ackedBy[key] == nil {
-			ackedBy[key] = &orderedSet{seen: map[any]bool{}}
+			ackedBy[key] = &jsjson.OrderedSet{}
 		}
-		ackedBy[key].add(jsjson.Lookup(a, "by"))
+		ackedBy[key].Add(jsjson.Lookup(a, "by"))
 	}
-	ackSetOf := func(m any) *orderedSet { return ackedBy[sameValueZeroKey(jsjson.Lookup(m, "id"))] }
+	ackSetOf := func(m any) *jsjson.OrderedSet { return ackedBy[jsjson.SameValueZeroKey(jsjson.Lookup(m, "id"))] }
 
 	var selected []any
 	for _, m := range msgs {
@@ -231,7 +226,7 @@ func (b *Mailbox) List(q Query) ([]*jsjson.Object, error) {
 		if q.Since != "" && !jsjson.GreaterThan(atOperand(m), q.Since) {
 			continue
 		}
-		if q.UnackedBy != "" && ackSetOf(m).has(q.UnackedBy) {
+		if q.UnackedBy != "" && ackSetOf(m).Has(q.UnackedBy) {
 			continue
 		}
 		selected = append(selected, m)
@@ -241,7 +236,7 @@ func (b *Mailbox) List(q Query) ([]*jsjson.Object, error) {
 	out := make([]*jsjson.Object, 0, len(selected)-start)
 	for _, m := range selected[start:] {
 		copied := jsjson.Spread(m)
-		copied.Set("acked_by", ackSetOf(m).values())
+		copied.Set("acked_by", ackSetOf(m).Values())
 		out = append(out, copied)
 	}
 	return out, nil
@@ -278,51 +273,4 @@ func sliceStart(start float64, length int) int {
 		return length - int(min(-start, float64(length)))
 	}
 	return int(min(start, float64(length)))
-}
-
-// read mirrors readJsonl: a missing file is empty; each non-empty line is JSON.parse'd and
-// kept unless it fails to parse or its value is falsy.
-func (b *Mailbox) read(name string) ([]any, error) {
-	file := filepath.Join(b.Dir, name)
-	if !nodefs.Exists(file) {
-		return nil, nil
-	}
-	data, err := nodefs.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	var values []any
-	for _, line := range strings.Split(jsstr.DecodeUTF8(data), "\n") {
-		if line == "" {
-			continue
-		}
-		if v, err := jsjson.Unmarshal([]byte(line)); err == nil && jsjson.Truthy(v) {
-			values = append(values, v)
-		}
-	}
-	return values, nil
-}
-
-func (b *Mailbox) append(name string, value *jsjson.Object) error {
-	line, err := jsjson.Marshal(value)
-	if err != nil {
-		return err
-	}
-	if err := nodefs.MkdirAll(b.Dir); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(filepath.Join(b.Dir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
-	if err != nil {
-		return nodefs.FileError(err, "open", filepath.Join(b.Dir, name))
-	}
-	// One write per line, so lines appended concurrently by orch and the JS never interleave.
-	_, writeErr := f.Write(append(line, '\n'))
-	closeErr := f.Close()
-	if writeErr != nil {
-		return nodefs.FileError(writeErr, "write", "")
-	}
-	if closeErr != nil {
-		return nodefs.FileError(closeErr, "close", "")
-	}
-	return nil
 }

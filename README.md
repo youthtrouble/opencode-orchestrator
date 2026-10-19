@@ -193,8 +193,12 @@ default agent is `conductor`. Start with `/usage`, then `/plan <idea>` or `/ship
 5. **Verify:** run the real checks; unrun checks stay "not run", unmet criteria stay "partial".
 6. **Record:** update the continuation cursor and mailbox so another session can resume.
 
-Pushes, deployments and spending still need deliberate approval. Prompts and permission rules are
-not a security sandbox for every external CLI or tool.
+What the conductor may do without asking is the autonomy policy (`models.json` -> `autonomy`,
+overridable per project): by default it pushes verified slices to `main` itself (`push_to_main:
+auto`), asks before releases, code deletion, spending and deployments (`ask`), and never
+force-pushes (`force_push: never`); see [Answering the conductor and running
+unattended](#answering-the-conductor-and-running-unattended). Prompts and permission rules are not
+a security sandbox for every external CLI or tool.
 
 ## Roles and routing
 
@@ -203,24 +207,41 @@ tiers; `roles.*.prefer` defines fallback order; `thresholds` defines budget post
 describes the schema. These are the prepared registry's configured defaults, not a promise that
 every model ID is available on every account:
 
-| Role               | Preferred model                                            | Main fallback                                                           |
-| ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Planner            | Claude Fable 5.1, max                                      | GPT-6 Astra, xhigh; then strong tiers                                   |
-| Coder              | Claude Opus 5.5, high                                      | GPT-6.1 Sol, high                                                       |
-| Reviewer           | Other vendor's mid tier: Sonnet 5.5 or GPT-6.1 Sol, medium | Other vendor's cheap tier; then same-vendor mid tier, explicitly marked |
-| Verifier           | Claude Sonnet 5.5                                          | GPT-6 Luna; then Claude Haiku 5.5                                       |
-| Researcher         | Claude Sonnet 5.5                                          | GPT-6 Luna                                                              |
-| Explorer / utility | Claude Haiku 5.5                                           | GPT-6 Luna                                                              |
+| Role               | Preferred model                                                                 | Main fallback                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Planner            | Claude Fable 5.1 while Claude's frontier posture is green; else Claude Opus 5.5 | GPT-6.1 Sol. A `size=hard` planning delegation takes a frontier tier that is not red: Fable, else GPT-6 Astra |
+| Coder              | Claude Opus 5.5                                                                 | GPT-6.1 Sol; it goes first when it has more than 15 points more five-hour headroom                            |
+| Reviewer           | Other vendor's mid tier: Sonnet 5.5 or GPT-6.1 Sol, medium                      | Other vendor's cheap tier; then same-vendor mid tier, explicitly marked                                       |
+| Verifier           | Claude Sonnet 5.5                                                               | GPT-6 Luna; then Claude Haiku 5.5                                                                             |
+| Researcher         | Claude Sonnet 5.5                                                               | GPT-6 Luna                                                                                                    |
+| Explorer / utility | Claude Haiku 5.5                                                                | GPT-6 Luna                                                                                                    |
+
+Reasoning effort is not pinned to a model: an explicit `effort` wins, otherwise `effort_policy`
+picks it from the task `size` given to `delegate` (planner: medium -> high, hard -> max; coder:
+medium -> medium, large -> high, hard -> xhigh), and the tier's own `variant`/`effort` is the last
+fallback. Native subagents run at their model's default effort, so large and hard tasks go through
+the CLI bridges, where the policy effort applies.
 
 Native OpenAI subagents include `architect-oai`, `coder-oai`, `reviewer-oai`, `verifier-oai` and
 `researcher-oai`. When routing selects a native agent, `delegate` returns which subagent to call
 rather than launching the CLI bridge. Claude subscription work uses the Claude Code bridge.
 
-Budget defaults are **amber at 60% used**, **red at 85% used**. Without an explicit rate-limit lock,
-a Claude session or Codex five-hour
-window resetting within **20 minutes** is treated one level greener; this grace does not apply to
-weekly windows. Claude overall posture combines session and weekly usage; its frontier posture
-also considers the model-scoped Fable window. Codex combines five-hour and weekly usage.
+Budget defaults are **amber at 60% used**, **red at 85% used**, judged on the raw percentage. An
+imminent reset never makes a window greener: a reset within `soon_minutes` (20) is only reported as
+resetting soon. A rate-limit lock makes the window red. The five-hour window (Claude session, Codex
+five-hour) drives routing; a weekly cap blocks its vendor only when red. Role resolution uses a
+frontier tier (Fable) only while that vendor's frontier posture is green; Claude's frontier posture
+also counts the model-scoped Fable weekly window. When both vendors can serve the coder, verifier,
+researcher, explorer or utility role at an equivalent tier, the one with more five-hour headroom
+wins if it leads by more than `balance_margin` (15) points; otherwise the registry order decides.
+
+One override can start frontier work near a cap: a `delegate` call with `role: planner` and `size:
+hard` that names no harness (nor a `gpt-*`, `o<digit>…` or `claude*` model, which implies one)
+replaces a non-frontier planner with the first frontier tier whose vendor is available and whose
+frontier posture is **not red** (amber or unknown included), Anthropic (Fable) before OpenAI (GPT-6
+Astra). With an explicit harness this override does not apply: the routed role is kept if it is on
+that harness's vendor, otherwise that vendor's registry tier for the role is used (the frontier tier
+for a planner), whatever its posture; the bridges' own budget check still applies.
 
 Red roles route to another usable vendor or pause. Cross-vendor review may be unavailable even
 when coding can continue. The CLI bridges refuse known-red budgets with exit 75 unless explicitly
@@ -257,11 +278,13 @@ The plugin registers the `orch` namespace (often displayed as `orch_*`):
 | `manifest_create`, `manifest_verify` | SHA-256 release fingerprints and verification                                |
 | `worker_start`, `worker_status`      | Detached worker launch and lane state                                        |
 | `supervisor`                         | Start/status/stop/ack supervision                                            |
+| `incident`                           | Record a redacted orchestrator incident for the next audit                   |
 
 The same building blocks are available as `node ~/.config/opencode/orchestrator/bin/<script>.mjs`.
-Relevant scripts include `usage`, `claude-exec`, `codex-exec`, `worker`, `supervisor`, `mailbox`,
-`manifest` and `doctor`; read their source headers for arguments. The presence of a tool does not
-mean its external CLI path has passed end-to-end verification.
+Relevant scripts include `usage`, `claude-exec`, `codex-exec`, `opencode-exec`, `worker`,
+`supervisor`, `mailbox`, `manifest`, `incident`, `policy`, `flip`, `kickoff`, `watch` and `doctor`;
+read their source headers for arguments. The presence of a tool does not mean its external CLI path
+has passed end-to-end verification.
 
 ## Answering the conductor and running unattended
 
@@ -342,7 +365,8 @@ checkout/
 ```
 
 Each work project's private `.orchestrator/` holds `STATE.md`, `plans/`, `briefs/`, `reports/`,
-`reviews/`, `manifests/`, `mailbox/`, `runs/`, `workers/`, `logs/` and supervisor state/config.
+`reviews/`, `manifests/`, `mailbox/`, `runs/`, `workers/`, `logs/`, `flip.json`, the `policy.json`
+autonomy overrides and supervisor state/config.
 Keep it out of that project's Git history too. This checkout's `.gitignore` excludes
 `.orchestrator/`, `service.json`, log files and `node_modules/`.
 
@@ -384,9 +408,10 @@ node ~/.config/opencode/orchestrator/bin/usage.mjs --refresh
 ```
 
 The doctor checks binaries, login/feed availability, routing, config/plugin/agents, fast unit tests
-and recent plugin errors. Expect `OK` rows, including `OK unit tests — pass 14`. `WARN` can indicate
-unclear login or recent plugin errors; `FAIL` produces a nonzero exit. An all-OK doctor does not
-test an actual delegated model turn, installation reversal or long unattended operation.
+and recent plugin errors. Expect `OK` rows, including `OK unit tests — pass N`, N being the number
+of tests in `orchestrator/tests/`. `WARN` can indicate unclear login or recent plugin errors; `FAIL`
+produces a nonzero exit. An all-OK doctor does not test an actual delegated model turn, installation
+reversal or long unattended operation.
 
 | Symptom                     | Check                                                                                                                                                                |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -421,14 +446,17 @@ Read the scripts before granting access to an account or repository:
   in Git is not access control or automatic redaction. Restrict local access and sanitize anything
   you share. Never commit credentials, runtime state or recovery backups.
 
-Review permissions for every delegated harness. The config asks for approval on pushes, but
-separate CLI/tool permissions still matter. Manifests identify released bytes; they do not prove
-that a review occurred, that those bytes are safe or that a model will follow instructions.
+Review permissions for every delegated harness. `opencode.jsonc` sets the opencode shell permission
+for `git push*` to ask for approval and denies `git push --force*`; that permission rule is separate
+from the conductor's autonomy policy, and separate CLI/tool permissions still matter. Manifests
+identify released bytes; they do not prove that a review occurred, that those bytes are safe or that
+a model will follow instructions.
 
 ## Verification and limitations
 
-- **Verified:** 14 fast routing/supervisor unit tests; 29 separate temporary-HOME installer cases
-  with stubbed external commands; strict registry JSON; syntax/privacy checks; initial packaging
+- **Verified:** the fast unit suite (`orchestrator/tests/`: routing, flip, supervision, incident
+  and usage-cache tests); a separate temporary-HOME installer suite (`tests/`) with stubbed external
+  commands; strict registry JSON; syntax/privacy checks; initial packaging
   environment health checks, not a fresh verification of the current live environment. Installer
   integration tests do not touch real config or authenticate a model.
 - **Observed initial packaging issue:** Codex exec delegation on codex-cli 0.162.1 failed argument
@@ -454,10 +482,12 @@ node --test tests/*.test.mjs
 time. The JS runtime stays the default: the plugin, the commands and the bridges do not call
 `orch` yet. Both runtimes share the same state, including the usage cache, so the two can run on
 the same machine. Implemented so far: `orch version`, `orch usage [--refresh] [--json]` (output
-byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), and the
-plugin-facing `orch routing`, `orch budget gate` and `orch effort`, and `orch mailbox
-post|list|ack|reply|inbox` (byte-identical to `bin/mailbox.mjs`, appending to the same
-`.orchestrator/mailbox/` files). The other scripts are not ported.
+byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
+plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
+post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
+create|verify|diff`, `orch incident record|list|report|share` (appending to the same incident log)
+and `orch policy show|set|unattended`, each byte-identical to its `bin/*.mjs` script apart from the
+documented exceptions. The other scripts are not ported.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness
 that diffs every implemented command against the JS.
 

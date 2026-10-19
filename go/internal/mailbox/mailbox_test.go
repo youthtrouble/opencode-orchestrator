@@ -188,18 +188,6 @@ func TestSliceStartMatchesNode(t *testing.T) {
 	}
 }
 
-func TestReadDropsUnparsableAndFalsyLines(t *testing.T) {
-	box := testMailbox(t)
-	writeLines(t, box, "messages.jsonl", `x`, `0`, `-0`, `null`, `false`, `""`, ``, `1`, `"s"`, `[]`, `{}`, `{"a":1}`+"\r", "\ufeff{}")
-	values, err := box.read("messages.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := marshal(t, values); got != `[1,"s",[],{},{"a":1}]` {
-		t.Errorf("read kept %s", got)
-	}
-}
-
 // TestAppendIsOneWritePerLine appends from many goroutines and requires every line intact:
 // concurrent appenders (orch and the JS) must never interleave.
 func TestAppendIsOneWritePerLine(t *testing.T) {

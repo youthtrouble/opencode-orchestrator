@@ -8,6 +8,7 @@
 package jsstr
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -61,6 +62,21 @@ func Compare(a, b string) int {
 	}
 	return 0
 }
+
+// WhiteSpace is the JS white space: the WhiteSpace and LineTerminator code points that `\s` in a
+// regular expression matches and trim() and Number() ignore (the ASCII controls, the Zs
+// category, the two Unicode line separators and the BOM).
+const WhiteSpace = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+// WhiteSpaceClass is WhiteSpace spelled for the inside of an RE2 character class. A JS pattern
+// using `\s` must use it instead of RE2's `\s`, which lacks `\v` and every non-ASCII space.
+var WhiteSpaceClass = func() string {
+	var class strings.Builder
+	for _, r := range WhiteSpace {
+		fmt.Fprintf(&class, `\x{%x}`, r)
+	}
+	return class.String()
+}()
 
 // PadEnd is String.prototype.padEnd(length) with the default space filler.
 func PadEnd(s string, length int) string {

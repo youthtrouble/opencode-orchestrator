@@ -27,9 +27,10 @@ jobs:
           cache: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '26' # the parity reference for V8's sort (PE-5)
+      - run: node --version
       - run: test -z "$(gofmt -l .)"
       - run: go build ./...
       - run: go vet ./... && go vet -tags parity ./parity
       - run: go test -count=1 ./...
-      - run: ./parity/run.sh --only json,mailbox,manifest
+      - run: ./parity/run.sh --only json,mailbox,manifest,incident,policy

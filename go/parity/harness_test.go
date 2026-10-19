@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,8 @@ func TestParity(t *testing.T) {
 	t.Run("usage", h.testUsage)
 	t.Run("mailbox", h.testMailbox)
 	t.Run("manifest", h.testManifest)
+	t.Run("incident", h.testIncident)
+	t.Run("policy", h.testPolicy)
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
@@ -53,12 +56,18 @@ func (h *harness) testJSON(t *testing.T) {
 }
 
 type harness struct {
-	orchBin  string
-	orchJS   string
-	node     string
-	fakesDir string
-	path     string
+	orchBin   string
+	orchJS    string
+	node      string
+	nodeMajor int // major version of node, for the cases whose JS output depends on it (PE-5)
+	fakesDir  string
+	path      string
 }
+
+// referenceNodeMajor is the Node release line whose JS output parity is defined against where
+// the JS itself differs between Node versions (PE-5: V8's sort of short arrays under an
+// inconsistent comparator). Every golden was generated with it; CI installs it.
+const referenceNodeMajor = 26
 
 func newHarness(t *testing.T) *harness {
 	orchBin, orchJS := os.Getenv("ORCH_BIN"), os.Getenv("ORCH_JS")
@@ -79,7 +88,15 @@ func newHarness(t *testing.T) *harness {
 	if sqlite, err := exec.LookPath("sqlite3"); err == nil {
 		searchPath = append(searchPath, filepath.Dir(sqlite))
 	}
-	return &harness{orchBin: orchBin, orchJS: orchJS, node: node, fakesDir: fakesDir, path: strings.Join(searchPath, ":")}
+	version, err := exec.Command(node, "-p", "process.versions.node").Output()
+	if err != nil {
+		t.Fatal("node version:", err)
+	}
+	major, err := strconv.Atoi(strings.SplitN(strings.TrimSpace(string(version)), ".", 2)[0])
+	if err != nil {
+		t.Fatalf("node version %q: %v", version, err)
+	}
+	return &harness{orchBin: orchBin, orchJS: orchJS, node: node, nodeMajor: major, fakesDir: fakesDir, path: strings.Join(searchPath, ":")}
 }
 
 // invocation is one parity case: the same input given to each runtime. seed, when set,

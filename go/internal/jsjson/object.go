@@ -7,6 +7,7 @@
 package jsjson
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 )
@@ -31,6 +32,15 @@ func (o *Object) Set(key string, value any) {
 		o.keys = append(o.keys, key)
 	}
 	o.values[key] = value
+}
+
+// Delete removes key, as the JS delete operator does; a key set again later is appended anew.
+func (o *Object) Delete(key string) {
+	if _, exists := o.values[key]; !exists {
+		return
+	}
+	delete(o.values, key)
+	o.keys = slices.DeleteFunc(o.keys, func(k string) bool { return k == key })
 }
 
 // Get returns the value stored under key and whether the key is present.

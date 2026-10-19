@@ -144,6 +144,31 @@ func TestGreaterThanFollowsJSRelationalComparison(t *testing.T) {
 	}
 }
 
+func TestGreaterOrEqualFollowsJSRelationalComparison(t *testing.T) {
+	nan := math.NaN()
+	cases := []struct {
+		a, b any
+		want bool
+	}{
+		{"a", "a", true},
+		{"a", "b", false},
+		{"\ue000", "😀", true},
+		{"2026-10-18T12:00:00.000Z", true, false}, // a bare --since: NaN >= 1
+		{1.0, true, true},
+		{nan, nan, false},
+		{nan, "1", false},
+		{nil, "0", true},
+		{"x", "x", true},
+		{5.0, "x", false},
+		{NewObject(), "a", false}, // not modelled
+	}
+	for _, c := range cases {
+		if got := GreaterOrEqual(c.a, c.b); got != c.want {
+			t.Errorf("GreaterOrEqual(%#v, %#v) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
 func TestJoinIsArrayJoin(t *testing.T) {
 	if got := Join([]any{"a", nil, 1.0, []any{"b", "c"}, NewObject()}, ", "); got != "a, , 1, b,c, [object Object]" {
 		t.Errorf("Join = %q", got)

@@ -17,12 +17,11 @@ func TestResolveDefaultsMatchTheInstalledLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Paths{
-		Home:          "/home/u",
-		OrchHome:      "/home/u/.config/opencode/orchestrator",
-		RegistryFile:  "/home/u/.config/opencode/orchestrator/models.json",
-		StateDir:      "/home/u/.local/state/opencode/orchestrator",
-		UsageFile:     "/home/u/.local/state/opencode/orchestrator/usage.json",
-		IncidentsFile: "/home/u/.local/state/opencode/orchestrator/incidents.jsonl",
+		Home:         "/home/u",
+		OrchHome:     "/home/u/.config/opencode/orchestrator",
+		RegistryFile: "/home/u/.config/opencode/orchestrator/models.json",
+		StateDir:     "/home/u/.local/state/opencode/orchestrator",
+		UsageFile:    "/home/u/.local/state/opencode/orchestrator/usage.json",
 	}
 	if got != want {
 		t.Errorf("Resolve = %+v\nwant %+v", got, want)
@@ -57,6 +56,33 @@ func TestResolveFallsBackToCurrentUserWithoutHome(t *testing.T) {
 	got, err := Resolve(os.Getenv)
 	if err != nil || got.Home != current.HomeDir {
 		t.Errorf("Resolve = %+v, %v; want home %q", got, err, current.HomeDir)
+	}
+}
+
+// TestNodeHomeKeepsAnEmptyHome pins os.homedir(): an explicitly empty HOME is the home (so
+// the incident log is relative, never the user's own), and only an unset one falls back.
+func TestNodeHomeKeepsAnEmptyHome(t *testing.T) {
+	lookup := func(vars map[string]string) func(string) (string, bool) {
+		return func(key string) (string, bool) { v, ok := vars[key]; return v, ok }
+	}
+	if home, err := NodeHome(lookup(map[string]string{"HOME": ""})); err != nil || home != "" {
+		t.Errorf("empty HOME: %q, %v", home, err)
+	}
+	if home, err := NodeHome(lookup(map[string]string{"HOME": "/h"})); err != nil || home != "/h" {
+		t.Errorf("HOME=/h: %q, %v", home, err)
+	}
+	current, err := user.Current()
+	if err != nil {
+		t.Skip("no user database entry:", err)
+	}
+	if home, err := NodeHome(lookup(nil)); err != nil || home != current.HomeDir {
+		t.Errorf("unset HOME: %q, %v; want %q", home, err, current.HomeDir)
+	}
+	if got := IncidentsFileIn(""); got != ".local/state/opencode/orchestrator/incidents.jsonl" {
+		t.Errorf("IncidentsFileIn(\"\") = %q", got)
+	}
+	if got := IncidentsFileIn("/home/u/"); got != "/home/u/.local/state/opencode/orchestrator/incidents.jsonl" {
+		t.Errorf("IncidentsFileIn = %q", got)
 	}
 }
 

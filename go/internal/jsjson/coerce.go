@@ -66,7 +66,7 @@ var (
 // literal is 0, 0x/0o/0b literals are unsigned integers, anything else that is not a decimal
 // literal or a signed Infinity is NaN.
 func stringToNumber(s string) float64 {
-	s = strings.Trim(s, jsWhiteSpace)
+	s = strings.Trim(s, jsstr.WhiteSpace)
 	switch {
 	case s == "":
 		return 0
@@ -90,10 +90,6 @@ func stringToNumber(s string) float64 {
 	return math.NaN()
 }
 
-// jsWhiteSpace is the ECMAScript WhiteSpace and LineTerminator set that Number() and trim()
-// ignore: the ASCII controls, BOM, the Zs category and the two Unicode line separators.
-const jsWhiteSpace = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
-
 // GreaterThan is JS `a > b` for primitive operands: two strings compare by UTF-16 code units,
 // anything else compares as ToNumber of both, and NaN on either side is false. Pass math.NaN()
 // for an absent operand (undefined compares as NaN). Object and array operands are not
@@ -108,6 +104,20 @@ func GreaterThan(a, b any) bool {
 		return false
 	}
 	return ToNumber(a) > ToNumber(b) // false when either is NaN
+}
+
+// GreaterOrEqual is JS `a >= b` under the same rules as GreaterThan: it is not !(a < b), as
+// NaN on either side is false here too.
+func GreaterOrEqual(a, b any) bool {
+	as, aIsString := a.(string)
+	bs, bIsString := b.(string)
+	if aIsString && bIsString {
+		return jsstr.Compare(as, bs) >= 0
+	}
+	if !isPrimitive(a) || !isPrimitive(b) {
+		return false
+	}
+	return ToNumber(a) >= ToNumber(b)
 }
 
 func isPrimitive(v any) bool {
