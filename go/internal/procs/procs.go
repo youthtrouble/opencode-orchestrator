@@ -95,18 +95,20 @@ func Start(s Spec) (*Child, error) {
 // Signal sends sig to the child (its pid only, not its group). If the child has not exited
 // Grace after the first Signal, it is sent SIGKILL. Later calls send their signal but do not
 // re-arm or extend that single timer. After the child has been reaped, Signal does nothing.
-func (c *Child) Signal(sig syscall.Signal) {
+// sent reports whether sig reached the child, which it cannot once the child is reaped.
+func (c *Child) Signal(sig syscall.Signal) (sent bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reaped {
-		return
+		return false
 	}
 	// The only failure for our own child is that it has already exited (os.ErrProcessDone),
 	// which is what the escalation is waiting for anyway.
-	_ = c.cmd.Process.Signal(sig)
+	err := c.cmd.Process.Signal(sig)
 	if c.killTimer == nil {
 		c.killTimer = time.AfterFunc(c.grace, c.kill)
 	}
+	return err == nil
 }
 
 // Pid is the child's process id.

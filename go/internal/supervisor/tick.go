@@ -25,16 +25,13 @@ type Deps struct {
 	Spawn    Spawner                   // spawn(..., {detached, stdio: "ignore"}).unref()
 	Mailbox  func() *mailbox.Mailbox   // the project mailbox
 	Incident func(incident.Draft)      // records and ignores failures: incident.TryRecord
+	Sleep    func(time.Duration)       // serve's wait between ticks: time.Sleep
 }
 
 // SyncSpec is a spawnSync call: Name run with Args in Dir (the supervisor's own working
-// directory when ""), outputs captured, killed with SIGTERM after a positive Timeout.
-type SyncSpec struct {
-	Name    string
-	Args    []string
-	Dir     string
-	Timeout time.Duration
-}
+// directory when ""), outputs captured, killed with SIGTERM after a positive Timeout. The
+// supervisor leaves Grace to the RunSync it is given (the CLI sets it).
+type SyncSpec = procs.SyncSpec
 
 // SyncResult is a spawnSync result.
 type SyncResult = procs.SyncResult

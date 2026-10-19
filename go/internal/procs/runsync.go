@@ -2,7 +2,6 @@ package procs
 
 import (
 	"bytes"
-	"sync"
 	"syscall"
 	"time"
 
@@ -57,29 +56,28 @@ func RunSync(s SyncSpec) SyncResult {
 // SIGKILL escalation).
 type timeout struct {
 	timer *time.Timer
-	mu    sync.Mutex
-	fired bool
+	done  chan struct{} // closed once the deadline's function has run
+	fired bool          // the deadline's SIGTERM reached the child; read after done
 }
 
 func startTimeout(child *Child, after time.Duration) *timeout {
-	t := &timeout{}
+	t := &timeout{done: make(chan struct{})}
 	if after > 0 {
 		t.timer = time.AfterFunc(after, func() {
-			t.mu.Lock()
-			t.fired = true
-			t.mu.Unlock()
-			child.Signal(syscall.SIGTERM)
+			defer close(t.done)
+			t.fired = child.Signal(syscall.SIGTERM)
 		})
 	}
 	return t
 }
 
-// stop disarms the deadline and reports whether it had fired.
+// stop disarms the deadline and reports whether it signalled the child. A deadline that
+// passes after the child has been reaped sends nothing and is no timeout; one that is running
+// when stop is called is waited for, so its outcome is known.
 func (t *timeout) stop() bool {
-	if t.timer != nil {
-		t.timer.Stop()
+	if t.timer == nil || t.timer.Stop() {
+		return false
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	<-t.done
 	return t.fired
 }

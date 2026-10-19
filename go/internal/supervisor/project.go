@@ -24,6 +24,7 @@ type Project struct {
 	ConfigPath string // supervisor.json
 	StatePath  string // supervisor-state.json
 	AcksPath   string // supervisor-acks.json
+	LockPath   string // supervisor.lock: the serving supervisor's pid as text
 	StopPath   string // supervisor.stop
 	LogPath    string // logs/supervisor.log
 	workers    worker.Project
@@ -38,6 +39,7 @@ func NewProject(root string) Project {
 		ConfigPath: filepath.Join(dir, "supervisor.json"),
 		StatePath:  filepath.Join(dir, "supervisor-state.json"),
 		AcksPath:   filepath.Join(dir, "supervisor-acks.json"),
+		LockPath:   filepath.Join(dir, "supervisor.lock"),
 		StopPath:   filepath.Join(dir, "supervisor.stop"),
 		LogPath:    filepath.Join(dir, "logs", "supervisor.log"),
 		workers:    worker.NewProject(root),

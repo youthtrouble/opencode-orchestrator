@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Go port: `orch supervisor start|serve` replace `bin/supervisor.mjs start|serve`: `start` launches
+  a detached, kept-awake `orch supervisor serve`; `serve` claims the same `supervisor.lock`, ticks
+  every 5 s (lanes, events, wake channels, redispatch, conductor flip evaluation, all self-exec'd
+  on `orch`) and stops through `supervisor.stop`. New `supervisor` parity cases run both daemons
+  for one tick; PE-17 (a missing `opencode` does not stop `orch supervisor serve`) is asserted.
 - Go port: `orch supervisor status|stop|ack` matches `bin/supervisor.mjs` byte for byte (stdout,
   stderr, exit codes, `.orchestrator/supervisor-acks.json`), every state and acks shape included
   (Object.prototype names acknowledged, `__proto__` included, as in the JS). The supervisor's lane

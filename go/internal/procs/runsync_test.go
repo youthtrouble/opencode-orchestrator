@@ -2,6 +2,7 @@ package procs
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -49,13 +50,28 @@ func TestRunSyncTimeoutSendsTerm(t *testing.T) {
 }
 
 // trapTimeout is the timeout of children that must have installed a SIGTERM trap before it
-// fires: a fresh script can take a few hundred milliseconds to start on a loaded machine.
-const trapTimeout = 1500 * time.Millisecond
+// fires. RunSync arms it at the spawn, so it is generous: a fresh shell under parallel -race
+// load can take over a second to reach its trap (S8c-1 review F1).
+const trapTimeout = slack
+
+// runTrapping runs a script whose body first installs a SIGTERM trap and then runs forever,
+// and fails the test when the timeout's SIGTERM arrived before that trap was in place: the
+// script records readiness in a file right after its trap.
+func runTrapping(t *testing.T, trap, forever string) SyncResult {
+	t.Helper()
+	ready := filepath.Join(t.TempDir(), "ready")
+	got := RunSync(SyncSpec{Name: script(t, trap+`; : > "$1"; `+forever), Args: []string{ready}, Timeout: trapTimeout, Grace: killGrace})
+	if _, err := os.Stat(ready); err != nil {
+		t.Fatalf("the child had not installed its trap when the timeout fired: %v", err)
+	}
+	return got
+}
 
 // TestRunSyncTimeoutKeepsTheStatusOfAChildThatHandlesTerm: Node keeps the exit status of a
 // child that exits on its own after the timeout's SIGTERM (probed: status 3, ETIMEDOUT).
 func TestRunSyncTimeoutKeepsTheStatusOfAChildThatHandlesTerm(t *testing.T) {
-	got := RunSync(SyncSpec{Name: script(t, "trap 'exit 3' TERM; /bin/sleep 5 & wait"), Timeout: trapTimeout, Grace: killGrace})
+	t.Parallel()
+	got := runTrapping(t, "trap 'exit 3' TERM", "/bin/sleep 15 & wait")
 	wantCode(t, got.Status, intp(3))
 	if !got.TimedOut {
 		t.Error("not marked timed out")
@@ -64,8 +80,9 @@ func TestRunSyncTimeoutKeepsTheStatusOfAChildThatHandlesTerm(t *testing.T) {
 
 // TestRunSyncKillsAChildThatIgnoresTerm: PE-10 ext., SIGKILL one Grace after the SIGTERM.
 func TestRunSyncKillsAChildThatIgnoresTerm(t *testing.T) {
+	t.Parallel()
 	started := time.Now()
-	got := RunSync(SyncSpec{Name: script(t, "trap '' TERM; while :; do /bin/sleep 1; done"), Timeout: trapTimeout, Grace: killGrace})
+	got := runTrapping(t, "trap '' TERM", "while :; do /bin/sleep 1; done")
 	if elapsed := time.Since(started); elapsed < trapTimeout+killGrace || elapsed > trapTimeout+killGrace+slack {
 		t.Errorf("RunSync took %v, want the deadline plus the grace", elapsed)
 	}
@@ -127,5 +144,22 @@ func TestStartReapedReturnsAStartFailure(t *testing.T) {
 	var startErr *StartError
 	if !errors.As(err, &startErr) || startErr.Code != "ENOENT" {
 		t.Fatalf("err = %v, want the ENOENT StartError", err)
+	}
+}
+
+// TestADeadlinePastTheReapIsNoTimeout: a deadline that fires once the child has exited and
+// been reaped signals nothing, so the run is not marked timed out (S8b review L1).
+func TestADeadlinePastTheReapIsNoTimeout(t *testing.T) {
+	child, err := Start(Spec{Name: script(t, "exit 0"), Grace: testGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := child.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := startTimeout(child, time.Nanosecond)
+	<-deadline.done
+	if deadline.stop() {
+		t.Error("a deadline after the reap reported a timeout")
 	}
 }

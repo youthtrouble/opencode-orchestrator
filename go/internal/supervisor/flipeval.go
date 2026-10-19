@@ -155,6 +155,7 @@ func (s *Supervisor) launchNeverStarted(state *jsjson.Object, t *tick, c conduct
 // at every evaluation (mirrored).
 func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorView) error {
 	pending := jsjson.Path(c.flip, "pending_launch")
+	// The log shows pl.from as it is (undefined included); the argument is pl.from || activeDoor.
 	from, to := property(pending, "from"), property(pending, "to")
 	args := []any{"run", "--to", to, "--from", or(jsjson.Path(pending, "from"), c.activeDoor),
 		"--reason", or(jsjson.Path(pending, "reason"), "pending launch"), "--cwd", s.Root}

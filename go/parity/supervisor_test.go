@@ -64,8 +64,8 @@ const realisticSupervisorState = `{
   "awaiting_human_logged": false
 }`
 
-// testSupervisor compares `orch supervisor status|stop|ack` and its usage errors with
-// bin/supervisor.mjs. serve and start (S8c) are not compared yet.
+// testSupervisor compares `orch supervisor` with bin/supervisor.mjs: status, stop and ack and
+// the usage errors synchronously, serve and start as daemons (supervisor_serve_test.go).
 func (h *harness) testSupervisor(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	const orchestratorIsFile = "Error: EEXIST: file already exists, mkdir '$PROJECT/.orchestrator'"
@@ -122,6 +122,8 @@ func (h *harness) testSupervisor(t *testing.T) {
 	t.Run("ack/PE-16-string-events", h.testSupervisorAckStringEvents)
 	t.Run("ack/PE-16-array-acks", h.testSupervisorAckArrayAcks)
 	t.Run("cross-runtime", h.testSupervisorCrossRuntime)
+	t.Run("serve", h.testSupervisorServe)
+	t.Run("start", h.testSupervisorStart)
 }
 
 // testSupervisorAckStringEvents asserts PE-16(4): with events "ab", the JS acknowledges

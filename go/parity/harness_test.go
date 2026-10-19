@@ -131,6 +131,9 @@ type invocation struct {
 	progress               string
 	projectPaths           bool
 	normalizeWrites        func(outcome, map[string]string) outcome
+	// daemon runs the command as a supervisor serve: started, stopped through its stop file
+	// once it holds its lock, and waited for (see runDaemon).
+	daemon bool
 }
 
 // crashClass names how a case that ends in an uncaught JS exception is compared (plan
@@ -188,7 +191,11 @@ func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 			collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
 			collectExtraFiles(t, sb, inv, before)
 		}
-		o := h.run(t, sb, argv, inv.stdin, inv.env)
+		runner := h.run
+		if inv.daemon {
+			runner = h.runDaemon
+		}
+		o := runner(t, sb, argv, inv.stdin, inv.env)
 		if strings.Contains(inv.errorLine, "$PROJECT") {
 			canonicalProject, err := filepath.EvalSymlinks(sb.project)
 			if err != nil {
@@ -335,6 +342,14 @@ func (h *harness) newSandbox(t *testing.T) sandbox {
 // the plan allows, then collects the files it may have written.
 func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte, env []string) outcome {
 	t.Helper()
+	cmd := h.command(sb, argv, stdin, env)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	return outcome{exitCode: exitCode(t, argv[0], cmd.Run()), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+}
+
+// command is argv prepared to run in the sandbox project with the plan's environment.
+func (h *harness) command(sb sandbox, argv []string, stdin []byte, env []string) *exec.Cmd {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = sb.project
 	cmd.Env = []string{
@@ -347,17 +362,20 @@ func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte, env
 		cmd.Env = append(cmd.Env, strings.ReplaceAll(entry, "$PROJECT", sb.project))
 	}
 	cmd.Stdin = bytes.NewReader(stdin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	exitCode := 0
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if !errors.As(err, &exitErr) {
-			t.Fatalf("run %s: %v", argv[0], err)
-		}
-		exitCode = exitErr.ExitCode()
+	return cmd
+}
+
+// exitCode is the exit code of a finished run, whose error is runErr.
+func exitCode(t *testing.T, name string, runErr error) int {
+	t.Helper()
+	if runErr == nil {
+		return 0
 	}
-	return outcome{exitCode: exitCode, stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		t.Fatalf("run %s: %v", name, runErr)
+	}
+	return exitErr.ExitCode()
 }
 
 // files collects what a run may have written: the project's .orchestrator/, the HOME state dir

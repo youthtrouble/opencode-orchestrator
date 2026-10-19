@@ -11,8 +11,13 @@
 # written to codex-cwd.txt and CLAUDECODE (or <unset>) to codex-env.txt. Unless
 # <case>.nostdin exists, stdin is then read to its end into codex-stdin.txt, with a
 # "<no newline at end>" line after an unterminated last line. Then <case>.jsonl, .stderr,
-# .signal, .sleep and .exit act as in the claude fake. Shell builtins only: PATH holds no
-# coreutils.
+# .signal, .sleep and .exit act as in the claude fake.
+#
+# Scripted `codex queue` (the supervisor's codex-queue wake channel): when
+# $HOME/fake-codex-queue/exit exists, each argv element is appended as one line to
+# $HOME/fake-log/codex-queue-argv.txt and the fake exits with the code the file holds.
+#
+# Shell builtins only: PATH holds no coreutils.
 script="$HOME/fake-codex"
 if [ "$1" = app-server ] && [ -d "$script" ]; then
   n=0
@@ -24,6 +29,12 @@ if [ "$1" = app-server ] && [ -d "$script" ]; then
     fi
   done
   exit 0
+fi
+script="$HOME/fake-codex-queue"
+if [ "$1" = queue ] && [ -f "$script/exit" ]; then
+  for arg in "$@"; do printf '%s\n' "$arg" >> "$HOME/fake-log/codex-queue-argv.txt"; done
+  IFS= read -r code < "$script/exit"
+  exit "$code"
 fi
 script="$HOME/fake-codex-exec"
 if [ "$1" = exec ] && [ -f "$script/case" ]; then
