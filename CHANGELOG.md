@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-10-19
 
 The Go runtime release. `orch`, one static Go binary, ports every `orchestrator/bin/*.mjs` script,
 and a parity harness diffs each command against the JS. The plugin gains `runtime: "go"|"js"`
