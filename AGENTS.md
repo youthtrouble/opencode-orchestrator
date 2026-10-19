@@ -71,6 +71,8 @@ whose dependencies are met (check the plan's In scope / Mirrors lines), coded by
 headroom now. Keep slices separable: disjoint files where possible, each slice committed on a local
 branch `slice/<id>` once its own checks pass, never pushed before its gate. Queue the pending reviews
 in STATE.md and run them the moment the reviewer's window opens; push slices to main in plan order.
+Never sleep-wait for a window to reset while independent work exists; if you must wait, wait in
+steps of at most 5 minutes and re-read the mailbox after each step.
 
 ## Two front doors and flipping
 
