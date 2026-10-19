@@ -162,7 +162,7 @@ let caseNumber = 0;
  * Load a fresh copy of the plugin into the sandbox environment and run setup with a fake ctx.
  * The environment stays in place until the test ends, because tools and hooks read it lazily.
  * Pass `brokenRuntime` when the configuration cannot resolve a runtime: setup then makes no
- * warm-up call, so there is none to wait for.
+ * warm-up call, so there is none to wait for. The claim is checked (see requireBrokenRuntime).
  */
 export async function loadPlugin(t, sandbox, { options = {}, env = {}, brokenRuntime = false } = {}) {
   const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -180,8 +180,23 @@ export async function loadPlugin(t, sandbox, { options = {}, env = {}, brokenRun
   const plugin = await import(`${PLUGIN_URL}?case=${++caseNumber}`);
   const ctx = fakeContext(sandbox, options);
   await plugin.default.setup(ctx.api);
-  if (!brokenRuntime) await settleWarmUp(sandbox);
+  if (brokenRuntime) await requireBrokenRuntime(ctx);
+  else await settleWarmUp(sandbox);
   return ctx;
+}
+
+// A configuration wrongly claimed broken would skip settleWarmUp and let the warm-up call race
+// the case, so the claim is probed. The probe cannot disturb the calls a case counts: a broken
+// runtime never spawns orch, since every tool fails with OrchConfigError while resolving it, and
+// a runtime that does resolve fails the load here, before the case runs.
+async function requireBrokenRuntime(ctx) {
+  const probe = await ctx.toolResult("usage_status");
+  if (probe.status !== "error" || probe.error.name !== "OrchConfigError") {
+    throw new Error(
+      "loadPlugin was passed brokenRuntime, but the plugin resolved a runtime, " +
+        "whose warm-up call would race the case",
+    );
+  }
 }
 
 function fakeContext(sandbox, options) {
@@ -222,16 +237,16 @@ function fakeContext(sandbox, options) {
   };
 }
 
-// setup starts an un-awaited warm-up routing(false). Let it settle so it cannot race a case.
-// Only the fake orch logs its calls. A real `orch routing --json` over a seeded cache leaves no
-// observable trace (it only reads the cache), so it gets a fixed grace period instead: this
-// assumes the binary answers within 300 ms. Over no cache it starts a collection, which the
-// no-cache parity case waits for itself.
 // The fake orch is a Node process; under a loaded full-suite run its start-up has taken over
 // 2 s, so the bound is generous and running out of it fails the case instead of letting a late
 // warm-up call land among the calls the case counts.
 const WARM_UP_BOUND_MS = 15000;
 
+// setup starts an un-awaited warm-up routing(false). Let it settle so it cannot race a case.
+// Only the fake orch logs its calls. A real `orch routing --json` over a seeded cache leaves no
+// observable trace (it only reads the cache), so it gets a fixed grace period instead: this
+// assumes the binary answers within 300 ms. Over no cache it starts a collection, which the
+// no-cache parity case waits for itself.
 async function settleWarmUp(sandbox) {
   if (sandbox.runtime === "js") return new Promise((r) => setTimeout(r, 50));
   if (!sandbox.fakeOrch) return new Promise((r) => setTimeout(r, 300));

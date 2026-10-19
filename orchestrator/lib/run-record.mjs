@@ -3,6 +3,7 @@
 // and what it cost, without re-reading raw logs.
 import fs from "node:fs";
 import path from "node:path";
+import tty from "node:tty";
 
 export function runsDir(projectRoot) {
   return path.join(projectRoot, ".orchestrator", "runs");
@@ -36,6 +37,9 @@ export function readPrompt(opts, positional) {
   if (opts["prompt-file"]) return fs.readFileSync(path.resolve(opts["prompt-file"]), "utf8");
   if (opts.prompt) return opts.prompt;
   if (positional.length) return positional.join(" ");
-  if (!process.stdin.isTTY) return fs.readFileSync(0, "utf8");
+  // tty.isatty, not process.stdin.isTTY: touching process.stdin opens fd 0 as a stream, which
+  // makes a pipe non-blocking, and readFileSync(0) then fails with EAGAIN when the writer (a
+  // worker runner feeding its bridge) has not written yet (incident e80dd9b226b2).
+  if (!tty.isatty(0)) return fs.readFileSync(0, "utf8");
   throw new Error("no prompt: pass --prompt, --prompt-file, positional text, or stdin");
 }

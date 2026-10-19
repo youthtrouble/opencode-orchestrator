@@ -176,6 +176,11 @@ is planned for 0.6.0 behind a human gate.
   receipt. `doctor.mjs` gains the `orch binary` row after `node present` (`ORCH_BIN`, else
   `~/.local/bin/orch`, else `PATH`; WARN when none is found), byte-identical to `orch doctor`'s
   row; the doctor parity cases now compare it and add `no-binary`.
+- bridges (JS): `claude-exec.mjs`, `codex-exec.mjs` and `opencode-exec.mjs` no longer fail with
+  `EAGAIN ... read` when they read stdin before their worker runner has written the prompt to the
+  pipe (load makes that more likely; it is not the cause): `readPrompt` tests stdin with
+  `tty.isatty(0)` instead of `process.stdin.isTTY`, which made the pipe non-blocking (incident
+  e80dd9b226b2). `mailbox.mjs reply` reads an answer piped on stdin the same way.
 
 ## 0.4.7 — 2026-10-19
 

@@ -661,8 +661,8 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			inv.normalize = func(s string) string { return serve(launched(s)) }
 			serveArgs := []string{"serve", "--cwd", "."}
 			runners := strings.NewReplacer(h.runnerPrefixes(t)...)
-			js := h.runServeLaunch(t, inv, append([]string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, serveArgs...), c.lane, runners)
-			orch := h.runServeLaunch(t, inv, append([]string{h.orchBin, "supervisor"}, serveArgs...), c.lane, runners)
+			js, jsQuoted := h.runServeLaunch(t, inv, append([]string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, serveArgs...), c.lane, runners)
+			orch, orchQuoted := h.runServeLaunch(t, inv, append([]string{h.orchBin, "supervisor"}, serveArgs...), c.lane, runners)
 			for side, o := range map[string]outcome{"js": js, "orch": orch} {
 				seen := o.files["project/logs/supervisor.log"] + o.files["project/mailbox/messages.jsonl"] + o.files["fakelog/claude-argv.txt"]
 				for _, want := range c.want {
@@ -674,32 +674,38 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			if c.lane == "conductor" {
 				requireFlipEvaluated(t, "js", js)
 				requireFlipEvaluated(t, "orch", orch)
+				if len(jsQuoted) == 0 {
+					t.Error("js: the supervisor log quotes no launch answer")
+				}
 			}
-			requireEqualCutLengths(t, js, orch)
+			// Only conductor launches quote an answer in the log, behind logCut's mask; a
+			// re-dispatch quotes `worker start` in its mailbox body, which no mask hides from
+			// compareOutcomes, so the other lanes need no non-empty guard.
+			if !reflect.DeepEqual(jsQuoted, orchQuoted) {
+				t.Errorf("the serves quote launch answers of different lengths: js %v, orch %v", jsQuoted, orchQuoted)
+			}
 			js, orch = js.normalized(cutLogPaths), orch.normalized(cutLogPaths)
 			compareOutcomes(t, js, orch)
 		})
 	}
 }
 
-// requireEqualCutLengths asserts that the tails logCut masks are as long, in UTF-16 units, on
-// both sides, so a difference in where the serve cuts the answer cannot hide behind the mask.
-func requireEqualCutLengths(t *testing.T, js, orch outcome) {
-	t.Helper()
-	jsTails, orchTails := cutTailLengths(js), cutTailLengths(orch)
-	if !reflect.DeepEqual(jsTails, orchTails) {
-		t.Errorf("masked log tails differ in length: js %v, orch %v", jsTails, orchTails)
-	}
-}
-
-// cutTailLengths lists the length of every tail logCut masks in the supervisor log.
-func cutTailLengths(o outcome) []int {
+// quotedAnswerLengths lists, in UTF-16 units, how much of each launch answer the supervisor log
+// quotes, so a difference in where the serves cut the answer cannot hide behind logCut's mask.
+// It must see the raw log: the runner's pid is among the units kept before the log path, so
+// the masked tails alone differ whenever the two runners' pids differ in digit count
+// (incident 067f540da276).
+func quotedAnswerLengths(rawLog string) []int {
 	var lengths []int
-	for _, m := range logCut.FindAllStringSubmatch(o.files["project/logs/supervisor.log"], -1) {
-		lengths = append(lengths, jsstr.Len(m[2]))
+	for _, m := range quotedAnswer.FindAllStringSubmatch(rawLog, -1) {
+		lengths = append(lengths, jsstr.Len(m[1]))
 	}
 	return lengths
 }
+
+// quotedAnswer is a raw supervisor log line quoting a conductor launch; group 1 is `flip
+// run`'s answer as the serve kept it.
+var quotedAnswer = regexp.MustCompile(`(?m)^\S+ (?:relaunch|pending launch|flip target never started:) [^\n]*?: (\{[^\n]*)$`)
 
 func cutLogPaths(s string) string { return logCut.ReplaceAllString(s, "${1}<cut>") }
 
@@ -710,8 +716,9 @@ var logCut = regexp.MustCompile(`(?m)^(<iso> (?:relaunch|pending launch|flip tar
 
 // runServeLaunch runs one runtime's serve in a fresh sandbox, waits for the lane it launched
 // to name its runner, settles that runner and collects every file; the launch's fresh values
-// are rewritten as for `worker start --detach`.
-func (h *harness) runServeLaunch(t *testing.T, inv invocation, argv []string, lane string, runners *strings.Replacer) outcome {
+// are rewritten as for `worker start --detach`. It also returns the quotedAnswerLengths of the
+// raw supervisor log.
+func (h *harness) runServeLaunch(t *testing.T, inv invocation, argv []string, lane string, runners *strings.Replacer) (outcome, []int) {
 	t.Helper()
 	sb := h.newSandbox(t)
 	inv.seed(t, sb)
@@ -722,11 +729,12 @@ func (h *harness) runServeLaunch(t *testing.T, inv invocation, argv []string, la
 	settle(t, l.RunnerPid)
 	o.files = sb.files(t)
 	requireLaunchRecorded(t, argv[0], l, o.files, true)
+	quoted := quotedAnswerLengths(o.files["project/logs/supervisor.log"])
 	collectExtraFiles(t, sb, inv, o.files)
 	o = o.withLaunch(l, runners)
 	o = o.withProjectPlaceholder(t, sb)
 	o = inv.normalizeWrites(o, before)
-	return o.normalized(inv.normalize)
+	return o.normalized(inv.normalize), quoted
 }
 
 // launchedRunner polls the lane's state until it names its runner, run id and log.

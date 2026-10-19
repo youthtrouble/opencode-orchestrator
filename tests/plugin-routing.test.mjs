@@ -132,7 +132,7 @@ describe("orch binary resolution", { skip }, () => {
 
   test("nothing found lists every candidate", async (t) => {
     const { sandbox } = await resolutionSandbox(t, []);
-    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go" } });
+    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go" }, brokenRuntime: true });
     const looked = [path.join(sandbox.home, ".local", "bin", "orch"), ...process.env.PATH.split(path.delimiter).map((d) => path.join(d, "orch"))];
     await assert.rejects(plugin.callTool("usage_status"), { name: "OrchConfigError", message: `orch binary not found (looked in: ${looked.join(", ")})` });
     await assertDegraded(plugin, sandbox);

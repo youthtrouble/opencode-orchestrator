@@ -6,6 +6,7 @@
 // mailbox.mjs inbox                                  (unanswered questions addressed to you, with the reply command)
 import fs from "node:fs";
 import path from "node:path";
+import tty from "node:tty";
 import { post, list, ack } from "../lib/mailbox.mjs";
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -32,7 +33,8 @@ if (cmd === "post") {
   else for (const m of msgs) console.log(`${m.at}  ${m.kind.padEnd(8)} ${m.from} -> ${m.to}  ${m.subject}  [${m.id.slice(0, 8)}]${m.acked_by.length ? "  acked:" + m.acked_by.join(",") : ""}${m.refs.length ? "\n    refs: " + m.refs.join(", ") : ""}${m.body ? "\n    " + m.body.split("\n").slice(0, 6).join("\n    ") : ""}`);
 } else if (cmd === "reply") {
   const [idArg, ...words] = rest.filter((a) => !a.startsWith("--"));
-  const body = words.join(" ") || (process.stdin.isTTY ? "" : fs.readFileSync(0, "utf8"));
+  // tty.isatty, not process.stdin.isTTY, which makes a stdin pipe non-blocking (see readPrompt).
+  const body = words.join(" ") || (tty.isatty(0) ? "" : fs.readFileSync(0, "utf8"));
   if (!idArg || !body) { console.error('usage: mailbox.mjs reply <id-or-prefix> "your answer"'); process.exit(2); }
   const id = resolveId(root, idArg);
   const orig = list(root, { limit: 100000 }).find((m) => m.id === id);
