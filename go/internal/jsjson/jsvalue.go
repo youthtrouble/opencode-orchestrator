@@ -81,17 +81,21 @@ func TemplateString(v any) string {
 	case string:
 		return v
 	case []any:
-		// Array.prototype.join: elements by String(), null and undefined as "".
-		parts := make([]string, len(v))
-		for i, item := range v {
-			if item != nil {
-				parts[i] = TemplateString(item)
-			}
-		}
-		return strings.Join(parts, ",")
+		return Join(v, ",")
 	default:
 		return "[object Object]"
 	}
+}
+
+// Join is Array.prototype.join(sep): elements by String(), null (and undefined) as "".
+func Join(items []any, sep string) string {
+	parts := make([]string, len(items))
+	for i, item := range items {
+		if item != nil {
+			parts[i] = TemplateString(item)
+		}
+	}
+	return strings.Join(parts, sep)
 }
 
 // OrText is `${v || fallback}`: String(v) when v is truthy, else fallback.

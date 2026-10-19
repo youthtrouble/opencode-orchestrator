@@ -1,0 +1,287 @@
+package mailbox
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+)
+
+var fixedNow = time.Date(2026, 10, 18, 12, 0, 0, 500_000_000, time.UTC)
+
+// testMailbox returns a mailbox in a temp project with a fixed clock and sequential ids.
+func testMailbox(t *testing.T) *Mailbox {
+	t.Helper()
+	box := New(t.TempDir())
+	box.Now = func() time.Time { return fixedNow }
+	n := 0
+	box.NewID = func() string { n++; return fmt.Sprintf("id-%d", n) }
+	return box
+}
+
+func TestPostAppendsTheMessageInJSKeyOrder(t *testing.T) {
+	box := testMailbox(t)
+	msg, err := box.Post(Draft{From: "a", To: "*", Kind: "note", Subject: "s", Body: "b", Refs: []string{"x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"id":"id-1","at":"2026-10-18T12:00:00.500Z","from":"a","to":"*","kind":"note","subject":"s","body":"b","refs":["x"],"thread":null}`
+	if got := marshal(t, msg); got != want {
+		t.Errorf("Post returned %s", got)
+	}
+	if got := readFile(t, filepath.Join(box.Dir, "messages.jsonl")); got != want+"\n" {
+		t.Errorf("messages.jsonl = %q", got)
+	}
+}
+
+// The JS error lines, captured from Node v26.5.1 (bin/mailbox.mjs), minus the "Error: " the
+// CLI adds.
+func TestErrorMessagesAreTheJSMessages(t *testing.T) {
+	box := testMailbox(t)
+	for _, draft := range []Draft{{Subject: "s"}, {From: "a"}} {
+		if _, err := box.Post(draft); !errors.Is(err, ErrIncompletePost) || err.Error() != "post needs from and subject" {
+			t.Errorf("Post(%+v) error = %v", draft, err)
+		}
+	}
+	writeLines(t, box, "messages.jsonl", `{"id":"abc-1"}`, `{"id":"abc-2"}`, `{"id":"dup"}`, `{"id":"dup"}`)
+	cases := []struct {
+		prefix string
+		is     error
+		msg    string
+	}{
+		{"abc", ErrAmbiguousID, "ambiguous message id prefix abc"},
+		{"du", ErrAmbiguousID, "ambiguous message id prefix du"},
+		{"zz", ErrNoMessage, "no message with id zz"},
+	}
+	for _, c := range cases {
+		if _, err := box.ResolveID(c.prefix); !errors.Is(err, c.is) || err.Error() != c.msg {
+			t.Errorf("ResolveID(%q) error = %v, want %q", c.prefix, err, c.msg)
+		}
+	}
+	if _, err := box.Ack(AckRequest{}); !errors.Is(err, ErrNoMessage) || err.Error() != "no message with id undefined" {
+		t.Errorf("Ack without id error = %v", err)
+	}
+}
+
+func TestResolveID(t *testing.T) {
+	box := testMailbox(t)
+	writeLines(t, box, "messages.jsonl", `{"id":"abc"}`, `{"id":"abcdef"}`, `{"id":"xyz"}`)
+	for prefix, want := range map[string]string{"abc": "abc", "abcd": "abcdef", "x": "xyz"} {
+		if got, err := box.ResolveID(prefix); err != nil || got != want {
+			t.Errorf("ResolveID(%q) = %q, %v; want %q", prefix, got, err, want)
+		}
+	}
+}
+
+func TestResolveIDPrefixScanThrowsOnAnIDThatIsNotAString(t *testing.T) {
+	box := testMailbox(t)
+	writeLines(t, box, "messages.jsonl", `{"id":"abc"}`, `{"subject":"no id"}`)
+	if got, err := box.ResolveID("abc"); err != nil || got != "abc" {
+		t.Errorf("exact match = %q, %v; the exact pass must not throw", got, err)
+	}
+	var shape *ShapeError
+	if _, err := box.ResolveID("ab"); !errors.As(err, &shape) {
+		t.Errorf("prefix scan error = %v, want *ShapeError", err)
+	}
+}
+
+func TestAckOmitsAnAbsentByAndAppendsDuplicates(t *testing.T) {
+	box := testMailbox(t)
+	writeLines(t, box, "messages.jsonl", `{"id":"m1"}`)
+	id := "m"
+	for range 2 {
+		entry, err := box.Ack(AckRequest{ID: &id, Note: "n"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := marshal(t, entry); got != `{"id":"m1","at":"2026-10-18T12:00:00.500Z","note":"n"}` {
+			t.Errorf("Ack = %s", got)
+		}
+	}
+	if got := strings.Count(readFile(t, filepath.Join(box.Dir, "acks.jsonl")), "\n"); got != 2 {
+		t.Errorf("acks.jsonl has %d lines, want 2", got)
+	}
+}
+
+func TestListFiltersThenLimitsThenAddsAckedBy(t *testing.T) {
+	box := testMailbox(t)
+	writeLines(t, box, "messages.jsonl",
+		`{"id":"m1","at":"2026-01-01T00:00:00.000Z","to":"*","kind":"note"}`,
+		`{"id":"m2","at":"2026-01-02T00:00:00.000Z","to":"bob","kind":"question","acked_by":"kept position"}`,
+		`{"id":"m3","at":"2026-01-03T00:00:00.000Z","to":"eve","kind":"question"}`,
+	)
+	writeLines(t, box, "acks.jsonl", `{"id":"m2","by":"bob"}`, `{"id":"m2","by":"bob"}`, `{"id":"m2"}`, `{"id":"m2","by":"amy"}`)
+	cases := []struct {
+		q    Query
+		want []string
+	}{
+		{Query{Limit: DefaultLimit}, []string{"m1", "m2", "m3"}},
+		{Query{To: "bob", Limit: DefaultLimit}, []string{"m1", "m2"}},
+		{Query{Kind: "question", Limit: DefaultLimit}, []string{"m2", "m3"}},
+		{Query{Since: "2026-01-01T00:00:00.000Z", Limit: DefaultLimit}, []string{"m2", "m3"}},
+		{Query{UnackedBy: "bob", Limit: DefaultLimit}, []string{"m1", "m3"}},
+		{Query{Limit: 1}, []string{"m3"}},
+		{Query{Kind: "question", Limit: 1}, []string{"m3"}},
+	}
+	for _, c := range cases {
+		msgs, err := box.List(c.q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, m := range msgs {
+			ids = append(ids, jsjson.TemplateString(jsjson.Path(m, "id")))
+		}
+		if strings.Join(ids, ",") != strings.Join(c.want, ",") {
+			t.Errorf("List(%+v) = %v, want %v", c.q, ids, c.want)
+		}
+	}
+	msgs, _ := box.List(Query{To: "bob", Kind: "question", Limit: DefaultLimit})
+	if got := marshal(t, msgs[0]); got != `{"id":"m2","at":"2026-01-02T00:00:00.000Z","to":"bob","kind":"question","acked_by":["bob",null,"amy"]}` {
+		t.Errorf("acked_by = %s", got)
+	}
+}
+
+// TestSliceStartMatchesNode checks the --limit handling, `list.slice(-Number(limit || 50))`,
+// for the limits the parity cases use and more.
+func TestSliceStartMatchesNode(t *testing.T) {
+	const length = 20
+	cases := []struct {
+		limit float64
+		kept  int
+	}{
+		{0, 20}, {math.NaN(), 20}, {math.Inf(1), 20}, {math.Inf(-1), 0}, {5, 5}, {2.5, 2}, {-5, 15},
+		{-2.5, 18}, {25, 20}, {-25, 0}, {20, 20}, {1, 1}, {0.4, 20}, {-0.4, 20},
+	}
+	for _, c := range cases {
+		if got := length - sliceStart(-c.limit, length); got != c.kept {
+			t.Errorf("slice(-%v) keeps %d of %d, want %d", c.limit, got, length, c.kept)
+		}
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("Node unavailable; fixed expectations still tested")
+	}
+	var limits []string
+	for _, c := range cases {
+		limits = append(limits, jsjson.TemplateString(c.limit))
+	}
+	script := `const a = Array.from({length: 20}); console.log(process.argv.slice(1).map(l => a.slice(-Number(l)).length).join(","))`
+	out, err := exec.Command("node", append([]string{"-e", script}, limits...)...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, got := range strings.Split(strings.TrimSpace(string(out)), ",") {
+		if n, _ := strconv.Atoi(got); n != cases[i].kept {
+			t.Errorf("Node slice(-%s) keeps %s, table says %d", limits[i], got, cases[i].kept)
+		}
+	}
+}
+
+func TestReadDropsUnparsableAndFalsyLines(t *testing.T) {
+	box := testMailbox(t)
+	writeLines(t, box, "messages.jsonl", `x`, `0`, `-0`, `null`, `false`, `""`, ``, `1`, `"s"`, `[]`, `{}`, `{"a":1}`+"\r", "\ufeff{}")
+	values, err := box.read("messages.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := marshal(t, values); got != `[1,"s",[],{},{"a":1}]` {
+		t.Errorf("read kept %s", got)
+	}
+}
+
+// TestAppendIsOneWritePerLine appends from many goroutines and requires every line intact:
+// concurrent appenders (orch and the JS) must never interleave.
+func TestAppendIsOneWritePerLine(t *testing.T) {
+	box := New(t.TempDir())
+	big := strings.Repeat("x", 8000)
+	var wg sync.WaitGroup
+	for w := range 8 {
+		wg.Go(func() {
+			for range 50 {
+				if _, err := box.Post(Draft{From: strconv.Itoa(w), To: "*", Subject: "s", Body: big}); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	content := readFile(t, filepath.Join(box.Dir, "messages.jsonl"))
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	if len(lines) != 400 {
+		t.Fatalf("%d lines, want 400", len(lines))
+	}
+	for i, line := range lines {
+		if _, err := jsjson.Unmarshal([]byte(line)); err != nil {
+			t.Fatalf("line %d is corrupt: %v", i, err)
+		}
+	}
+}
+
+func TestFilesAreCreatedWithTheUmaskApplied(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	box := testMailbox(t)
+	if _, err := box.Post(Draft{From: "a", Subject: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	for file, want := range map[string]os.FileMode{box.Dir: os.ModeDir | 0o755, filepath.Join(box.Dir, "messages.jsonl"): 0o644} {
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode() != want {
+			t.Errorf("%s mode %v, want %v", file, info.Mode(), want)
+		}
+	}
+}
+
+func TestNewUUIDIsVersion4(t *testing.T) {
+	v4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	seen := map[string]bool{}
+	for range 100 {
+		id := NewUUID()
+		if !v4.MatchString(id) || seen[id] {
+			t.Fatalf("NewUUID = %q (repeat: %v)", id, seen[id])
+		}
+		seen[id] = true
+	}
+}
+
+func writeLines(t *testing.T, box *Mailbox, name string, lines ...string) {
+	t.Helper()
+	if err := os.MkdirAll(box.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(box.Dir, name), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readFile(t *testing.T, file string) string {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func marshal(t *testing.T, v any) string {
+	t.Helper()
+	data, err := jsjson.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}

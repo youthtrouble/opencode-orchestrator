@@ -451,9 +451,11 @@ time. The JS runtime stays the default: the plugin, the commands and the bridges
 `orch` yet. Both runtimes share the same state, including the usage cache, so the two can run on
 the same machine. Implemented so far: `orch version`, `orch usage [--refresh] [--json]` (output
 byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), and the
-plugin-facing `orch routing`, `orch budget gate` and `orch effort`. The other scripts are not
-ported. [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity
-harness that diffs every implemented command against the JS.
+plugin-facing `orch routing`, `orch budget gate` and `orch effort`, and `orch mailbox
+post|list|ack|reply|inbox` (byte-identical to `bin/mailbox.mjs`, appending to the same
+`.orchestrator/mailbox/` files). The other scripts are not ported.
+[go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness
+that diffs every implemented command against the JS.
 
 ## Design notes
 

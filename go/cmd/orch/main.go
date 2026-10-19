@@ -17,10 +17,11 @@ var commands = map[string]cli.Command{
 	"routing":   cli.Routing,
 	"budget":    cli.Budget,
 	"effort":    cli.Effort,
+	"mailbox":   cli.Mailbox,
 	"json-echo": cli.JSONEcho,
 }
 
-const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort"
+const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox"
 
 func main() {
 	os.Exit(run(os.Args[1:], cli.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}))

@@ -9,3 +9,9 @@ package cmdref
 func Script(name string) string {
 	return "node ~/.config/opencode/orchestrator/bin/" + name + ".mjs"
 }
+
+// MailboxReply is the command line `mailbox inbox` tells the human to answer a question with,
+// followed by the message id prefix and the answer.
+func MailboxReply() string {
+	return Script("mailbox") + " reply"
+}

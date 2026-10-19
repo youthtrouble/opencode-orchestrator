@@ -13,6 +13,7 @@ Implemented so far (the rest of `bin/*.mjs` is still JS-only):
 | `orch routing [--refresh \| --cached] [--json]` | `getRouting()` in `lib/usage.mjs` | The routing prompt text, or `{usage, registry, channels, resolved, prompt}` with `--json`. `--cached` never collects and exits 3 when there is no cache; bad flags exit 2. |
 | `orch budget gate --vendor anthropic\|openai [--force] [--frontier]` | `budgetGate()` in `lib/budget.mjs` | Compact `{allowed, level, resets_at, note}`; exit 0 whether or not the work is allowed, 2 on bad flags or an unknown vendor. |
 | `orch effort --role ROLE [--size SIZE]` | `effortFor()` in `lib/routing.mjs` | The effort-policy value as plain text, or `null`; exit 2 on bad flags or without `--role`. |
+| `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --json` prints the whole message instead of `{id, at}` (PE-3). Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
 `orch` yet.
@@ -48,10 +49,10 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 cd go
 go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
-./parity/run.sh --only json,usage   # chosen parity groups; ./parity/run.sh runs them all
+./parity/run.sh --only json,usage,mailbox   # chosen parity groups; ./parity/run.sh runs them all
 ```
 
-`.github/workflows/go.yml` runs build, vet, gofmt, tests and JSON parity on macOS and Linux
+`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json` and `mailbox` parity groups on macOS and Linux
 with `CGO_ENABLED=0` and Node installed. Malformed prompt byte tests also compare against Node
 when it is available; fixed byte expectations run even without Node.
 
@@ -74,6 +75,41 @@ Groups:
   last-good cases; the cache round trip in both directions; and `routing`, `budget gate` and
   `effort` against the JS functions they replace. Only `generated_at` is normalised, and only
   when a collection happened.
+- `mailbox`: every `orch mailbox` subcommand against `bin/mailbox.mjs` over seeded mailboxes
+  (duplicate and `by`-less acks, duplicate ids, hand-edited lines of every JSON shape), all
+  filters and `--limit` forms, stdin bodies and raw argv with malformed UTF-8, `--root` and
+  `ORCHESTRATOR_PROJECT`, the inbox limit applied before its recipient filter. Fresh uuid v4
+  ids, millisecond ISO timestamps and the `replied (xxxxxxxx)` prefix are normalised only
+  in newly appended record fields and their write receipts, with exact format checks.
+  Seeded records, read-only output and literal user content are compared unchanged.
+
+A case can add environment entries (`env`), compare files outside `.orchestrator/`
+(`extraFiles`) and declare that it ends in an uncaught JS exception (`crash`, below).
+
+## Crash output and parity exceptions
+
+Where the JS dies of an uncaught exception, Node prints a source excerpt, `<Name>: <message>`,
+a stack and its version, and exits 1. `orch` exits 1 after the same stdout and file writes and
+prints only the error line:
+
+- C1, fixed messages (`Error: no message with id zz`, `Error: post needs from and subject`,
+  filesystem errors such as EISDIR/ENOTDIR/EACCES, ...): each case pins the expected error
+  line; the harness requires that exact nonempty line as `orch`'s entire stderr and as a
+  whole line in Node's stderr, with exit 1 from both. Filesystem errnos outside the 20
+  that `orch` spells as Node does (EACCES, EEXIST, EISDIR, ELOOP, ENOENT, ENOTDIR, ...) print
+  Go's own error text instead; that difference is known and not asserted.
+- C2, malformed hand-edited state (a message whose `kind` is not a string, `refs` missing, ...):
+  both stderrs must contain a line starting `TypeError: `; V8's wording is not reproduced.
+
+The other documented differences, each asserted by its own parity case:
+
+- PE-1: a UTF-16 slice that splits a surrogate pair (the reply subject cut at 140 units, the inbox
+  body at 400) or a string message spread into one key per code unit gives U+FFFD in Go. Text
+  output is identical (Node prints a lone surrogate as U+FFFD); JSON escapes differ: the JS writes
+  `"\ud83d"`, `orch` the raw U+FFFD.
+- PE-2: the crash output above.
+- PE-3: `orch mailbox post --json` prints the whole message it appended; the JS ignores
+  `--json`. As in `list`, only a bare `--json` counts (`--json x` is the value of a key).
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 
@@ -85,7 +121,7 @@ ES number formatting, and no escaping of `/ < > &`, U+2028, U+2029 or non-ASCII 
 known divergence: a lone UTF-16 surrogate escape (`"\ud800"`) parses to U+FFFD, because a Go
 string cannot hold it.
 
-Prompt files and stdin are decoded like Node's UTF-8 Buffer decoding: malformed sequences
+Prompt files, stdin and mailbox argv are decoded like Node's UTF-8 Buffer decoding: malformed sequences
 become U+FFFD (an incomplete multi-byte prefix produces one replacement). `jsjson.Unmarshal`
 uses `encoding/json`, which replaces invalid input bytes rather than passing them through;
 its malformed-sequence grouping is not a claim of Node Buffer decoding parity. `Marshal` and

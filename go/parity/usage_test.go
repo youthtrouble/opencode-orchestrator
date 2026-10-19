@@ -114,11 +114,11 @@ func (h *harness) testUsageCacheRoundTrip(t *testing.T) {
 		t.Run(pair.name, func(t *testing.T) {
 			sb := h.newSandbox(t)
 			codexAnswers(t)(t, sb)
-			written := h.run(t, sb, append(pair.writer, "--refresh", "--json"), nil)
+			written := h.run(t, sb, append(pair.writer, "--refresh", "--json"), nil, nil)
 			if _, ok := written.files["state/usage.json"]; !ok || written.exitCode != 0 {
 				t.Fatalf("writer failed: exit %d, stderr %s", written.exitCode, written.stderr)
 			}
-			compareOutcomes(t, written, h.run(t, sb, append(pair.reader, "--json"), nil))
+			compareOutcomes(t, written, h.run(t, sb, append(pair.reader, "--json"), nil, nil))
 		})
 	}
 }

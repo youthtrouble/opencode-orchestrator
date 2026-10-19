@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,7 @@ func TestParity(t *testing.T) {
 	h := newHarness(t)
 	t.Run("json", h.testJSON)
 	t.Run("usage", h.testUsage)
+	t.Run("mailbox", h.testMailbox)
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
@@ -80,16 +82,40 @@ func newHarness(t *testing.T) *harness {
 }
 
 // invocation is one parity case: the same input given to each runtime. seed, when set,
-// prepares each runtime's fresh sandbox identically before the run; normalize, when set,
-// rewrites stdout, stderr and file contents of both before comparing (for values that
-// legitimately differ between runs, such as a fresh timestamp).
+// prepares each runtime's fresh sandbox identically before the run; env adds entries to the
+// environment (where "$PROJECT" stands for the sandbox project directory); extraFiles are
+// project-relative files compared besides .orchestrator/ (as "extra/<path>"); normalize, when
+// set, rewrites stdout, stderr and file contents of both before comparing (for values that
+// legitimately differ between runs, such as a fresh timestamp); crash, when set, is the
+// class of uncaught JS exception the case ends in (see crashError). C1 also pins errorLine;
+// normalizeWrites receives seeded files separately so fresh fields cannot mask seed mutations.
 type invocation struct {
-	js        []string
-	orch      []string
-	stdin     []byte
-	seed      func(t *testing.T, sb sandbox)
-	normalize func(string) string
+	js              []string
+	orch            []string
+	stdin           []byte
+	env             []string
+	extraFiles      []string
+	seed            func(t *testing.T, sb sandbox)
+	normalize       func(string) string
+	crash           crashClass
+	errorLine       string
+	normalizeWrites func(outcome, map[string]string) outcome
 }
+
+// crashClass names how a case that ends in an uncaught JS exception is compared (plan
+// go-s4.md section 3). Node prints a source excerpt, a stack and its version around the error
+// line; orch prints the error line alone.
+type crashClass int
+
+const (
+	noCrash crashClass = iota
+	// crashC1 is a fixed message: orch's whole stderr is one line that must appear as a
+	// whole line in the JS stderr.
+	crashC1
+	// crashC2 is a V8 TypeError on a malformed value: both stderrs must hold a line starting
+	// "TypeError: ", whose wording is not compared.
+	crashC2
+)
 
 // outcome is everything a run can be compared on. files maps paths relative to the sandbox
 // (project .orchestrator/, the HOME state dir and the fakes' logs) to their contents.
@@ -103,14 +129,89 @@ type outcome struct {
 // comparePair runs each runtime in its own fresh sandbox and reports every difference.
 func (h *harness) comparePair(t *testing.T, inv invocation) {
 	t.Helper()
+	js, orch := h.runPair(t, inv)
+	if inv.crash != noCrash {
+		if err := crashError(inv.crash, inv.errorLine, js, orch); err != nil {
+			t.Error(err)
+		}
+		js.stderr, orch.stderr = "", ""
+	}
+	compareOutcomes(t, js, orch)
+}
+
+// runPair runs each runtime in its own fresh sandbox and returns both normalized outcomes,
+// for cases that assert a documented difference before comparing the rest.
+func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
+	t.Helper()
 	run := func(argv []string) outcome {
 		sb := h.newSandbox(t)
 		if inv.seed != nil {
 			inv.seed(t, sb)
 		}
-		return h.run(t, sb, argv, inv.stdin).normalized(inv.normalize)
+		before := map[string]string{}
+		if inv.normalizeWrites != nil {
+			collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
+			for _, rel := range inv.extraFiles {
+				content, err := os.ReadFile(filepath.Join(sb.project, rel))
+				if err == nil {
+					before["extra/"+rel] = string(content)
+				} else if !errors.Is(err, fs.ErrNotExist) {
+					t.Fatal(err)
+				}
+			}
+		}
+		o := h.run(t, sb, argv, inv.stdin, inv.env)
+		if strings.Contains(inv.errorLine, "$PROJECT") {
+			canonicalProject, err := filepath.EvalSymlinks(sb.project)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.stderr = strings.ReplaceAll(o.stderr, canonicalProject, "$PROJECT")
+			o.stderr = strings.ReplaceAll(o.stderr, sb.project, "$PROJECT")
+		}
+		for _, rel := range inv.extraFiles {
+			if content, err := os.ReadFile(filepath.Join(sb.project, rel)); err == nil {
+				o.files["extra/"+rel] = string(content)
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+		if inv.normalizeWrites != nil {
+			o = inv.normalizeWrites(o, before)
+		}
+		return o.normalized(inv.normalize)
 	}
-	compareOutcomes(t, run(inv.js), run(inv.orch))
+	return run(inv.js), run(inv.orch)
+}
+
+// crashError checks diagnostics independently of stdout and files, which remain exact inputs
+// to compareOutcomes. Returning an error makes negative comparator tests nonvacuous too.
+func crashError(class crashClass, expected string, js, orch outcome) error {
+	if js.exitCode != 1 || orch.exitCode != 1 {
+		return fmt.Errorf("crash exits: js %d, orch %d; want both 1", js.exitCode, orch.exitCode)
+	}
+	line, isOneLine := strings.CutSuffix(orch.stderr, "\n")
+	if !isOneLine || strings.Contains(line, "\n") || strings.TrimSpace(line) == "" {
+		return fmt.Errorf("orch stderr is not one nonempty line: %q", orch.stderr)
+	}
+	jsLines := strings.Split(js.stderr, "\n")
+	switch class {
+	case crashC1:
+		if !strings.HasPrefix(expected, "Error: ") && !strings.HasPrefix(expected, "TypeError: ") && !strings.HasPrefix(expected, "TypeError [") {
+			return fmt.Errorf("C1 needs a pinned error line, got %q", expected)
+		}
+		if line != expected || !slices.Contains(jsLines, expected) {
+			return fmt.Errorf("C1 want %q; orch %q; js stderr:\n%s", expected, line, js.stderr)
+		}
+	case crashC2:
+		if !strings.HasPrefix(line, "TypeError: ") {
+			return fmt.Errorf("orch stderr %q is not a TypeError", line)
+		}
+		if !slices.ContainsFunc(jsLines, func(l string) bool { return strings.HasPrefix(l, "TypeError: ") }) {
+			return fmt.Errorf("js stderr has no TypeError line:\n%s", js.stderr)
+		}
+	}
+	return nil
 }
 
 func compareOutcomes(t *testing.T, js, orch outcome) {
@@ -166,7 +267,7 @@ func (h *harness) newSandbox(t *testing.T) sandbox {
 
 // run runs argv in the sandbox with an environment holding nothing but what section 5.1 of
 // the plan allows, then collects the files it may have written.
-func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte) outcome {
+func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte, env []string) outcome {
 	t.Helper()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = sb.project
@@ -175,6 +276,9 @@ func (h *harness) run(t *testing.T, sb sandbox, argv []string, stdin []byte) out
 		"PATH=" + h.path,
 		"ORCH_HOME=" + h.orchJS,
 		"ORCH_REGISTRY=" + filepath.Join(h.orchJS, "models.json"),
+	}
+	for _, entry := range env {
+		cmd.Env = append(cmd.Env, strings.ReplaceAll(entry, "$PROJECT", sb.project))
 	}
 	cmd.Stdin = bytes.NewReader(stdin)
 	var stdout, stderr bytes.Buffer

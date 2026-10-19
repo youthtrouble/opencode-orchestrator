@@ -8,7 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
 // ParseArgs mirrors parseArgs in lib/run-record.mjs, used by the bridges, worker, supervisor,
@@ -69,12 +70,12 @@ func ReadPrompt(opts Opts, positional []string, stdin *os.File) (string, error) 
 	if len(positional) > 0 {
 		return strings.Join(positional, " "), nil
 	}
-	if !isTerminal(stdin) {
-		data, err := io.ReadAll(stdin)
+	if !IsTerminal(stdin) {
+		prompt, err := ReadStdinText(stdin)
 		if err != nil {
 			return "", fmt.Errorf("read prompt from stdin: %w", err)
 		}
-		return decodePromptUTF8(data), nil
+		return prompt, nil
 	}
 	return "", ErrNoPrompt
 }
@@ -88,24 +89,15 @@ func readPromptFile(file string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return decodePromptUTF8(data), nil
+	return jsstr.DecodeUTF8(data), nil
 }
 
-// decodePromptUTF8 matches Node's Buffer.toString("utf8"): one replacement per malformed
-// sequence, including a valid but incomplete prefix, not one per byte or invalid byte run.
-func decodePromptUTF8(data []byte) string {
-	var text strings.Builder
-	for len(data) > 0 {
-		r, size := utf8.DecodeRune(data)
-		if r == utf8.RuneError && size == 1 {
-			// Consume the incomplete prefix, but leave the byte that makes it invalid
-			// for the next iteration (it may start a valid character).
-			for size < len(data) && !utf8.FullRune(data[:size+1]) {
-				size++
-			}
-		}
-		text.WriteRune(r)
-		data = data[size:]
+// ReadStdinText reads all of stdin as Node's readFileSync(0, "utf8") does: malformed UTF-8
+// becomes U+FFFD (see jsstr.DecodeUTF8) and a BOM is kept.
+func ReadStdinText(stdin io.Reader) (string, error) {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return "", err
 	}
-	return text.String()
+	return jsstr.DecodeUTF8(data), nil
 }

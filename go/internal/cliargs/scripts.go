@@ -7,7 +7,7 @@ import (
 
 // MailboxArgs is what the argv loop of bin/mailbox.mjs produces.
 type MailboxArgs struct {
-	Command string            // first token: post | list | ack ("" when argv is empty)
+	Command string            // first token: post | list | ack | reply | inbox ("" when argv is empty)
 	Values  map[string]string // JS `opts`, without ref
 	Flags   map[string]bool   // JS `flags` Set: keys given without a value
 	Refs    []string          // every --ref value, in order

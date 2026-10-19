@@ -2,9 +2,9 @@ package routing
 
 import (
 	"strings"
-	"unicode/utf16"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
 // SummarizeForPrompt is the budget and routing summary injected into agent prompts: one line
@@ -46,16 +46,7 @@ func lastGoodSuffix(claude any) string {
 		return ""
 	}
 	lastGoodAt := jsjson.TemplateStringOf(jsjson.Lookup(claude, "last_good_at"))
-	return ", last good " + sliceUTF16(lastGoodAt, 11, 16) + "Z"
-}
-
-// sliceUTF16 is String.prototype.slice(start, end) for 0 <= start <= end: JS strings index
-// UTF-16 code units, not bytes or runes.
-func sliceUTF16(s string, start, end int) string {
-	units := utf16.Encode([]rune(s))
-	end = min(end, len(units))
-	start = min(start, end)
-	return string(utf16.Decode(units[start:end]))
+	return ", last good " + jsstr.Slice(lastGoodAt, 11, 16) + "Z"
 }
 
 func codexLine(codex any, posture *VendorPosture) string {

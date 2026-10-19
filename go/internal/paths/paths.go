@@ -74,3 +74,8 @@ func ProjectDir(projectRoot string) string {
 func RunsDir(projectRoot string) string {
 	return filepath.Join(ProjectDir(projectRoot), "runs")
 }
+
+// MailboxDir holds messages.jsonl and acks.jsonl (lib/mailbox.mjs mailboxDir).
+func MailboxDir(projectRoot string) string {
+	return filepath.Join(ProjectDir(projectRoot), "mailbox")
+}

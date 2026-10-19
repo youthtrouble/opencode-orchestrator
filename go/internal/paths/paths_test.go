@@ -64,4 +64,7 @@ func TestProjectPaths(t *testing.T) {
 	if got := RunsDir("/p"); got != "/p/.orchestrator/runs" {
 		t.Errorf("RunsDir = %s", got)
 	}
+	if got := MailboxDir("/p"); got != "/p/.orchestrator/mailbox" {
+		t.Errorf("MailboxDir = %s", got)
+	}
 }
