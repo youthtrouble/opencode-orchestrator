@@ -161,8 +161,10 @@ let caseNumber = 0;
 /**
  * Load a fresh copy of the plugin into the sandbox environment and run setup with a fake ctx.
  * The environment stays in place until the test ends, because tools and hooks read it lazily.
+ * Pass `brokenRuntime` when the configuration cannot resolve a runtime: setup then makes no
+ * warm-up call, so there is none to wait for.
  */
-export async function loadPlugin(t, sandbox, { options = {}, env = {} } = {}) {
+export async function loadPlugin(t, sandbox, { options = {}, env = {}, brokenRuntime = false } = {}) {
   const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   t.after(() => { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; });
   for (const k of ["ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY"]) delete process.env[k];
@@ -178,7 +180,7 @@ export async function loadPlugin(t, sandbox, { options = {}, env = {} } = {}) {
   const plugin = await import(`${PLUGIN_URL}?case=${++caseNumber}`);
   const ctx = fakeContext(sandbox, options);
   await plugin.default.setup(ctx.api);
-  await settleWarmUp(sandbox);
+  if (!brokenRuntime) await settleWarmUp(sandbox);
   return ctx;
 }
 
@@ -225,14 +227,16 @@ function fakeContext(sandbox, options) {
 // observable trace (it only reads the cache), so it gets a fixed grace period instead: this
 // assumes the binary answers within 300 ms. Over no cache it starts a collection, which the
 // no-cache parity case waits for itself.
+// The fake orch is a Node process; under a loaded full-suite run its start-up has taken over
+// 2 s, so the bound is generous and running out of it fails the case instead of letting a late
+// warm-up call land among the calls the case counts.
+const WARM_UP_BOUND_MS = 15000;
+
 async function settleWarmUp(sandbox) {
   if (sandbox.runtime === "js") return new Promise((r) => setTimeout(r, 50));
   if (!sandbox.fakeOrch) return new Promise((r) => setTimeout(r, 300));
-  const deadline = Date.now() + 2000;
-  while (Date.now() < deadline) {
-    if (calls(sandbox).some((c) => c.self !== "codex" && c.argv.join(" ") === "routing --json")) break;
-    await new Promise((r) => setTimeout(r, 20));
-  }
+  const warmedUp = () => calls(sandbox).some((c) => c.self !== "codex" && c.argv.join(" ") === "routing --json");
+  if (!(await waitFor(warmedUp, WARM_UP_BOUND_MS))) throw new Error(`the plugin's warm-up \`orch routing --json\` was not logged within ${WARM_UP_BOUND_MS} ms (pass brokenRuntime if setup cannot resolve a runtime)`);
   await new Promise((r) => setTimeout(r, 50));
 }
 

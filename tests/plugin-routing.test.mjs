@@ -79,7 +79,7 @@ describe("runtime selection", { skip }, () => {
 
   test("an unknown runtime is an OrchConfigError and nothing degrades loudly in the hooks", async (t) => {
     const { sandbox } = await goSandbox(t);
-    const plugin = await loadPlugin(t, sandbox, { options: { runtime: "rust" } });
+    const plugin = await loadPlugin(t, sandbox, { options: { runtime: "rust" }, brokenRuntime: true });
     await assert.rejects(plugin.callTool("usage_status"), { name: "OrchConfigError", message: 'unknown orchestrator runtime "rust" (expected "js" or "go")' });
     await assertDegraded(plugin, sandbox);
   });
@@ -117,7 +117,7 @@ describe("orch binary resolution", { skip }, () => {
 
   test("an explicit ORCH_BIN that does not exist is an error, with no fall-through", async (t) => {
     const { sandbox } = await resolutionSandbox(t, ["home", "path"]);
-    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ORCH_BIN: "/nonexistent" } });
+    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ORCH_BIN: "/nonexistent" }, brokenRuntime: true });
     await assert.rejects(plugin.callTool("usage_status"), { name: "OrchConfigError", message: "orch binary from ORCH_BIN is not an executable file: /nonexistent" });
     await assertDegraded(plugin, sandbox);
   });
@@ -126,7 +126,7 @@ describe("orch binary resolution", { skip }, () => {
     const { sandbox } = await resolutionSandbox(t, ["path"]);
     const file = path.join(sandbox.root, "plain-orch");
     fs.writeFileSync(file, "", { mode: 0o644 });
-    const plugin = await loadPlugin(t, sandbox, { options: { runtime: "go", binary: file } });
+    const plugin = await loadPlugin(t, sandbox, { options: { runtime: "go", binary: file }, brokenRuntime: true });
     await assert.rejects(plugin.callTool("usage_status"), { name: "OrchConfigError", message: `orch binary from option binary is not an executable file: ${file}` });
   });
 
