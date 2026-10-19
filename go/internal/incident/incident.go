@@ -9,6 +9,7 @@ package incident
 
 import (
 	"errors"
+	"os"
 	"runtime"
 	"slices"
 	"strings"
@@ -111,6 +112,18 @@ func (l *Log) Record(d Draft) (*jsjson.Object, error) {
 		return nil, err
 	}
 	return entry, nil
+}
+
+// TryRecord records d in the log of the user this process runs as (HOME as Node reads it, see
+// paths.NodeHome) and ignores every failure, as the JS callers do with
+// `try { record(...) } catch { /* ignore */ }`: a bridge or worker never fails because its
+// incident log does.
+func TryRecord(d Draft) {
+	home, err := paths.NodeHome(os.LookupEnv)
+	if err != nil {
+		return
+	}
+	_, _ = New(home).Record(d)
 }
 
 func (l *Log) redactedContext(context *jsjson.Object) *jsjson.Object {

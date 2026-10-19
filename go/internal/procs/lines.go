@@ -39,7 +39,7 @@ func (l *Lines) Write(p []byte) (int, error) {
 	}
 	// Only the bytes the previous Write could not decode yet, the start of a U+2028 or U+2029
 	// among them, can begin a break that p completes.
-	scanned := len(l.pending) - undecodedTail(l.pending)
+	scanned := len(l.pending) - jsstr.UndecodedTail(l.pending)
 	l.pending = append(l.pending, p...)
 	lineStart := 0
 	for {
@@ -85,42 +85,10 @@ func isLineOrParagraphSeparator(b []byte) bool {
 
 // Close passes the final line when the stream did not end with a line break.
 func (l *Lines) Close() error {
-	l.pending = l.pending[:len(l.pending)-undecodedTail(l.pending)]
+	l.pending = l.pending[:len(l.pending)-jsstr.UndecodedTail(l.pending)]
 	if len(l.pending) > 0 {
 		l.OnLine(jsstr.DecodeUTF8(l.pending))
 		l.pending = l.pending[:0]
 	}
 	return nil
-}
-
-// undecodedTail is how many bytes at the end of data Node's StringDecoder holds back as the
-// start of a character still to be completed (src/string_decoder.cc): a lead byte with fewer
-// continuation bytes than it announces, within the last four bytes. The continuation bytes
-// are not validated, and 0xF5-0xF7 count as four-byte leads, as in Node.
-func undecodedTail(data []byte) int {
-	if len(data) == 0 || data[len(data)-1]&0x80 == 0 {
-		return 0
-	}
-	for n := 1; n <= len(data) && n <= 4; n++ {
-		b := data[len(data)-n]
-		if b&0xC0 == 0x80 {
-			continue
-		}
-		var length int
-		switch {
-		case b&0xE0 == 0xC0:
-			length = 2
-		case b&0xF0 == 0xE0:
-			length = 3
-		case b&0xF8 == 0xF0:
-			length = 4
-		default:
-			return 0
-		}
-		if n >= length {
-			return 0
-		}
-		return n
-	}
-	return 0
 }

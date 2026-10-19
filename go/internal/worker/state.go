@@ -60,7 +60,10 @@ func (s *State) write() error {
 	return syscall.Rename(tmp, file)
 }
 
-// errorCode is `err.code || String(err)`.
+// errorCode is `err.code || String(err)`. Every failure publish can meet carries an errno, and
+// Node gives each errno a code; Code knows only the errnos of its table, so for any other one
+// (and for an error without errno) this is an approximation of String(err): "Error: " and Go's
+// text, where Node would have written the code.
 func errorCode(err error) string {
 	if code := nodefs.Code(err); code != "" {
 		return code

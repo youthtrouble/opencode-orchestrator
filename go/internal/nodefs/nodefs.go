@@ -27,6 +27,27 @@ func Resolve(path string) (string, error) {
 	return filepath.Join(cwd, path), nil
 }
 
+// Relative mirrors path.relative(from, to): both are resolved as Resolve does, and equal
+// paths give "" where filepath.Rel gives ".".
+func Relative(from, to string) (string, error) {
+	from, err := Resolve(from)
+	if err != nil {
+		return "", err
+	}
+	to, err = Resolve(to)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(from, to)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." {
+		return "", nil
+	}
+	return rel, nil
+}
+
 // Exists mirrors fs.existsSync: any stat failure (missing, a dangling or looping symlink, a
 // file used as a directory, no permission) counts as missing. Symlinks are followed.
 func Exists(path string) bool {

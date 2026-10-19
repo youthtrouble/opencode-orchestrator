@@ -108,7 +108,7 @@ func expand(root string, paths []string) ([]string, error) {
 			}
 			continue
 		}
-		rel, err := relative(root, abs)
+		rel, err := nodefs.Relative(root, abs)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +139,7 @@ func walk(root, dir string, rels []string) ([]string, error) {
 				return nil, err
 			}
 		case entry.Type().IsRegular():
-			rel, err := relative(root, path)
+			rel, err := nodefs.Relative(root, path)
 			if err != nil {
 				return nil, err
 			}
@@ -155,19 +155,6 @@ func resolve(root, p string) string {
 		return filepath.Clean(p)
 	}
 	return filepath.Join(root, p)
-}
-
-// relative is path.relative(from, to) for absolute paths, which gives "" where
-// filepath.Rel gives ".".
-func relative(from, to string) (string, error) {
-	rel, err := filepath.Rel(from, to)
-	if err != nil {
-		return "", err
-	}
-	if rel == "." {
-		return "", nil
-	}
-	return rel, nil
 }
 
 // joinPath is path.join(root, rel), which keeps a trailing slash of rel (so "file/" names a

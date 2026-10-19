@@ -105,3 +105,36 @@ func DecodeUTF8(data []byte) string {
 	}
 	return text.String()
 }
+
+// UndecodedTail is how many bytes at the end of data Node's StringDecoder holds back as the
+// start of a character still to be completed (src/string_decoder.cc): a lead byte with fewer
+// continuation bytes than it announces, within the last four bytes. The continuation bytes
+// are not validated, and 0xF5-0xF7 count as four-byte leads, as in Node. A stream decoder
+// decodes data[:len(data)-n] now and carries the last n bytes into the next chunk.
+func UndecodedTail(data []byte) int {
+	if len(data) == 0 || data[len(data)-1]&0x80 == 0 {
+		return 0
+	}
+	for n := 1; n <= len(data) && n <= 4; n++ {
+		b := data[len(data)-n]
+		if b&0xC0 == 0x80 {
+			continue
+		}
+		var length int
+		switch {
+		case b&0xE0 == 0xC0:
+			length = 2
+		case b&0xF0 == 0xE0:
+			length = 3
+		case b&0xF8 == 0xF0:
+			length = 4
+		default:
+			return 0
+		}
+		if n >= length {
+			return 0
+		}
+		return n
+	}
+	return 0
+}

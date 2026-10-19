@@ -45,11 +45,25 @@ func TestPostAppendsTheMessageInJSKeyOrder(t *testing.T) {
 	}
 }
 
+// A worker posts from its lane, which is the JS true for a bare --lane: any truthy from is
+// accepted and written as given, as `!from` is the JS test.
+func TestPostAcceptsAnyTruthyFrom(t *testing.T) {
+	box := testMailbox(t)
+	msg, err := box.Post(Draft{From: true, To: "coordinator", Kind: "blocked", Subject: "s", Refs: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"id":"id-1","at":"2026-10-18T12:00:00.500Z","from":true,"to":"coordinator","kind":"blocked","subject":"s","body":"","refs":[],"thread":null}`
+	if got := marshal(t, msg); got != want {
+		t.Errorf("Post returned %s", got)
+	}
+}
+
 // The JS error lines, captured from Node v26.5.1 (bin/mailbox.mjs), minus the "Error: " the
 // CLI adds.
 func TestErrorMessagesAreTheJSMessages(t *testing.T) {
 	box := testMailbox(t)
-	for _, draft := range []Draft{{Subject: "s"}, {From: "a"}} {
+	for _, draft := range []Draft{{Subject: "s"}, {From: "", Subject: "s"}, {From: false, Subject: "s"}, {From: 0.0, Subject: "s"}, {From: "a"}} {
 		if _, err := box.Post(draft); !errors.Is(err, ErrIncompletePost) || err.Error() != "post needs from and subject" {
 			t.Errorf("Post(%+v) error = %v", draft, err)
 		}

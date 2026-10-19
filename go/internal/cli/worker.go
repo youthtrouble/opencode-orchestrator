@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/worker"
 )
@@ -18,12 +24,13 @@ var (
 // errResolveArgBoolean is path.resolve(true), the JS for a bare --cwd.
 var errResolveArgBoolean = &jsTypeError{"ERR_INVALID_ARG_TYPE", cliargs.ErrPathArgBoolean.Error()}
 
-// errWorkerStartPending is what `orch worker start` prints until slice S6b ports it.
-const errWorkerStartPending = "orch worker start: not implemented yet (S6b)"
+// errWorkerDetachPending is what `orch worker start --detach` prints until slice S6c ports it.
+const errWorkerDetachPending = "orch worker start --detach: not implemented yet (S6c)"
 
-// Worker implements `orch worker status|stop` (bin/worker.mjs), byte-identical to the JS
-// except that stop signals only pids of at least 2 (PE-14). `start` is not ported yet: given
-// the brief and harness it would run, it prints errWorkerStartPending and exits 2.
+// Worker implements `orch worker start|status|stop` (bin/worker.mjs), byte-identical to the JS
+// except for the parity exceptions in go/README.md (stop signals only pids of at least 2,
+// PE-14). `start --detach` is not ported yet: once the start is validated it prints
+// errWorkerDetachPending and exits 2.
 func Worker(args []string, stdio Stdio) int {
 	opts, positional := cliargs.ParseArgs(decodeArgv(args), workerValueKeys, workerFlagKeys)
 	root, err := workerRoot(opts)
@@ -44,8 +51,52 @@ func Worker(args []string, stdio Stdio) int {
 		fmt.Fprintf(stdio.Err, "usage: %s start --brief FILE --harness codex|claude [--lane L] [...] | status | stop --lane L\n", cmdref.ScriptFile("worker"))
 		return 2
 	}
-	fmt.Fprintln(stdio.Err, errWorkerStartPending)
-	return 2
+	return workerStart(project, opts, stdio)
+}
+
+// workerStart validates the start, then runs it in the foreground with the bridges of this
+// executable.
+func workerStart(project worker.Project, opts cliargs.Opts, stdio Stdio) int {
+	launch, err := project.PrepareStart(opts)
+	var refused *worker.UsageError
+	switch {
+	case errors.As(err, &refused):
+		fmt.Fprintln(stdio.Err, refused.Message)
+		return 2
+	case err != nil:
+		return workerCrash(stdio, err)
+	case opts.Truthy("detach"):
+		fmt.Fprintln(stdio.Err, errWorkerDetachPending)
+		return 2
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return workerCrash(stdio, err)
+	}
+	code, err := launch.Foreground(worker.Runtime{
+		Self:   self,
+		Pid:    os.Getpid(),
+		Stdout: stdio.Out,
+		Stderr: stdio.Err,
+		Now:    time.Now,
+		NewID:  mailbox.NewUUID,
+		Notify: func(c chan<- os.Signal) { signal.Notify(c, syscall.SIGINT, syscall.SIGTERM) },
+	})
+	if err != nil {
+		return workerCrash(stdio, err)
+	}
+	return code
+}
+
+// workerCrash prints the error line of the exception a worker dies of: the worker's own
+// TypeErrors carry their class, the rest are Errors.
+func workerCrash(stdio Stdio, err error) int {
+	var thrown *worker.JSError
+	if errors.As(err, &thrown) {
+		fmt.Fprintln(stdio.Err, thrown.Error())
+		return 1
+	}
+	return crash(stdio, err)
 }
 
 // workerRoot is `path.resolve(opts.cwd || process.cwd())`: resolving "" gives the working

@@ -124,3 +124,26 @@ func nodeJSON(t *testing.T, script string, arg any) []string {
 	}
 	return got
 }
+
+func TestUndecodedTailHoldsBackAnIncompleteCharacter(t *testing.T) {
+	for _, tc := range []struct {
+		data string
+		want int
+	}{
+		{"", 0},
+		{"abc", 0},
+		{"a\xc3", 1},            // é cut after its lead byte
+		{"a\xc3\xa9", 0},        // é complete
+		{"\xe2\x82", 2},         // € missing its last byte
+		{"\xf0\x9f\x98", 3},     // 😀 missing its last byte
+		{"\xf0\x9f\x98\x80", 0}, // 😀 complete
+		{"a\x80", 0},            // a stray continuation byte is not held back
+		{"\xf5\x80", 2},         // 0xF5 counts as a four-byte lead, as in Node
+		{"\x80\x80\x80\x80", 0}, // no lead byte within the last four
+		{"\xff", 0},             // never a lead byte
+	} {
+		if got := UndecodedTail([]byte(tc.data)); got != tc.want {
+			t.Errorf("UndecodedTail(%q) = %d, want %d", tc.data, got, tc.want)
+		}
+	}
+}

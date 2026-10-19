@@ -61,10 +61,11 @@ func NewUUID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-// Draft is a message to post. To is written as given: callers pass a string, except a reply,
-// which addresses whatever the original's `from` holds. An empty Thread is written as null.
+// Draft is a message to post. From and To are written as given: callers pass strings, except
+// that a reply addresses whatever the original's `from` holds and a worker posts from its
+// lane, which is true for a bare --lane. An empty Thread is written as null.
 type Draft struct {
-	From    string
+	From    any
 	To      any
 	Kind    string
 	Subject string
@@ -73,9 +74,10 @@ type Draft struct {
 	Thread  string
 }
 
-// Post appends a message with a fresh id and timestamp and returns it.
+// Post appends a message with a fresh id and timestamp and returns it. A falsy From (JS
+// `!from`) or an empty Subject is refused.
 func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
-	if d.From == "" || d.Subject == "" {
+	if !jsjson.Truthy(d.From) || d.Subject == "" {
 		return nil, ErrIncompletePost
 	}
 	refs := make([]any, len(d.Refs))

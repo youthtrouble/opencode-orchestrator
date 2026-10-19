@@ -53,6 +53,12 @@
   lane state and lock files read the same way), with new PE-14: `stop` signals only a stored pid
   of at least 2, where the JS would SIGINT every process of the user for pid `1` or `true`.
   `orch worker start` is not ported yet (S6b). New `worker` parity group, run in CI.
+- Go port: foreground `orch worker start` matches `bin/worker.mjs start` (stdout with the relayed
+  bridge progress, stderr, exit codes, lane state and lock, mailbox, incidents) and runs
+  `orch <harness>-exec` as its bridge. PE-10, PE-11 and PE-13 are extended to the worker: it never
+  kills its bridge and waits at most 10 s for its pipes, records the Go bridge's report of an
+  interrupted run, and survives a bridge that never reads its prompt where the JS dies of
+  `write EPIPE`. `start --detach` prints a not-implemented error (S6c).
 
 ## 0.4.7 — 2026-10-19
 

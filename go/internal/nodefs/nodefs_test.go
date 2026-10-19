@@ -164,3 +164,24 @@ func TestCodeIsNodesErrCode(t *testing.T) {
 		t.Errorf("FileError message changed: %q", readErr)
 	}
 }
+
+func TestRelativeIsPathRelative(t *testing.T) {
+	cwd, err := syscall.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ from, to, want string }{
+		{"/a/b", "/a/b/c/d.md", "c/d.md"},
+		{"/a/b", "/a/c", "../c"},
+		{"/a/b", "/a/b", ""},
+		{"/a/b/", "/a/b", ""},
+		{"/", "/x", "x"},
+		{cwd, "rel/x", "rel/x"},
+		{"/a/b", "/a/b/./c/../d", "d"},
+	} {
+		got, err := Relative(tc.from, tc.to)
+		if err != nil || got != tc.want {
+			t.Errorf("Relative(%q, %q) = %q, %v; want %q", tc.from, tc.to, got, err, tc.want)
+		}
+	}
+}

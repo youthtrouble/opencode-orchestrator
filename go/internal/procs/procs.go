@@ -12,8 +12,8 @@
 // One difference is deliberate (PE-B3 in the S5a plan): the JS sends one signal and waits for
 // "close" forever. Here a signalled child that has not exited after Spec.Grace is killed, and
 // once the child exits, Wait gives a grandchild that still holds stdin, stdout or stderr at
-// most Spec.Grace before it closes the pipes. The child stays in the caller's process group (no
-// Setpgid, no Setsid), so a signal to the caller's group still reaches it.
+// most Spec.Grace before it closes the pipes. The child stays in the caller's process group
+// unless Spec.NewSession is set, so a signal to the caller's group still reaches it.
 package procs
 
 import (
@@ -32,7 +32,9 @@ import (
 // (Node's "ignore"). A child that exits without reading all of it is not an error: os/exec
 // drops the EPIPE of that copy. Stdout and Stderr receive the child's output (nil discards
 // it). Grace bounds both the wait before SIGKILL after Signal and the wait for the stdin copy
-// and pipe EOF after the child exits; it must be positive.
+// and pipe EOF after the child exits; it must be positive. NewSession starts the child in a
+// session and process group of its own (setsid, Node's spawn option detached: true), so
+// SignalGroup reaches its descendants and a signal to the caller's group does not reach it.
 type Spec struct {
 	Name           string
 	Args           []string
@@ -41,10 +43,11 @@ type Spec struct {
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Grace          time.Duration
+	NewSession     bool
 }
 
-// Child is a started child process. Wait must be called exactly once; Signal may be called
-// from any goroutine, before or after Wait.
+// Child is a started child process. Wait must be called exactly once; Signal and SignalGroup
+// may be called from any goroutine, before or after Wait.
 type Child struct {
 	cmd   *exec.Cmd
 	grace time.Duration
@@ -78,6 +81,9 @@ func Start(s Spec) (*Child, error) {
 		Stderr:    s.Stderr,
 		WaitDelay: s.Grace,
 	}
+	if s.NewSession {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, startError(s.Name, err)
 	}
@@ -98,6 +104,27 @@ func (c *Child) Signal(sig syscall.Signal) {
 	_ = c.cmd.Process.Signal(sig)
 	if c.killTimer == nil {
 		c.killTimer = time.AfterFunc(c.grace, c.kill)
+	}
+}
+
+// Pid is the child's process id.
+func (c *Child) Pid() int {
+	return c.cmd.Process.Pid
+}
+
+// SignalGroup sends sig to the child's process group, as `process.kill(-child.pid, sig)` does,
+// or, when that fails (the child leads no group), to the child alone, as the JS fallback
+// `child.kill(sig)` does; that second failure is ignored, as child.kill returns false rather
+// than throw. Unlike Signal it never escalates to SIGKILL. After the child has been reaped it
+// does nothing, so a pid the kernel may have reused is never hit.
+func (c *Child) SignalGroup(sig syscall.Signal) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reaped {
+		return
+	}
+	if err := syscall.Kill(-c.cmd.Process.Pid, sig); err != nil {
+		_ = c.cmd.Process.Signal(sig)
 	}
 }
 

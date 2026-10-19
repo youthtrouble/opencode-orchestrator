@@ -201,15 +201,9 @@ func startUsageRefresh() {
 	_ = procs.StartDetached(self, "usage", "--refresh")
 }
 
-// recordIncident appends an incident to the user's log. The JS wraps every such call in
-// `try { ... } catch { /* ignore */ }`: a bridge never fails because its incident log does.
-func recordIncident(draft incident.Draft) {
-	home, err := paths.NodeHome(os.LookupEnv)
-	if err != nil {
-		return
-	}
-	_, _ = incident.New(home).Record(draft)
-}
+// recordIncident appends an incident to the user's log, ignoring failures, as the JS's
+// `try { incident(...) } catch { /* ignore */ }` does.
+var recordIncident = incident.TryRecord
 
 // usageConfig is the usage configuration for this process's environment.
 func usageConfig() (usage.Config, error) {

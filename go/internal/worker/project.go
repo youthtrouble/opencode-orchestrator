@@ -22,7 +22,9 @@ type Project struct {
 	Root       string
 	WorkersDir string
 	LogsDir    string
-	// kill sends a signal, as process.kill does; tests replace it so no real process is hit.
+	// kill sends Stop's SIGINT, as process.kill does; tests replace it so no real process is
+	// interrupted. Alive calls syscall.Kill itself: signal 0 only checks that a process
+	// exists, so it is safe on any pid and needs no stand-in.
 	kill func(pid int, sig syscall.Signal) error
 }
 

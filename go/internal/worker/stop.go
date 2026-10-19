@@ -30,7 +30,7 @@ func (p Project) Stop(lane any) (*jsjson.Object, error) {
 		out.Set("lane", lane)
 	}
 	target, signalable := signalablePid(pid)
-	if !jsjson.Truthy(state) || !Alive(pid) || !signalable {
+	if !Alive(pid) || !signalable { // a falsy state has no pid, so it is not alive either
 		out.Set("stopped", false)
 		out.Set("reason", "no live worker")
 		return out, nil

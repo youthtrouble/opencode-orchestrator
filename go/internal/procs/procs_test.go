@@ -250,3 +250,114 @@ func TestStdinCopyIsBoundedByGrace(t *testing.T) {
 		t.Errorf("Wait took %v with a grandchild holding stdin, want at most %v", elapsed, killGrace+slack)
 	}
 }
+
+// startSession starts body in a session of its own and returns once it has printed "ready";
+// the lines it printed before are returned too (a grandchild's pid, say).
+func startSession(t *testing.T, body string, grace time.Duration) (*Child, []string) {
+	t.Helper()
+	stdout, w := io.Pipe()
+	child, err := Start(Spec{Name: script(t, body), Stdout: w, Grace: grace, NewSession: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(stdout)
+	var before []string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("child ended before ready (%v), printed %q", err, before)
+		}
+		if line == "ready\n" {
+			break
+		}
+		before = append(before, strings.TrimSpace(line))
+	}
+	go func() { _, _ = io.Copy(io.Discard, reader) }()
+	t.Cleanup(func() { _ = w.Close() })
+	return child, before
+}
+
+// grandchildPid parses the pid a test script printed for its background child, which the test
+// kills when it ends.
+func grandchildPid(t *testing.T, printed []string) int {
+	t.Helper()
+	if len(printed) != 1 {
+		t.Fatalf("child printed %q, want one pid", printed)
+	}
+	pid, err := strconv.Atoi(printed[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	return pid
+}
+
+// waitGone polls until pid no longer exists (an orphan is reaped by init), or fails.
+func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(slack)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d still exists %v after its group was signalled", pid, slack)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSignalGroupReachesTheSessionsGrandchild(t *testing.T) {
+	child, printed := startSession(t, "/bin/sleep 60 & echo $!; echo ready; wait", testGrace)
+	grandchild := grandchildPid(t, printed)
+	child.SignalGroup(syscall.SIGTERM)
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, nil)
+	waitGone(t, grandchild)
+}
+
+// Without a session of its own the child leads no group: kill(-pid) fails and the child alone
+// is signalled, as the JS fallback child.kill(sig) does.
+func TestSignalGroupFallsBackToTheChild(t *testing.T) {
+	child := startReady(t, "trap 'exit 6' INT; echo ready; while :; do /bin/sleep 0.05; done", testGrace)
+	child.SignalGroup(syscall.SIGINT)
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, intp(6))
+}
+
+// The worker waits for its bridge as the JS waits for "close": a group signal is never
+// followed by SIGKILL, however long the child takes after it.
+func TestSignalGroupNeverEscalates(t *testing.T) {
+	body := "trap 'echo term' TERM; echo ready; i=0; while [ $i -lt 10 ]; do /bin/sleep 0.05; i=$((i + 1)); done; exit 7"
+	child, _ := startSession(t, body, killGrace/3)
+	child.SignalGroup(syscall.SIGTERM)
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, intp(7))
+	if child.killTimer != nil {
+		t.Error("SignalGroup armed the SIGKILL escalation")
+	}
+}
+
+// After Wait the group may still hold a grandchild; SignalGroup leaves it alone, since the
+// child's pid is no longer ours.
+func TestSignalGroupAfterWaitDoesNothing(t *testing.T) {
+	child, printed := startSession(t, "/bin/sleep 60 >/dev/null 2>&1 & echo $!; echo ready; exit 0", testGrace)
+	grandchild := grandchildPid(t, printed)
+	if _, err := child.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	child.SignalGroup(syscall.SIGTERM)
+	time.Sleep(50 * time.Millisecond)
+	if err := syscall.Kill(grandchild, 0); err != nil {
+		t.Errorf("grandchild %d was signalled after Wait: kill(0) = %v", grandchild, err)
+	}
+	if child.Pid() <= 0 {
+		t.Errorf("Pid() = %d", child.Pid())
+	}
+}

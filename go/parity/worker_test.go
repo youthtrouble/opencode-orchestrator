@@ -60,7 +60,7 @@ func seedProjectDir(rel string) seed {
 	return func(t *testing.T, sb sandbox) { mustMkdir(t, filepath.Join(sb.project, rel)) }
 }
 
-// testWorker compares `orch worker status|stop` and its usage errors with bin/worker.mjs.
+// testWorker compares `orch worker start|status|stop` and its usage errors with bin/worker.mjs.
 // Status only sends signal 0, so any pid is safe there; stop signals only victims the case
 // started itself. Stop of the pids the JS would turn into kill(-1) runs orch only (PE-14).
 func (h *harness) testWorker(t *testing.T) {
@@ -120,7 +120,7 @@ func (h *harness) testWorker(t *testing.T) {
 	}
 	h.testWorkerStopVictims(t)
 	t.Run("stop/PE-14", h.testWorkerStopGuard)
-	t.Run("start/pending-S6b", h.testWorkerStartPending)
+	t.Run("start", h.testWorkerStart)
 }
 
 // testWorkerStopVictims stops live workers: a sleep that leads its own process group (the
@@ -171,17 +171,6 @@ func (h *harness) testWorkerStopGuard(t *testing.T) {
 			}
 			v.requireRunning(t)
 		})
-	}
-}
-
-// testWorkerStartPending asserts the S6a placeholder for a start that passes the usage check;
-// the JS would run a model, so it is not run.
-func (h *harness) testWorkerStartPending(t *testing.T) {
-	sb := h.newSandbox(t)
-	writeSeedFile(t, filepath.Join(sb.project, "b.md"), "brief\n")
-	o := h.run(t, sb, []string{h.orchBin, "worker", "start", "--brief", "b.md", "--harness", "claude"}, nil, nil)
-	if o.exitCode != 2 || o.stdout != "" || o.stderr != "orch worker start: not implemented yet (S6b)\n" || len(o.files) != 0 {
-		t.Errorf("orch: exit %d, stdout %q, stderr %q, files %v; want the S6b placeholder", o.exitCode, o.stdout, o.stderr, o.files)
 	}
 }
 
