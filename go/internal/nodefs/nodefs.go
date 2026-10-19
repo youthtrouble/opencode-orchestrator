@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -136,11 +137,13 @@ var nodeErrnoMessages = map[syscall.Errno]string{
 	syscall.EINVAL:       "EINVAL: invalid argument",
 	syscall.EBUSY:        "EBUSY: resource busy or locked",
 	syscall.ETXTBSY:      "ETXTBSY: text file is busy",
+	syscall.ESRCH:        "ESRCH: no such process",
 }
 
 // FileError translates a filesystem failure into the message Node prints for the same
 // operation (open, read, write, close, mkdir, scandir, ...), reported against the path Node
-// names. Node names no path for read, nor where path is "".
+// names. Node names no path for read, nor where path is "". The result still unwraps to the
+// errno, so Code reports it.
 func FileError(err error, operation, path string) error {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) {
@@ -151,7 +154,28 @@ func FileError(err error, operation, path string) error {
 		return err
 	}
 	if operation == "read" || path == "" {
-		return fmt.Errorf("%s, %s", message, operation)
+		return &nodeError{fmt.Sprintf("%s, %s", message, operation), errno}
 	}
-	return fmt.Errorf("%s, %s '%s'", message, operation, path)
+	return &nodeError{fmt.Sprintf("%s, %s '%s'", message, operation, path), errno}
+}
+
+// nodeError is a failure worded as Node words it, carrying the errno it came from.
+type nodeError struct {
+	message string
+	errno   syscall.Errno
+}
+
+func (e *nodeError) Error() string { return e.message }
+func (e *nodeError) Unwrap() error { return e.errno }
+
+// Code is the `err.code` Node gives the failure (e.g. "EISDIR"), from the same errno table as
+// FileError, or "" when err carries no errno that table knows; the JS then falls back to
+// String(err), as in `err.code || String(err)`.
+func Code(err error) string {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return ""
+	}
+	code, _, _ := strings.Cut(nodeErrnoMessages[errno], ":")
+	return code
 }

@@ -35,7 +35,7 @@ func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if err != nil {
 		return crash(stderr, err)
 	}
-	timeout := timeoutDelay(opts.value("timeout-min"), defaultCodexTimeoutMins)
+	timeout := timeoutDelay(opts.JS("timeout-min"), defaultCodexTimeoutMins)
 	log := &logger{w: stderr, prefix: "[codex] ", quiet: parsed.IsFlag("quiet")}
 
 	cfg, err := usageConfig()

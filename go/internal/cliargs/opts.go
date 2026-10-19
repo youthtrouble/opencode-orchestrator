@@ -37,3 +37,25 @@ func (o Opts) Truthy(key string) bool {
 	opt := o[key]
 	return opt.Flag || opt.Value != ""
 }
+
+// JS is the JS value of `opts[key]`: nil when the key is absent (undefined), true for a bare
+// key, else the string. Callers that print, serialize or coerce an option use it so the value
+// behaves exactly as the JS one does.
+func (o Opts) JS(key string) any {
+	opt, present := o[key]
+	switch {
+	case !present:
+		return nil
+	case opt.Flag:
+		return true
+	}
+	return opt.Value
+}
+
+// Or is `opts[key] || fallback`.
+func (o Opts) Or(key string, fallback any) any {
+	if o.Truthy(key) {
+		return o.JS(key)
+	}
+	return fallback
+}

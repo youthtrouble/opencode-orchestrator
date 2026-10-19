@@ -53,7 +53,7 @@ func TestClaudeArgv(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts := parseClaude(c.args...)
-			got, err := claudeArgv(opts, opts.or("model", defaultClaudeModel), "p")
+			got, err := claudeArgv(opts, opts.Or("model", defaultClaudeModel), "p")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +66,7 @@ func TestClaudeArgv(t *testing.T) {
 	for _, key := range []string{"model", "effort", "permission-mode", "allowed-tools", "disallowed-tools", "max-turns", "max-budget-usd", "agent", "append-system-prompt"} {
 		t.Run("bare "+key, func(t *testing.T) {
 			opts := parseClaude("--" + key)
-			got, err := claudeArgv(opts, opts.or("model", defaultClaudeModel), "p")
+			got, err := claudeArgv(opts, opts.Or("model", defaultClaudeModel), "p")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestStartLine(t *testing.T) {
 	}
 	for _, c := range cases {
 		opts := parseClaude(c.args...)
-		if got := startLine(opts, opts.or("model", defaultClaudeModel), "/w"); got != c.want {
+		if got := startLine(opts, opts.Or("model", defaultClaudeModel), "/w"); got != c.want {
 			t.Errorf("startLine(%q) = %q, want %q", c.args, got, c.want)
 		}
 	}

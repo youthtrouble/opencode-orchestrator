@@ -44,11 +44,11 @@ type codexRequest struct {
 // a bare --cwd is the path.resolve TypeError, and a bare --model the TypeError of the gate's
 // `model.includes`, both before the gate runs.
 func newCodexRequest(opts options) (codexRequest, error) {
-	cwd, err := resolvePath(opts.or("cwd", "."))
+	cwd, err := resolvePath(opts.Or("cwd", "."))
 	if err != nil {
 		return codexRequest{}, err
 	}
-	model, isString := opts.or("model", defaultCodexModel).(string)
+	model, isString := opts.Or("model", defaultCodexModel).(string)
 	if !isString {
 		return codexRequest{}, errModelIncludes
 	}
@@ -56,8 +56,8 @@ func newCodexRequest(opts options) (codexRequest, error) {
 		opts:    opts,
 		cwd:     cwd,
 		model:   model,
-		effort:  opts.or("effort", defaultCodexEffort),
-		sandbox: opts.or("sandbox", defaultCodexSandbox),
+		effort:  opts.Or("effort", defaultCodexEffort),
+		sandbox: opts.Or("sandbox", defaultCodexSandbox),
 	}, nil
 }
 
@@ -74,13 +74,13 @@ func isFrontierCodexModel(model string) bool {
 // (Q-S5b-1). A bare --schema or --add-dir is the path.resolve TypeError.
 func (q codexRequest) argv() ([]string, error) {
 	argv := []string{"exec", "--json", "--skip-git-repo-check", "-C", q.cwd, "-s", text(q.sandbox), "-c", `model_reasoning_effort="` + text(q.effort) + `"`}
-	if resume := q.opts.value("resume"); jsjson.Truthy(resume) {
+	if resume := q.opts.JS("resume"); jsjson.Truthy(resume) {
 		argv = append(argv, "resume", text(resume))
 	} else {
 		argv = append(argv, "-m", q.model)
 	}
 	for _, path := range []struct{ key, arg string }{{"schema", "--output-schema"}, {"add-dir", "--add-dir"}} {
-		if v := q.opts.value(path.key); jsjson.Truthy(v) {
+		if v := q.opts.JS(path.key); jsjson.Truthy(v) {
 			abs, err := resolvePath(v)
 			if err != nil {
 				return nil, err
@@ -88,7 +88,7 @@ func (q codexRequest) argv() ([]string, error) {
 			argv = append(argv, path.arg, abs)
 		}
 	}
-	if jsjson.Truthy(q.opts.value("ephemeral")) {
+	if jsjson.Truthy(q.opts.JS("ephemeral")) {
 		argv = append(argv, "--ephemeral")
 	}
 	if q.sandbox == codexSandboxWithApproval {
@@ -100,7 +100,7 @@ func (q codexRequest) argv() ([]string, error) {
 // startLine is the "start" log line (l.49).
 func (q codexRequest) startLine() string {
 	shown := q.model
-	if jsjson.Truthy(q.opts.value("resume")) {
+	if jsjson.Truthy(q.opts.JS("resume")) {
 		shown = "(resumed)"
 	}
 	return fmt.Sprintf("start model=%s effort=%s sandbox=%s cwd=%s", shown, text(q.effort), text(q.sandbox), q.cwd)
@@ -132,7 +132,7 @@ type codexResult struct {
 
 func newCodexResult(q codexRequest, startedAt string) *codexResult {
 	return &codexResult{
-		threadID:        q.opts.or("resume", nil),
+		threadID:        q.opts.Or("resume", nil),
 		threadIDDefined: true,
 		model:           q.model,
 		effort:          q.effort,

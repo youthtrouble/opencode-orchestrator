@@ -20,6 +20,7 @@ Implemented so far (the rest of `bin/*.mjs` is still JS-only):
 | `orch claude-exec [--model M] [--effort E] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/claude-exec.mjs` | Byte-identical argv passed to `claude`, stdout JSON, `[claude]` progress lines, exit codes (0, 1, 2, 75), `.orchestrator/runs/*.json` record, incident lines and usage cache: the same option values (a trailing bare value key is the JS `true`: `--model` alone runs model `true`, `--timeout-min` alone is one minute), budget gate and refusal, event handling (lines split as readline splits them, U+2028 and U+2029 included; UTF-16 cuts; `tools_used` property-key quirks), stderr tail, timeout with Node's timer clamp, usage-limit path with its awaited refresh, and `CLAUDECODE` removed from claude's environment. Differences: a bare `--prompt` is refused (PE-8); no Node warnings (PE-9); claude is killed 10 s after a signal it ignores and its pipes are waited on for at most 10 s (PE-10); SIGTERM/SIGINT are forwarded to claude and the run is reported (PE-11); the post-run usage refresh runs detached and completes (PE-12); U+FFFD where a UTF-16 cut leaves a lone surrogate (PE-1). Uncaught JS errors print only their error line, after the progress lines printed so far. |
 | `orch codex-exec [--model M] [--effort E] [--sandbox S] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/codex-exec.mjs` | Byte-identical argv passed to `codex` (`exec --json ... -`, with `--approve-for-me` exactly when the sandbox is `workspace-write`, as in the JS, although codex-cli 0.162.1 rejects that pair), the prompt written to codex's stdin, codex's working directory and whole inherited environment, stdout JSON, `[codex]` progress lines, exit codes (0, 1, 2, 75), run record, incident lines and usage cache: the same option values (a bare `--model` is the JS `TypeError: model.includes is not a function` before the gate; a bare `--sandbox` is `-s true` without `--approve-for-me`), budget gate (frontier is a case-sensitive `astra` substring) and refusal, event handling (a `thread.started` without `thread_id` leaves the key out of the JSON yet keeps its place; absent `command`, `exit_code`, `path` and `kind` are left out; `turn.failed` serialized with JS key order and numbers), stderr tail, timeout with Node's timer clamp, and the tool-host no-op path with its two incidents. Differences: PE-1, PE-8 to PE-13. Uncaught JS errors print only their error line, after the progress lines printed so far. |
 | `orch opencode-exec [--agent A] [--resume ID] [--model M] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/opencode-exec.mjs` | Byte-identical argv passed to `opencode` (`run --format json --auto --agent A ...` with the prompt last), its working directory and whole inherited environment (stdin on `/dev/null`), stdout JSON, `[opencode]` progress lines, exit codes (0, 1, 2, 75), run record and incident lines: the same option values, budget gate and refusal, event handling (the first truthy `sessionID` unless resuming, the last text part), the bare stderr tail of a failed run (`""` included), and a timeout that sends SIGTERM without a log line. Like the JS it has no `--help` (the flag is ignored and the run proceeds), no `--effort` key (`--effort X` makes `X` the prompt), no start or done line, an incident `context.model` that is always `null`, and no post-run usage refresh. Differences: PE-1, PE-8 to PE-11. Uncaught JS errors print only their error line, after the progress lines printed so far. |
+| `orch worker status [--lane L] [--cwd DIR] \| stop --lane L [--cwd DIR]` (`start` lands in S6b) | `bin/worker.mjs` | Byte-identical output and exit codes over the same `.orchestrator/workers/<lane>.json` and `<lane>.lock`: `status` lists the given lane, or every `*.json` in byte order, each state spread as the JS spreads it (any JSON value; unreadable or falsy as `{lane, status: "unknown"}`) with `process_alive` (Node's `process.kill(pid, 0)` coercion: an integer in the int32 range, EPERM alive) and `lock_present`; `stop` sends SIGINT to the stored pid's process group, else to the pid. Lane names are the JS values (a bare `--lane` is the lane `true`, no `--lane` on `stop` reads `undefined.json`) and are not sanitised, as in the JS. Difference: `stop` signals only a pid of at least 2 (PE-14). `orch worker start` prints `orch worker start: not implemented yet (S6b)` and exits 2 when the JS would start a run. |
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
 `orch` yet.
@@ -56,10 +57,10 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 cd go
 go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
-./parity/run.sh --only json,usage,mailbox,manifest,incident,policy,bridges   # chosen groups; ./parity/run.sh runs them all
+./parity/run.sh --only json,usage,mailbox,manifest,incident,policy,bridges,worker   # chosen groups; ./parity/run.sh runs them all
 ```
 
-`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`, `incident`, `policy` and `bridges` parity groups on macOS and Linux
+`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`, `incident`, `policy`, `bridges` and `worker` parity groups on macOS and Linux
 with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare against Node
 when it is available; fixed byte expectations run even without Node.
 
@@ -167,6 +168,19 @@ Groups:
   `show`/`set` against a copy of the JS tree whose `models.json` is missing, a directory, `null`,
   unparsable, BOM-prefixed or of another shape (orch reads the same file through
   `ORCH_REGISTRY`). Nothing is normalised.
+- `worker`: `orch worker status|stop` against `bin/worker.mjs`. `status` over no `.orchestrator/`,
+  an empty `workers/`, lane order (`b a 1 10 2`, other files ignored), pids that are live (the
+  test process), dead (a reaped child), a string, `true`, `-1`, `1.5`, an array, an object,
+  beyond int32 or missing, a lock with and without a state, states that are unparsable, `null`,
+  `0`, `""`, a string, a number, an array or already hold `process_alive`/`lock_present`, a
+  directory `x.json`, `--lane` given, empty or bare, `workers` as a regular file (C1), a bare
+  and a relative `--cwd`. Status only sends signal 0. `stop` over no state, a dead pid, a falsy
+  state, an empty lane, and live victims each runtime's seed starts (`/bin/sleep`, as its own
+  group leader or not, the pid stored as a number or a string, under the lane given, bare or
+  absent), each required to die of SIGINT. The PE-14 pids (`1`, `true`, `"1"`, `[1]`, `-1`,
+  `-12345`, `"0"`, `[]`, minus a victim's pid) run `orch` only, never the JS, and require a
+  victim and the test process to survive; the S6b `start` placeholder is asserted on `orch`
+  alone. Normalised: the sandbox project path and, for victim cases, the stored `pid`.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and
@@ -182,9 +196,14 @@ prints only the error line:
 - C1, fixed messages (`Error: no message with id zz`, `Error: post needs from and subject`,
   filesystem errors such as EISDIR/ENOTDIR/EACCES, ...): each case pins the expected error
   line; the harness requires that exact nonempty line as `orch`'s entire stderr and as a
-  whole line in Node's stderr, with exit 1 from both. Filesystem errnos outside the 20
+  whole line in Node's stderr, with exit 1 from both. Errnos outside the 21
   that `orch` spells as Node does (EACCES, EEXIST, EISDIR, ELOOP, ENOENT, ENOTDIR, ...) print
   Go's own error text instead; that difference is known and not asserted.
+- `orch worker` prints these C1 lines: `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]"
+  argument must be of type string. Received type boolean (true)` (a bare `--cwd`, before any
+  command), `Error: ENOTDIR: not a directory, scandir '<dir>'` (or EACCES: a `workers` that
+  cannot be listed) and `Error: kill <CODE>` (`stop` when neither the group nor the pid can be
+  signalled).
 - C1 also covers Node's own coded and type errors with fixed text, such as
   `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received undefined`
   (`manifest verify` without a file) and `TypeError: Cannot convert undefined or null to object`
@@ -295,6 +314,14 @@ The other documented differences, each asserted by its own parity case:
   JS has no error listener on codex's stdin and may die of an uncaught `Error: write EPIPE` with
   no JSON and no record: racy for a small prompt, certain for one larger than the pipe buffer.
   Assumption (Q-S5b-4).
+- PE-14: `orch worker stop` signals only a stored `pid` that coerces (as `process.kill` coerces
+  it: an array or object through its string form, then an integer in the int32 range) to an
+  integer of at least 2; anything else (`1`, `true`, `"1"`, `[1]`, `-1`, any negative, `"0"`,
+  `[]`) prints `{"lane":…,"stopped":false,"reason":"no live worker"}` and exits 0. The JS sends
+  SIGINT to every process the user may signal (pid `1` or `true`: `kill(-1)`), to its own
+  process group (`"0"`, `[]`) or to process `|pid|` (a negative pid). Parity cases run `orch`
+  only for these values and assert its output; the JS side is never executed. Assumption
+  (Q-S6-1).
 
 Latent JS defects the bridges mirror on purpose: codex-exec passes `--approve-for-me` whenever
 the sandbox is `workspace-write` (the default), which codex-cli 0.162.1 rejects together with

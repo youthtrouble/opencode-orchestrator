@@ -46,25 +46,8 @@ const (
 	exitBudgetRed = 75
 )
 
-// options are the parsed command-line options, read as the JS reads `opts`.
-type options cliargs.Opts
-
-// value is opts[key]: nil when absent (JS undefined), true for a bare key, else the string.
-func (o options) value(key string) any {
-	opt, present := o[key]
-	switch {
-	case !present:
-		return nil
-	case opt.Flag:
-		return true
-	}
-	return opt.Value
-}
-
-// or is `opts[key] || fallback`.
-func (o options) or(key string, fallback any) any {
-	return or(o.value(key), fallback)
-}
+// options are the parsed command-line options, read as the JS reads `opts` (see Opts.JS).
+type options = cliargs.Opts
 
 // or is `v || fallback`.
 func or(v, fallback any) any {

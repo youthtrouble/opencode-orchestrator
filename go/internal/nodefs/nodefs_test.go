@@ -139,3 +139,28 @@ func TestResolveUsesThePhysicalWorkingDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestCodeIsNodesErrCode(t *testing.T) {
+	dir := t.TempDir()
+	_, readErr := ReadFile(dir)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"raw errno", syscall.ENOTDIR, "ENOTDIR"},
+		{"path error", &os.PathError{Op: "rename", Path: "/x", Err: syscall.EISDIR}, "EISDIR"},
+		{"FileError result", readErr, "EISDIR"},
+		{"FileError mkdir", FileError(syscall.EACCES, "mkdir", "/x"), "EACCES"},
+		{"kill", syscall.ESRCH, "ESRCH"},
+		{"errno outside the table", syscall.EXDEV, ""},
+		{"no errno", errors.New("boom"), ""},
+	} {
+		if got := Code(tc.err); got != tc.want {
+			t.Errorf("%s: Code = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if readErr.Error() != "EISDIR: illegal operation on a directory, read" {
+		t.Errorf("FileError message changed: %q", readErr)
+	}
+}

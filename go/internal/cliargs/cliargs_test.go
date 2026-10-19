@@ -47,6 +47,20 @@ func TestOptsAccessorsFollowJSTruthiness(t *testing.T) {
 	}
 }
 
+func TestOptsJSValues(t *testing.T) {
+	opts := Opts{"cwd": valueOpt("/tmp"), "empty": valueOpt(""), "force": flagOpt}
+	for key, want := range map[string]any{"cwd": "/tmp", "empty": "", "force": true, "missing": nil} {
+		if got := opts.JS(key); got != want {
+			t.Errorf("JS(%s) = %#v, want %#v", key, got, want)
+		}
+	}
+	for key, want := range map[string]any{"cwd": "/tmp", "empty": "x", "force": true, "missing": "x"} {
+		if got := opts.Or(key, "x"); got != want {
+			t.Errorf("Or(%s, x) = %#v, want %#v", key, got, want)
+		}
+	}
+}
+
 func TestParseMailbox(t *testing.T) {
 	t.Run("flags, repeated refs, ignored positionals", func(t *testing.T) {
 		args := ParseMailbox([]string{"post", "--from", "a", "stray", "--ref", "x", "--json", "--ref", "y", "--subject", "", "--body", "-", "--ref"})

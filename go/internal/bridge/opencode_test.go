@@ -44,7 +44,7 @@ func TestOpencodeArgv(t *testing.T) {
 // readPrompt then takes for the prompt.
 func TestOpencodeEffortValueIsAPositional(t *testing.T) {
 	opts, positional := parseOpencode("--effort", "high", "--help")
-	if !reflect.DeepEqual(positional, []string{"high"}) || opts.value("effort") != true || opts.value("help") != true {
+	if !reflect.DeepEqual(positional, []string{"high"}) || opts.JS("effort") != true || opts.JS("help") != true {
 		t.Errorf("opts %v, positional %q", opts, positional)
 	}
 }
@@ -64,7 +64,7 @@ func replayOpencode(t *testing.T, input string, args ...string) (*opencodeEvents
 	t.Helper()
 	var log bytes.Buffer
 	opts, _ := parseOpencode(args...)
-	events := newOpencodeEvents(&logger{w: &log, prefix: "[opencode] ", quiet: jsjson.Truthy(opts.value("quiet"))}, newOpencodeResult(opts, "/w", "t"))
+	events := newOpencodeEvents(&logger{w: &log, prefix: "[opencode] ", quiet: jsjson.Truthy(opts.JS("quiet"))}, newOpencodeResult(opts, "/w", "t"))
 	lines := &procs.Lines{OnLine: events.handleLine}
 	if _, err := lines.Write([]byte(input)); err != nil {
 		t.Fatal(err)

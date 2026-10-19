@@ -40,7 +40,7 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err.Error())
 		return exitPrompt
 	}
-	cwd, err := resolvePath(opts.or("cwd", "."))
+	cwd, err := resolvePath(opts.Or("cwd", "."))
 	if err != nil {
 		return crash(stderr, err)
 	}
@@ -65,7 +65,7 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		name:    "opencode",
 		args:    opencodeArgv(opts, prompt),
 		dir:     cwd,
-		timeout: timeoutDelay(opts.value("timeout-min"), defaultOpencodeTimeoutMins),
+		timeout: timeoutDelay(opts.JS("timeout-min"), defaultOpencodeTimeoutMins),
 		started: started,
 	}.run(events.jsThread)
 	if err != nil {
@@ -77,11 +77,11 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 // opencodeArgv is the argv opencode-exec.mjs passes to opencode (l.19-22): the prompt is the
 // last element, with no "--" before it.
 func opencodeArgv(opts options, prompt string) []string {
-	argv := []string{"run", "--format", "json", "--auto", "--agent", text(opts.or("agent", defaultOpencodeAgent))}
-	if resume := opts.value("resume"); jsjson.Truthy(resume) {
+	argv := []string{"run", "--format", "json", "--auto", "--agent", text(opts.Or("agent", defaultOpencodeAgent))}
+	if resume := opts.JS("resume"); jsjson.Truthy(resume) {
 		argv = append(argv, "--session", text(resume))
 	}
-	if model := opts.value("model"); jsjson.Truthy(model) {
+	if model := opts.JS("model"); jsjson.Truthy(model) {
 		argv = append(argv, "--model", text(model))
 	}
 	return append(argv, prompt)
@@ -94,8 +94,8 @@ func newOpencodeResult(opts options, cwd, startedAt string) *jsjson.Object {
 	result := jsjson.NewObject()
 	result.Set("ok", false)
 	result.Set("harness", "opencode")
-	result.Set("session_id", opts.or("resume", nil))
-	result.Set("agent", opts.or("agent", defaultOpencodeAgent))
+	result.Set("session_id", opts.Or("resume", nil))
+	result.Set("agent", opts.Or("agent", defaultOpencodeAgent))
 	result.Set("cwd", cwd)
 	result.Set("started_at", startedAt)
 	result.Set("final_message", "")

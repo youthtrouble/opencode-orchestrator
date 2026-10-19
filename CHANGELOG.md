@@ -49,6 +49,10 @@
   claude and codex; new PE-13: codex exiting without reading its prompt is reported as a failed
   run where the JS may die of `write EPIPE`. A NUL byte in a bridge's argv fails as Node's spawn
   does. The `bridges` parity group gains `codex` and `opencode` subgroups over scripted fakes.
+- Go port: `orch worker status|stop` matches `bin/worker.mjs` byte for byte (stdout, exit codes,
+  lane state and lock files read the same way), with new PE-14: `stop` signals only a stored pid
+  of at least 2, where the JS would SIGINT every process of the user for pid `1` or `true`.
+  `orch worker start` is not ported yet (S6b). New `worker` parity group, run in CI.
 
 ## 0.4.7 — 2026-10-19
 

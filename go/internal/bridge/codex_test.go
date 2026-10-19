@@ -124,7 +124,7 @@ func replayCodex(t *testing.T, input string, args ...string) (*codexEvents, stri
 	var log bytes.Buffer
 	request := codexRequestFor(t, args...)
 	request.cwd = "/w"
-	events := newCodexEvents(&logger{w: &log, prefix: "[codex] ", quiet: jsjson.Truthy(request.opts.value("quiet"))}, newCodexResult(request, "t"))
+	events := newCodexEvents(&logger{w: &log, prefix: "[codex] ", quiet: jsjson.Truthy(request.opts.JS("quiet"))}, newCodexResult(request, "t"))
 	lines := &procs.Lines{OnLine: events.handleLine}
 	if _, err := lines.Write([]byte(input)); err != nil {
 		t.Fatal(err)

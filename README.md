@@ -486,7 +486,7 @@ byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good rea
 plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
 post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
 create|verify|diff`, `orch incident record|list|report|share` (appending to the same incident log),
-`orch policy show|set|unattended`, and the three bridges `orch claude-exec`, `orch codex-exec`
+`orch policy show|set|unattended`, `orch worker status|stop` (`start` is not ported yet), and the three bridges `orch claude-exec`, `orch codex-exec`
 and `orch opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` command lines,
 result JSON and run records; `codex-exec` still passes `--approve-for-me` with the default
 `workspace-write` sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs`

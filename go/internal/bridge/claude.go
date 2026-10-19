@@ -24,8 +24,8 @@ const defaultClaudeModel = "claude-opus-5-5"
 // path. A bare --json-schema or --add-dir is the path.resolve TypeError, and an unreadable
 // schema file Node's fs error, both uncaught in the JS.
 func claudeArgv(opts options, model any, prompt string) ([]string, error) {
-	argv := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", text(opts.or("permission-mode", "auto")), "--permission-prompts", "none"}
-	if resume := opts.value("resume"); jsjson.Truthy(resume) {
+	argv := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", text(opts.Or("permission-mode", "auto")), "--permission-prompts", "none"}
+	if resume := opts.JS("resume"); jsjson.Truthy(resume) {
 		argv = append(argv, "--resume", text(resume))
 	} else {
 		argv = append(argv, "--model", text(model))
@@ -39,11 +39,11 @@ func claudeArgv(opts options, model any, prompt string) ([]string, error) {
 		{"agent", "--agent"},
 		{"append-system-prompt", "--append-system-prompt"},
 	} {
-		if v := opts.value(flag.key); jsjson.Truthy(v) {
+		if v := opts.JS(flag.key); jsjson.Truthy(v) {
 			argv = append(argv, flag.arg, text(v))
 		}
 	}
-	if schema := opts.value("json-schema"); jsjson.Truthy(schema) {
+	if schema := opts.JS("json-schema"); jsjson.Truthy(schema) {
 		file, err := resolvePath(schema)
 		if err != nil {
 			return nil, err
@@ -54,7 +54,7 @@ func claudeArgv(opts options, model any, prompt string) ([]string, error) {
 		}
 		argv = append(argv, "--json-schema", jsstr.DecodeUTF8(data))
 	}
-	if dir := opts.value("add-dir"); jsjson.Truthy(dir) {
+	if dir := opts.JS("add-dir"); jsjson.Truthy(dir) {
 		abs, err := resolvePath(dir)
 		if err != nil {
 			return nil, err
@@ -68,14 +68,14 @@ func claudeArgv(opts options, model any, prompt string) ([]string, error) {
 // claude is passed "auto": a latent JS defect, mirrored.
 func startLine(opts options, model any, cwd string) string {
 	shown := model
-	if jsjson.Truthy(opts.value("resume")) {
+	if jsjson.Truthy(opts.JS("resume")) {
 		shown = "(resumed)"
 	}
 	effort := ""
-	if v := opts.value("effort"); jsjson.Truthy(v) {
+	if v := opts.JS("effort"); jsjson.Truthy(v) {
 		effort = " effort=" + text(v)
 	}
-	return fmt.Sprintf("start model=%s%s mode=%s cwd=%s", text(shown), effort, text(opts.or("permission-mode", "acceptEdits")), cwd)
+	return fmt.Sprintf("start model=%s%s mode=%s cwd=%s", text(shown), effort, text(opts.Or("permission-mode", "acceptEdits")), cwd)
 }
 
 // newClaudeResult is the result object with its JS key order (l.57); exit_code, duration_ms
@@ -84,9 +84,9 @@ func newClaudeResult(opts options, model any, cwd, startedAt string) *jsjson.Obj
 	result := jsjson.NewObject()
 	result.Set("ok", false)
 	result.Set("harness", "claude")
-	result.Set("session_id", opts.or("resume", nil))
+	result.Set("session_id", opts.Or("resume", nil))
 	result.Set("model", model)
-	result.Set("effort", opts.or("effort", nil))
+	result.Set("effort", opts.Or("effort", nil))
 	result.Set("cwd", cwd)
 	result.Set("started_at", startedAt)
 	result.Set("final_message", "")
