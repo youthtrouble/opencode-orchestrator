@@ -15,6 +15,13 @@ const sh = (cmd, args) => { const r = spawnSync(cmd, args, { encoding: "utf8", t
 for (const [bin, args] of [["opencode", ["--version"]], ["codex", ["--version"]], ["claude", ["--version"]], ["node", ["--version"]]]) {
   const r = sh(bin, args); r.code === 0 ? ok(`${bin} present`, r.out.trim().split("\n")[0]) : fail(`${bin} missing`, "install it");
 }
+// Same row as `orch doctor` (PE-18). An explicit ORCH_BIN never falls through to the defaults.
+const isExecutableFile = (f) => { try { fs.accessSync(f, fs.constants.X_OK); return fs.statSync(f).isFile(); } catch { return false; } };
+const orchCandidates = [path.join(os.homedir(), ".local", "bin", "orch"), ...(process.env.PATH || "").split(":").filter(Boolean).map((dir) => path.join(dir, "orch"))];
+const orchBin = process.env.ORCH_BIN ? (isExecutableFile(process.env.ORCH_BIN) ? process.env.ORCH_BIN : null) : orchCandidates.find(isExecutableFile);
+if (process.env.ORCH_BIN && !orchBin) fail("orch binary", `ORCH_BIN=${process.env.ORCH_BIN} is not an executable file`);
+else if (!orchBin) warn("orch binary", 'not found (runtime js only; see README "Go runtime")');
+else { const r = spawnSync(orchBin, ["version"], { encoding: "utf8", timeout: 20000 }); r.status === 0 ? ok("orch binary", `${(r.stdout || "").trim().split("\n")[0]} at ${orchBin}`) : fail("orch binary", `${orchBin} version exited ${r.status ?? r.signal}`); }
 const codexLogin = sh("codex", ["login", "status"]); /Logged in/.test(codexLogin.out) ? ok("codex login", codexLogin.out.trim()) : warn("codex not logged in", "run: codex login");
 const claudeAuth = sh("claude", ["auth", "status"]); /loggedIn"?:\s*true|logged in/i.test(claudeAuth.out) ? ok("claude login") : warn("claude auth status unclear", claudeAuth.out.trim().slice(0, 120));
 const oc = sh("opencode", ["auth", "list"]); /openai/i.test(oc.out) ? ok("opencode: openai connected") : warn("opencode: OpenAI not connected", "run: opencode auth login openai --method chatgpt-token-sharing");

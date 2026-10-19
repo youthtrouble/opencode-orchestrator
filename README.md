@@ -99,12 +99,19 @@ and backup for recovery; it is not reported as a successful installation.
 The installer also builds the Go `orch` binary from the checkout (`CGO_ENABLED=0 go build -trimpath
 -ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches `go/internal/version/VERSION`,
 and places it at `~/.local/bin/orch`; set `ORCH_BIN_DIR` (absolute) to choose another directory.
-Until the release download lands this needs Go 1.25+ on `PATH`. The installer refuses before any
-change when `orch` already exists at the destination, `ORCH_BIN_DIR` is relative, inside the
-config, checkout or installer state, or on another filesystem than the installer state, or when
-`go` is missing. `./install.sh --skip-binary` installs exactly as before, without `orch`. If the
-directory is not on `PATH`, the plugin still finds `~/.local/bin/orch`; other locations need
-`ORCH_BIN=<path>`.
+Without Go 1.25+ on `PATH` it downloads the release asset instead, with `curl`:
+`orch_<VERSION>_<darwin|linux>_<arm64|amd64>` and `checksums.txt` from
+`https://github.com/youthtrouble/opencode-orchestrator/releases/download/v<VERSION>` (override the
+base with `ORCH_RELEASE_BASE_URL`, which must be `https://`). The asset's sha256 must match its
+`checksums.txt` entry before it is placed. That is an integrity check only: the checksums come from
+the same release and nothing is signed. The download works only once the 0.5.0 release exists; until
+then install Go or pass `--skip-binary`. The installer refuses before any change when `orch` already
+exists at the destination, `ORCH_BIN_DIR` is relative, inside the config, checkout or installer
+state, or on another filesystem than the installer state, when neither `go` nor `curl` is available,
+or when there is no release asset for the platform. A failed download or checksum leaves the
+recoverable `preparing` receipt. `./install.sh --skip-binary` installs exactly as before, without
+`orch`. If the directory is not on `PATH`, the plugin still finds `~/.local/bin/orch`; other
+locations need `ORCH_BIN=<path>`.
 
 ### Uninstall and recover
 
@@ -423,10 +430,12 @@ node ~/.config/opencode/orchestrator/bin/usage.mjs --refresh
 ```
 
 The doctor checks binaries, login/feed availability, routing, config/plugin/agents, fast unit tests
-and recent plugin errors. Expect `OK` rows, including `OK unit tests — pass N`, N being the number
-of tests in `orchestrator/tests/`. `WARN` can indicate unclear login or recent plugin errors; `FAIL`
-produces a nonzero exit. An all-OK doctor does not test an actual delegated model turn, installation
-reversal or long unattended operation.
+and recent plugin errors. Its `orch binary` row runs `orch version` on `ORCH_BIN`, else
+`~/.local/bin/orch`, else the first `orch` on `PATH`, and only warns when none is found. Expect `OK`
+rows, including `OK unit tests — pass N`, N being the number of tests in `orchestrator/tests/`.
+`WARN` can indicate unclear login or recent plugin errors; `FAIL` produces a nonzero exit. An all-OK
+doctor does not test an actual delegated model turn, installation reversal or long unattended
+operation.
 
 | Symptom                     | Check                                                                                                                                                                |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -520,13 +529,13 @@ exec` and `opencode run` command lines, result JSON and run records; `codex-exec
 `--approve-for-me` with the default `workspace-write` sandbox, which codex-cli 0.162.1 rejects,
 exactly as `bin/codex-exec.mjs` does), each byte-identical to its `bin/*.mjs` script when both read
 the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. `orch
-doctor` runs the `doctor.mjs` checks with the same rows, plus its own binary and self-test rows, and
-runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--follow] [--interval
-20]` draws the `watch.mjs` dashboard line for line (mirroring its crash on a `flip.json` that holds
-only a human gate). `orch kickoff --brief FILE ...` runs the `kickoff.mjs` preflight, door choice and
-launch (mirroring its latent defects: `--dry-run` still runs the preflight, `--door` is not
-validated); its parity group covers the headless and interactive launches and a supervisor really
-started.
+doctor` runs the `doctor.mjs` checks with the same rows (both print `orch binary`), plus a self-test
+row, and runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--follow]
+[--interval 20]` draws the `watch.mjs` dashboard line for line (mirroring its crash on a `flip.json`
+that holds only a human gate). `orch kickoff --brief FILE ...` runs the `kickoff.mjs` preflight,
+door choice and launch (mirroring its latent defects: `--dry-run` still runs the preflight, `--door`
+is not validated); its parity group covers the headless and interactive launches and a supervisor
+really started.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
 diffs every implemented command against the JS.
 

@@ -26,10 +26,12 @@ func doctorLog(content string) seed {
 const doctorAgentsLoaded = `[{"id":"conductor"},{"id":"architect-oai"},{"id":"coder-oai"},{"id":"reviewer-oai"}]`
 
 // testDoctor compares `orch doctor` with bin/doctor.mjs over the fakes' canned answers. Each
-// case asserts PE-18 (orch's extra rows and its Go unit-test row) and compares the rest.
+// case points the JS at orch with ORCH_BIN, so both print the same `orch binary` row; it asserts
+// PE-18 (orch's self-test row and its Go unit-test row) and compares the rest.
 func (h *harness) testDoctor(t *testing.T) {
 	green, _ := readCacheFixtures(t).Get("green")
 	pathEnv := "PATH=" + h.pathWithoutGo(t)
+	orchBinEnv := "ORCH_BIN=" + h.orchBin
 	healthyWithoutLog := seeds(
 		doctorAnswer("opencode", "--version", "1.2.3"),
 		doctorAnswer("codex", "--version", "codex-cli 0.9.0\nsecond line"),
@@ -76,7 +78,7 @@ func (h *harness) testDoctor(t *testing.T) {
 				js:        []string{h.node, filepath.Join(h.orchJS, "bin", "doctor.mjs")},
 				orch:      []string{h.orchBin, "doctor"},
 				seed:      c.seed,
-				env:       []string{pathEnv},
+				env:       []string{pathEnv, orchBinEnv},
 				normalize: normalizeGeneratedAt,
 			}
 			js, orch := h.runPair(t, inv)
@@ -87,20 +89,53 @@ func (h *harness) testDoctor(t *testing.T) {
 	}
 	t.Run("registry-missing", func(t *testing.T) {
 		t.Parallel()
-		h.testDoctorRegistryMissing(t, healthy, pathEnv)
+		h.testDoctorRegistryMissing(t, healthy, pathEnv, orchBinEnv)
 	})
+	t.Run("no-binary", func(t *testing.T) {
+		t.Parallel()
+		h.testDoctorNoBinary(t, healthy, pathEnv)
+	})
+}
+
+const jsNoBinaryRow = `WARN orch binary  —  not found (runtime js only; see README "Go runtime")` + "\n"
+
+// testDoctorNoBinary runs the JS without ORCH_BIN, with no ~/.local/bin/orch in the sandbox HOME
+// and no orch on the harness PATH (fakes, node's and sqlite3's directories), so it warns; orch is
+// always its own binary (PE-18), so its OK row is masked against that warning.
+func (h *harness) testDoctorNoBinary(t *testing.T, healthy seed, pathEnv string) {
+	for _, dir := range filepath.SplitList(strings.TrimPrefix(pathEnv, "PATH=")) {
+		if _, err := os.Stat(filepath.Join(dir, "orch")); err == nil {
+			t.Fatalf("harness PATH directory %s holds an orch; the JS would find it", dir)
+		}
+	}
+	inv := invocation{
+		js:        []string{h.node, filepath.Join(h.orchJS, "bin", "doctor.mjs")},
+		orch:      []string{h.orchBin, "doctor"},
+		seed:      healthy,
+		env:       []string{pathEnv},
+		normalize: normalizeGeneratedAt,
+	}
+	js, orch := h.runPair(t, inv)
+	js.stdout = maskJSUnitTests(t, js.stdout)
+	if !strings.Contains(js.stdout, jsNoBinaryRow) {
+		t.Errorf("js: no %q in %q", jsNoBinaryRow, js.stdout)
+	}
+	js.stdout = strings.Replace(js.stdout, jsNoBinaryRow, "<orch binary>\n", 1)
+	orch.stdout = maskOrchRows(t, orch.stdout, filepath.Dir(h.orchJS), orchSelfTestRow)
+	orch.stdout = orchBinaryRow.ReplaceAllString(orch.stdout, "<orch binary>\n")
+	compareOutcomes(t, js, orch)
 }
 
 // testDoctorRegistryMissing runs doctor over a copied JS tree without models.json (the JS reads
 // <ROOT>/models.json whatever ORCH_REGISTRY says). Both print Node's ENOENT line as the
 // usage/routing failure.
-func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed, pathEnv string) {
+func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed, pathEnv, orchBinEnv string) {
 	root := h.jsTreeWithRegistry(t, registryMissing)
 	inv := invocation{
 		js:        []string{h.node, filepath.Join(root, "bin", "doctor.mjs")},
 		orch:      []string{h.orchBin, "doctor"},
 		seed:      healthy,
-		env:       []string{pathEnv, "ORCH_HOME=" + root, "ORCH_REGISTRY=" + filepath.Join(root, "models.json")},
+		env:       []string{pathEnv, orchBinEnv, "ORCH_HOME=" + root, "ORCH_REGISTRY=" + filepath.Join(root, "models.json")},
 		normalize: normalizeGeneratedAt,
 	}
 	js, orch := h.runPair(t, inv)
@@ -182,8 +217,9 @@ func maskJSUnitTests(t *testing.T, stdout string) string {
 	return jsUnitTestsRow.ReplaceAllString(stdout, "<unit tests>")
 }
 
-// maskOrchRows requires orch's PE-18 rows (its binary, selfTestRow and a Go unit-test row not
-// run, there being no go on pathWithoutGo), removes the first two and masks the third.
+// maskOrchRows requires orch's rows (its binary, which compareOutcomes then compares, and PE-18's
+// selfTestRow and Go unit-test row not run, there being no go on pathWithoutGo), removes
+// selfTestRow and masks the unit-test row.
 func maskOrchRows(t *testing.T, stdout, repo, selfTestRow string) string {
 	t.Helper()
 	notRun := "WARN unit tests  —  not run (no go toolchain or module at " + filepath.Join(repo, "go") + ")"
@@ -195,7 +231,6 @@ func maskOrchRows(t *testing.T, stdout, repo, selfTestRow string) string {
 	if !orchBinaryRow.MatchString(stdout) {
 		t.Errorf("orch: no orch binary row in %q", stdout)
 	}
-	stdout = orchBinaryRow.ReplaceAllString(stdout, "")
 	stdout = strings.Replace(stdout, selfTestRow, "", 1)
 	return strings.Replace(stdout, notRun, "<unit tests>", 1)
 }

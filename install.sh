@@ -145,27 +145,54 @@ function orchDestination(home) {
   return { directory, destination };
 }
 
-function releaseVersion() {
+// A download needs only VERSION; a build also needs the Go module.
+function releaseVersion(source) {
   const versionFile = path.join("go", "internal", "version", "VERSION");
-  for (const entry of [versionFile, path.join("go", "go.mod")])
-    requireCondition(exists(path.join(checkout, entry)), `Missing release entry: ${entry}`);
+  const required = source === "build" ? [versionFile, path.join("go", "go.mod")] : [versionFile];
+  for (const entry of required) requireCondition(exists(path.join(checkout, entry)), `Missing release entry: ${entry}`);
   const version = fs.readFileSync(path.join(checkout, versionFile), "utf8").trim();
   requireCondition(version !== "", `Missing release entry: ${versionFile}`);
   return version;
 }
 
-// The single place that decides where orch comes from; S11b adds the release download here.
+function succeeds(name, argv) {
+  const result = spawnSync(name, argv, { stdio: "ignore" });
+  return !result.error && result.status === 0;
+}
+
+// The single place that decides where orch comes from: a local build, else the release download.
 function orchSource() {
-  const go = spawnSync("go", ["version"], { stdio: "ignore" });
+  if (succeeds("go", ["version"])) return "build";
   requireCondition(
-    !go.error && go.status === 0,
-    "orch binary unavailable: install Go 1.25+, or pass --skip-binary; nothing changed.",
+    succeeds("curl", ["--version"]),
+    "orch binary unavailable: install Go 1.25+ or curl, or pass --skip-binary; nothing changed.",
   );
-  return "build";
+  return "download";
+}
+
+const releasePlatforms = ["darwin", "linux"];
+const releaseArchitectures = { arm64: "arm64", x64: "amd64" };
+
+function releaseAsset(version) {
+  const architecture = releaseArchitectures[process.arch];
+  requireCondition(
+    releasePlatforms.includes(process.platform) && architecture,
+    `No orch release asset for ${process.platform}/${process.arch}; install Go 1.25+ or pass --skip-binary; nothing changed.`,
+  );
+  const baseUrl = (
+    process.env.ORCH_RELEASE_BASE_URL ||
+    `https://github.com/youthtrouble/opencode-orchestrator/releases/download/v${version}`
+  ).replace(/\/+$/, "");
+  requireCondition(baseUrl.startsWith("https://"), "ORCH_RELEASE_BASE_URL must be https; nothing changed.");
+  return { baseUrl, asset: `orch_${version}_${process.platform}_${architecture}` };
 }
 
 function planOrch(home) {
-  return { ...orchDestination(home), version: releaseVersion(), source: orchSource() };
+  const destination = orchDestination(home);
+  const source = orchSource();
+  const version = releaseVersion(source);
+  const release = source === "download" ? releaseAsset(version) : {};
+  return { ...destination, version, source, ...release };
 }
 
 function buildOrch(file) {
@@ -175,8 +202,40 @@ function buildOrch(file) {
   });
 }
 
+function download(url, file) {
+  const result = spawnSync(
+    "curl",
+    ["--fail", "--location", "--silent", "--show-error", "--proto", "=https", "--output", file, url],
+    { stdio: ["ignore", "ignore", "inherit"] },
+  );
+  requireCondition(!result.error && result.status === 0, `Download failed: ${url}.`);
+}
+
+// Accepts both sha256sum ("<hash>  <name>") and shasum binary ("<hash> *<name>") lines.
+function expectedChecksum(checksums, asset) {
+  for (const line of checksums.split("\n")) {
+    const match = /^([a-f0-9]{64}) [ *](.+)$/.exec(line);
+    if (match && match[2] === asset) return match[1];
+  }
+  throw new Error(`checksums.txt has no entry for ${asset}.`);
+}
+
+// Integrity only: checksums.txt comes from the same release, so this catches corruption, not a
+// compromised release. checksums.txt stays in active and is archived with it.
+function downloadOrch(orch, file) {
+  const checksums = path.join(active, "checksums.txt");
+  const downloaded = path.join(active, "orch.download");
+  download(`${orch.baseUrl}/checksums.txt`, checksums);
+  download(`${orch.baseUrl}/${orch.asset}`, downloaded);
+  const expected = expectedChecksum(fs.readFileSync(checksums, "utf8"), orch.asset);
+  const actual = crypto.createHash("sha256").update(fs.readFileSync(downloaded)).digest("hex");
+  requireCondition(actual === expected, `Checksum mismatch for ${orch.asset}; nothing installed.`);
+  fs.renameSync(downloaded, file);
+}
+
 function acquireOrch(orch, file) {
-  buildOrch(file);
+  if (orch.source === "build") buildOrch(file);
+  else downloadOrch(orch, file);
   fs.chmodSync(file, 0o755);
   const reported = spawnSync(file, ["version"], { encoding: "utf8" });
   const firstLine = (reported.stdout || "").split("\n")[0].trim();

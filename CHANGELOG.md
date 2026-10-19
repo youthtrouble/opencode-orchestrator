@@ -162,6 +162,14 @@
   records the placed file's identity as `binaryIdentity`), and any file when `removed-binary`
   already exists. A receipt `binary` must be an absolute path named `orch`. 0.4.x receipts
   without `binary` still uninstall.
+- install and doctor (S11b): without `go`, `install.sh` downloads `orch_<VERSION>_<os>_<arch>` and
+  `checksums.txt` with `curl` from the GitHub release `v<VERSION>` (or `ORCH_RELEASE_BASE_URL`,
+  https only) and places the asset only when its sha256 matches (integrity only; unsigned; needs the
+  published 0.5.0 release). No `go` and no `curl`, an unmapped platform or a non-https base URL is
+  refused before any change; a failed download or checksum leaves a recoverable `preparing`
+  receipt. `doctor.mjs` gains the `orch binary` row after `node present` (`ORCH_BIN`, else
+  `~/.local/bin/orch`, else `PATH`; WARN when none is found), byte-identical to `orch doctor`'s
+  row; the doctor parity cases now compare it and add `no-binary`.
 
 ## 0.4.7 — 2026-10-19
 

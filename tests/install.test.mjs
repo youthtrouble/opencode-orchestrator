@@ -1,5 +1,6 @@
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -154,6 +155,42 @@ function previousTarget(f, type) {
   const info = fs.lstatSync(f.target);
   return { ino: info.ino, dev: info.dev, link: info.isSymbolicLink() ? fs.readlinkSync(f.target) : null };
 }
+
+const releaseAsset = `orch_0.5.0_${process.platform}_${{ arm64: "arm64", x64: "amd64" }[process.arch]}`;
+const releasedOrch = '#!/bin/sh\necho "0.5.0 (release)"\n';
+const sha256 = (content) => crypto.createHash("sha256").update(content).digest("hex");
+
+// Removes go and serves a release from a local directory through a fake curl (no network).
+function downloadOnly(f) {
+  fs.unlinkSync(path.join(f.bin, "go"));
+  fs.writeFileSync(
+    path.join(f.bin, "curl"),
+    `#!/bin/sh
+if [ "$1" = "--version" ]; then exit 0; fi
+out=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "--output" ]; then out=$arg; fi
+  previous=$arg
+done
+printf '["curl","%s"]\\n' "$previous" >> "$TEST_LOG"
+served="$TEST_RELEASE_DIR/\${previous##*/}"
+[ -f "$served" ] || exit 22
+/bin/cp "$served" "$out"
+`,
+    { mode: 0o755 },
+  );
+  const releaseDirectory = path.join(f.root, "release");
+  fs.mkdirSync(releaseDirectory);
+  fs.writeFileSync(path.join(releaseDirectory, releaseAsset), releasedOrch);
+  fs.writeFileSync(path.join(releaseDirectory, "checksums.txt"), `${sha256(releasedOrch)}  ${releaseAsset}\n`);
+  return {
+    releaseDirectory,
+    env: { TEST_RELEASE_DIR: releaseDirectory, ORCH_RELEASE_BASE_URL: "https://example.invalid/rel" },
+  };
+}
+
+const logged = (f) => fs.readFileSync(f.log, "utf8").trim().split("\n").map(JSON.parse);
 
 function assertPlacedOrch(f) {
   assert.equal(f.receipt().binary, f.binary);
@@ -384,11 +421,108 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
     assert.equal(present(f.binary), false);
   });
 
-  test("missing go refuses before mutations", async (t) => {
+  test("no go and no curl refuses before mutations", async (t) => {
     const f = fixture(t);
     fs.unlinkSync(path.join(f.bin, "go"));
-    failure(await f.run("install.sh"), /--skip-binary/);
+    failure(await f.run("install.sh"), /install Go 1\.25\+ or curl, or pass --skip-binary/);
     assertNothingChanged(f);
+  });
+
+  test("without go, the release asset is downloaded, verified, placed and archived", async (t) => {
+    const f = fixture(t);
+    const release = downloadOnly(f);
+    fs.unlinkSync(path.join(f.checkout, "go", "go.mod"));
+    success(await f.run("install.sh", [], release.env));
+    assert.deepEqual(logged(f).slice(0, 2), [
+      ["curl", "https://example.invalid/rel/checksums.txt"],
+      ["curl", `https://example.invalid/rel/${releaseAsset}`],
+    ]);
+    assert.equal(f.receipt().binary, f.binary);
+    assert.equal(fs.readFileSync(f.binary, "utf8"), releasedOrch);
+    assert.equal(fs.statSync(f.binary).mode & 0o777, 0o755);
+    success(await f.run("uninstall.sh"));
+    assert.equal(present(f.binary), false);
+    assert.equal(fs.readFileSync(path.join(f.archives()[0], "removed-binary"), "utf8"), releasedOrch);
+    assert.equal(present(path.join(f.archives()[0], "checksums.txt")), true);
+  });
+
+  test("without ORCH_RELEASE_BASE_URL the GitHub release of VERSION is used", async (t) => {
+    const f = fixture(t);
+    const release = downloadOnly(f);
+    success(await f.run("install.sh", [], { ...release.env, ORCH_RELEASE_BASE_URL: "" }));
+    for (const [, url] of logged(f).slice(0, 2))
+      assert.ok(url.startsWith("https://github.com/youthtrouble/opencode-orchestrator/releases/download/v0.5.0/"), url);
+  });
+
+  for (const [name, corrupt, pattern] of [
+    [
+      "checksum mismatch",
+      (directory) => fs.writeFileSync(path.join(directory, releaseAsset), "tampered"),
+      new RegExp(`Checksum mismatch for ${releaseAsset}; nothing installed\\.`),
+    ],
+    [
+      "missing checksum entry",
+      (directory) => fs.writeFileSync(path.join(directory, "checksums.txt"), `${sha256(releasedOrch)} *orch_other\n`),
+      new RegExp(`checksums\\.txt has no entry for ${releaseAsset}\\.`),
+    ],
+    [
+      "missing release asset",
+      (directory) => fs.unlinkSync(path.join(directory, releaseAsset)),
+      new RegExp(`Download failed: https://example\\.invalid/rel/${releaseAsset}\\.`),
+    ],
+  ]) {
+    test(`download: ${name} is nonzero, installs nothing and is recoverable`, async (t) => {
+      const f = fixture(t);
+      const release = downloadOnly(f);
+      corrupt(release.releaseDirectory);
+      const original = previousTarget(f, "directory");
+      failure(await f.run("install.sh", ["--force"], release.env), pattern);
+      assert.equal(f.receipt().phase, "preparing");
+      assertOriginal(f, original);
+      assert.equal(present(f.binary), false);
+      success(await f.run("uninstall.sh"));
+      assertOriginal(f, original);
+    });
+  }
+
+  test("download: a shasum-format entry is accepted", async (t) => {
+    const f = fixture(t);
+    const release = downloadOnly(f);
+    fs.writeFileSync(
+      path.join(release.releaseDirectory, "checksums.txt"),
+      `${sha256("other")}  orch_other\n${sha256(releasedOrch)} *${releaseAsset}\n`,
+    );
+    success(await f.run("install.sh", [], release.env));
+    assert.equal(fs.readFileSync(f.binary, "utf8"), releasedOrch);
+  });
+
+  test("a non-https ORCH_RELEASE_BASE_URL is refused before mutations", async (t) => {
+    const f = fixture(t);
+    const release = downloadOnly(f);
+    const refused = await f.run("install.sh", [], {
+      ...release.env,
+      ORCH_RELEASE_BASE_URL: "http://example.invalid/rel",
+    });
+    failure(refused, /ORCH_RELEASE_BASE_URL must be https; nothing changed\./);
+    assertNothingChanged(f);
+    assert.equal(present(f.log), false);
+  });
+
+  test("an architecture without a release asset is refused before mutations", async (t) => {
+    const f = fixture(t);
+    const release = downloadOnly(f);
+    // The installer's Node reports another architecture through a standard preload, not a product hook.
+    const preload = path.join(f.root, "arch-ia32.cjs");
+    fs.writeFileSync(preload, 'Object.defineProperty(process, "arch", { value: "ia32" });\n');
+    const refused = await f.run("install.sh", [], { ...release.env, NODE_OPTIONS: `--require="${preload}"` });
+    failure(
+      refused,
+      new RegExp(
+        `No orch release asset for ${process.platform}/ia32; install Go 1\\.25\\+ or pass --skip-binary; nothing changed\\.`,
+      ),
+    );
+    assertNothingChanged(f);
+    assert.equal(present(f.log), false);
   });
 
   test("an existing orch at the destination is refused and left byte-identical", async (t) => {
