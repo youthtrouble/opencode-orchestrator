@@ -23,11 +23,36 @@ type Detached struct {
 // execute Name is a *StartError. Nothing here reaps the child: it is meant for a caller that
 // exits soon after, leaving it to init.
 func (d Detached) Start() (int, error) {
+	cmd, err := d.start()
+	if err != nil {
+		return 0, err
+	}
+	pid := cmd.Process.Pid // read first: Release invalidates it
+	// Release only frees this process's handle on the child; whatever it reports, the child
+	// is running, which is what the caller must learn.
+	_ = cmd.Process.Release()
+	return pid, nil
+}
+
+// StartReaped is Start for a long-lived caller: a goroutine waits for the child, so it does
+// not stay a zombie once it exits (Node's event loop reaps an unref'd child the same way).
+// A failure to find or execute Name is returned at once, as a *StartError.
+func (d Detached) StartReaped() (int, error) {
+	cmd, err := d.start()
+	if err != nil {
+		return 0, err
+	}
+	// The exit status of a fire-and-forget child is not wanted; only the reaping is.
+	go func() { _ = cmd.Wait() }()
+	return cmd.Process.Pid, nil
+}
+
+func (d Detached) start() (*exec.Cmd, error) {
 	// Set explicitly: exec.Cmd rewrites PWD for a nil Env with a Dir, and Node does not.
 	env := os.Environ()
 	path, err := resolve(d.Name, d.Dir, env)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	cmd := &exec.Cmd{
 		Path:        path,
@@ -40,13 +65,9 @@ func (d Detached) Start() (int, error) {
 		cmd.Stdout, cmd.Stderr = d.Output, d.Output
 	}
 	if err := cmd.Start(); err != nil {
-		return 0, startError(d.Name, err)
+		return nil, startError(d.Name, err)
 	}
-	pid := cmd.Process.Pid // read first: Release invalidates it
-	// Release only frees this process's handle on the child; whatever it reports, the child
-	// is running, which is what the caller must learn.
-	_ = cmd.Process.Release()
-	return pid, nil
+	return cmd, nil
 }
 
 // StartDetached starts the program at path with args as a Detached child with its output on

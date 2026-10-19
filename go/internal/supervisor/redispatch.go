@@ -1,10 +1,7 @@
 package supervisor
 
 import (
-	"strings"
-
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervise"
 )
@@ -42,46 +39,45 @@ func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker
 
 // redispatch relaunches the lane's brief as a detached worker and waits for the launcher,
 // then records redispatched_at in the worker file (after the launch, so it may overwrite the
-// new runner's first state, as in the JS) and posts a note with the launcher's output. A
-// failed write or post aborts the tick.
+// new runner's first state, as in the JS) and posts a note with the launcher's output. An
+// argument Node would reject, a failed write or a failed post aborts the tick.
 func (s *Supervisor) redispatch(lane string, worker *jsjson.Object, workerPath string) error {
-	result := s.RunSync(SyncSpec{Name: s.Self, Args: redispatchArgs(lane, worker, s.Root), Dir: s.Root})
+	args, err := spawnArgs(redispatchArgs(lane, worker, s.Root)...)
+	if err != nil {
+		return err
+	}
+	result := s.RunSync(SyncSpec{Name: s.Self, Args: args, Dir: s.Root})
 	worker.Set("redispatched_at", jsjson.ISOString(s.Now()))
 	if err := writeJSON(workerPath, worker); err != nil {
 		return err
 	}
-	out := result.Stdout
-	if out == "" {
-		out = result.Stderr
-	}
-	_, err := s.Mailbox().Post(mailbox.Draft{
+	_, err = s.Mailbox().Post(mailbox.Draft{
 		From:    "supervisor",
 		To:      "coordinator",
 		Kind:    "note",
 		Subject: lane + " re-dispatched after budget reset",
-		Body:    jsstr.Slice(strings.Trim(out, jsstr.WhiteSpace), 0, noteBodyUnits),
+		Body:    outputText(result, noteBodyUnits),
 	})
 	return err
 }
 
-// redispatchArgs is the JS worker.mjs argv as `orch worker` arguments, every value as
-// String(v) (undefined prints "undefined"). Only the brief, harness, lane, breadth, model and
-// session are carried over (mirrored).
-func redispatchArgs(lane string, worker *jsjson.Object, root string) []string {
-	text := func(key string) string { return jsjson.TemplateStringOf(jsjson.Lookup(worker, key)) }
-	args := []string{"worker", "start",
-		"--brief", text("brief"),
-		"--harness", text("harness"),
+// redispatchArgs is the JS worker.mjs argv as `orch worker` arguments, as JS values for
+// spawnArgs. Only the brief, harness, lane, breadth, model and session are carried over
+// (mirrored).
+func redispatchArgs(lane string, worker *jsjson.Object, root string) []any {
+	args := []any{"worker", "start",
+		"--brief", property(worker, "brief"),
+		"--harness", property(worker, "harness"),
 		"--lane", lane,
-		"--breadth", jsjson.OrText(jsjson.Path(worker, "breadth"), "standard"),
+		"--breadth", or(jsjson.Path(worker, "breadth"), "standard"),
 		"--cwd", root,
 		"--detach",
 	}
 	if model := jsjson.Path(worker, "model"); jsjson.Truthy(model) {
-		args = append(args, "--model", jsjson.TemplateString(model))
+		args = append(args, "--model", model)
 	}
 	if session := jsjson.Path(worker, "session_id"); jsjson.Truthy(session) {
-		args = append(args, "--resume", jsjson.TemplateString(session))
+		args = append(args, "--resume", session)
 	}
 	return args
 }

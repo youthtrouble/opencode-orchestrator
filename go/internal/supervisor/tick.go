@@ -10,6 +10,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervise"
 )
 
@@ -18,46 +19,45 @@ import (
 type Deps struct {
 	Now      func() time.Time          // Date.now()
 	Pid      int                       // process.pid, recorded in the state
-	Self     string                    // this executable, re-run for `worker start`
+	Self     string                    // this executable, re-run for worker, flip and claude-exec
 	Alive    func(pid any) bool        // the JS alive(pid): worker.Alive
-	RunSync  func(SyncSpec) SyncResult // spawnSync
+	RunSync  func(SyncSpec) SyncResult // spawnSync: procs.RunSync with a grace
+	Spawn    Spawner                   // spawn(..., {detached, stdio: "ignore"}).unref()
 	Mailbox  func() *mailbox.Mailbox   // the project mailbox
 	Incident func(incident.Draft)      // records and ignores failures: incident.TryRecord
 }
 
-// SyncSpec is a spawnSync call: Name run with Args in Dir, outputs captured.
+// SyncSpec is a spawnSync call: Name run with Args in Dir (the supervisor's own working
+// directory when ""), outputs captured, killed with SIGTERM after a positive Timeout.
 type SyncSpec struct {
-	Name string
-	Args []string
-	Dir  string
+	Name    string
+	Args    []string
+	Dir     string
+	Timeout time.Duration
 }
 
-// SyncResult is what the supervisor reads of a spawnSync result: both outputs, decoded as
-// UTF-8 ("" when the process could not be started, where spawnSync gives undefined).
-type SyncResult struct {
-	Stdout, Stderr string
-}
+// SyncResult is a spawnSync result.
+type SyncResult = procs.SyncResult
+
+// Spawner starts name with args in dir in a session of its own with its stdio on /dev/null,
+// does not wait for it, and reaps it when it exits (procs.Detached.StartReaped). The error
+// is a failure to start it.
+type Spawner func(name string, args []string, dir string) error
 
 // Supervisor watches the lanes of one project.
 type Supervisor struct {
 	Project
 	Deps
-	// deliver wakes the coordinator through one configured channel (S8b implements the
-	// channel types; until then every type is unknown). Tests replace it.
+	// deliver wakes the coordinator through one configured channel: deliverChannel, which
+	// tests of the tick replace.
 	deliver func(channel any, text string) *jsjson.Object
 }
 
 // New returns the supervisor of project with deps.
 func New(project Project, deps Deps) *Supervisor {
-	return &Supervisor{Project: project, Deps: deps, deliver: unknownChannel}
-}
-
-// unknownChannel is deliver's answer for a channel type it does not know.
-func unknownChannel(channel any, _ string) *jsjson.Object {
-	result := jsjson.NewObject()
-	result.Set("status", "delivery_failed")
-	result.Set("error", "unknown channel "+jsjson.TemplateStringOf(jsjson.Lookup(channel, "type")))
-	return result
+	s := &Supervisor{Project: project, Deps: deps}
+	s.deliver = s.deliverChannel
+	return s
 }
 
 // tick is the values one tickAll call reads once.
@@ -100,7 +100,9 @@ func (s *Supervisor) Tick(state *jsjson.Object) error {
 			return err
 		}
 	}
-	// Step 15, the conductor flip evaluation, lands in S8b.
+	if err := s.evaluateFlip(state, &t); err != nil {
+		return err
+	}
 	state.Set("checked_at", t.nowISO)
 	state.Set("pid", float64(s.Pid))
 	state.Set("status", "running")
@@ -137,13 +139,14 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 		LockPresent: nodefs.Exists(filepath.Join(s.workers.WorkersDir, lane+".lock")),
 	})
 	laneState := jsjson.Path(t.lanes, lane)
-	previousRun, _ := jsjson.Path(laneState, "run").(string)
+	run := runValue(worker, obs)
+	sameRun := strictEquals(jsjson.Path(laneState, "run"), run)
 	nextCheck := jsjson.Path(laneState, "next_check")
-	ev := supervise.ChooseEvent(obs, supervise.State{Run: previousRun, NextCheck: nextCheck, Events: t.events}, t.acks, t.now)
-	if previousRun != obs.Run || !jsjson.Truthy(nextCheck) {
+	ev := supervise.ChooseEvent(obs, supervise.State{Run: runIf(sameRun, obs), NextCheck: nextCheck, Events: t.events}, t.acks, t.now)
+	if !sameRun || !jsjson.Truthy(nextCheck) {
 		nextCheck = float64(t.now + obs.Interval)
 	}
-	entry, err := laneEntry(obs, t.nowISO, nextCheck)
+	entry, err := laneEntry(run, obs, t.nowISO, nextCheck)
 	if err != nil {
 		return err
 	}
@@ -151,7 +154,7 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	if !isObject {
 		return jsjson.CannotAssign(t.lanes, lane)
 	}
-	lanes.Set(lane, entry)
+	setProperty(lanes, lane, entry)
 
 	due, err := s.redispatchDue(obs, t.config, worker)
 	if err != nil {
@@ -166,15 +169,46 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	return s.emit(state, t, lane, obs, entry, ev)
 }
 
+// runValue is the JS obs.run as a value: `worker.run_id || `${worker.pid}:${worker.lane}“.
+// A hand-edited run_id that is not a string (e.g. 5) stays that value; obs.Run is its text,
+// which is what the event ids are built from.
+func runValue(worker *jsjson.Object, obs supervise.Observation) any {
+	if runID := jsjson.Path(worker, "run_id"); jsjson.Truthy(runID) {
+		return runID
+	}
+	return obs.Run
+}
+
+// runIf is the run chooseEvent compares with obs.run: the observed one when the lane's
+// recorded run is strictly equal to it, else "" (never equal: obs.Run is never empty).
+func runIf(sameRun bool, obs supervise.Observation) string {
+	if sameRun {
+		return obs.Run
+	}
+	return ""
+}
+
+// strictEquals is JS `a === b` for two values parsed from different JSON documents: objects
+// and arrays are distinct objects, so never equal.
+func strictEquals(a, b any) bool {
+	for _, v := range []any{a, b} {
+		switch v.(type) {
+		case *jsjson.Object, []any:
+			return false
+		}
+	}
+	return a == b
+}
+
 // laneEntry is the lane's new state.lanes entry. nextCheck is a JS value (a hand-edited
 // next_check is passed through), so its ISO form may throw.
-func laneEntry(obs supervise.Observation, checkedAt string, nextCheck any) (*jsjson.Object, error) {
+func laneEntry(run any, obs supervise.Observation, checkedAt string, nextCheck any) (*jsjson.Object, error) {
 	nextCheckAt, err := isoSeconds(nextCheck)
 	if err != nil {
 		return nil, err
 	}
 	entry := jsjson.NewObject()
-	entry.Set("run", obs.Run)
+	entry.Set("run", run)
 	entry.Set("phase", obs.Phase)
 	entry.Set("breadth", obs.Breadth)
 	entry.Set("quiet", obs.Quiet)

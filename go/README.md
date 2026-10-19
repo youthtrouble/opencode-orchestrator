@@ -384,7 +384,9 @@ The other documented differences, each asserted by its own parity case:
   `prompt_head` at 400; in `orch opencode-exec` `prompt_head` at 400; in `orch worker start` the
   state's `result_summary` at 2000, the failure incident's summary at 160 and detail (the last
   1500 units of the bridge's stdout) and the blocked message body at 1500; in `orch flip gate`
-  the human's message subject at 80, in `orch flip run` the `launcher` text at 400) or a
+  the human's message subject at 80, in `orch flip run` the `launcher` text at 400; in `orch
+  supervisor` (drafted in S8b, asserted in S8c) a flip log line's quoted output at 200 and the
+  redispatch note body at 500) or a
   string message spread into one key per code unit gives U+FFFD in Go. Hashes are identical (Node
   hashes a lone surrogate as U+FFFD). With an empty `HOME` the JS home pattern is empty and
   matches between the halves of every astral character, splitting them the same way. Text
@@ -395,6 +397,9 @@ The other documented differences, each asserted by its own parity case:
   class differs. Extended to `orch flip run`: when the worker launcher dies, `run`'s `launcher`
   field (`(stdout || stderr).trim()`, cut at 400 units) holds Node's crash block in the JS (its
   throwing location, source excerpt, error line and stack) and only the error line in `orch`.
+  Extended to `orch supervisor` (drafted in S8b, asserted in S8c): a crashing `flip run`, `flip
+  decide` or `worker start` child quoted in a log line or the redispatch note shows Node's crash
+  block in the JS and the error line in `orch`; so does `serve`'s own crash in its log.
 - PE-3: `orch mailbox post --json` prints the whole message it appended; the JS ignores
   `--json`. As in `list`, only a bare `--json` counts (`--json x` is the value of a key).
 - PE-4: an incident's `version` is `orch version` (e.g. `0.5.0 (8b23cd3)`); the JS writes its
@@ -418,6 +423,8 @@ The other documented differences, each asserted by its own parity case:
 - PE-6: relational comparisons with object or array operands (`--since` against an object `at`)
   are false in `orch`; the JS compares their string forms. `policy set` on a `policy.json`
   holding an array exits 1 with a `TypeError:` line; the JS rewrites the array and succeeds.
+  Extended to `orch supervisor` (drafted in S8b): the flip evaluation's handoff scan (`m.at >=
+  conductorLane.started_at`) is false in `orch` when either value is an object or an array.
 - PE-7: `toLowerCase` of code points Go's Unicode 15.0 tables do not know, or whose case
   properties changed since (U+0295, U+1171E), follows Go, not Node's newer ICU data. The test of
   `jsstr.ToLower` against every code point lists them (196 with Node v26.5.1 / Unicode 17.0).
@@ -442,7 +449,12 @@ The other documented differences, each asserted by its own parity case:
   (the JS waits for `close` forever); it never SIGKILLs the bridge, which bounds its own CLI.
   Assumption (Q-S6-4). Extended to `orch flip run`: once the worker launcher has exited it waits
   at most 10 s for the launcher's pipes; `spawnSync` waits for them forever. No output changes
-  (the detached runner writes to its log, not to the launcher's pipes).
+  (the detached runner writes to its log, not to the launcher's pipes). Extended to `orch
+  supervisor` (drafted in S8b, asserted in S8c): every child it waits for (`codex queue`, a
+  `command` channel, `flip decide`, `flip run`, `worker start`) runs through `procs.RunSync`,
+  which SIGKILLs a child that ignores the 30 s channel timeout's SIGTERM 10 s later and waits at
+  most 10 s for pipes held by grandchildren; `spawnSync` waits for both forever. No output
+  changes (a killed channel is `exit null` either way).
 - PE-11: SIGTERM and SIGINT sent to a bridge are forwarded to its CLI, and the run then ends as
   any run does once the CLI closes: for a CLI the signal killed, `exit_code: null`, the
   `claude exited null: ...` or `codex exited null: ...` error (opencode: the bare stderr tail), a
@@ -509,7 +521,10 @@ The other documented differences, each asserted by its own parity case:
   Asserted by one case (the legacy local form of two minutes ago: the JS stays with `cooldown
   after a recent flip`, `orch` hands back). The same parser already reads the usage cache's
   `resets_at` (`orch usage`, `routing`, `budget`, the bridges' gate and `decide`'s freshly-reset
-  test), where those producers write ISO timestamps only. Assumption (Q-S7-1).
+  test), where those producers write ISO timestamps only. Assumption (Q-S7-1). Extended to
+  `orch supervisor` (drafted in S8b): `flip.json`'s `at` and `conductor.json`'s `started_at`
+  (flip target never started), a worker's `resume_after` (redispatch) and
+  `last_progress_at`/`updated_at`/`started_at`, and an event's `created_at`.
 - PE-16: hand-edited supervisor inputs of shapes the JS mutates invisibly. (1) A JSON array as
   `supervisor-state.json`, its `lanes`, a worker lane file or `conductor.json` that the
   supervisor rewrites: `orch` reads it as `{}` and writes the object (the JS sets named
@@ -525,7 +540,15 @@ The other documented differences, each asserted by its own parity case:
   runtimes write objects, so only hand edits reach these. Asserted: (2) for `ack` and (4) by
   parity cases; (1) for `lanes` and a worker file, (2) during a tick and (3) by
   `internal/supervisor` unit tests; (1) for the state file by a parity case in S8c (serve), and
-  for `conductor.json` with the flip evaluation (S8b). Assumption (Q-S8-2).
+  for `conductor.json` with the flip evaluation (S8b). (5) A worker lane file named
+  `__proto__.json`: like the JS, `orch` writes no `lanes.__proto__` entry (the assignment is the
+  prototype setter), but a later tick of the same JS process reads the previous entry back
+  through the prototype as the lane's state, where `orch` reads none. Assumption (Q-S8-2).
+- PE-17 (drafted in S8b, asserted in S8c): when the `opencode-run` wake channel's `opencode`
+  cannot be found or executed, `orch supervisor serve` records what the JS records (the channel
+  `queued`, the event status, the log line, the state) and keeps serving. The JS spawns it
+  without an `'error'` listener and dies right after the tick (`Error: spawn opencode ENOENT`,
+  exit 1, lock left; the next `start` reclaims the lock). Assumption (Q-S8-1).
 
 Latent JS defects the bridges mirror on purpose: codex-exec passes `--approve-for-me` whenever
 the sandbox is `workspace-write` (the default), which codex-cli 0.162.1 rejects together with
@@ -560,8 +583,12 @@ tick (reached through `serve` in S8c) keeps the JS order and partial writes: a `
 `supervisor.json` throws at its first config read only; a primitive worker file aborts every
 tick; a redispatch drops every option but brief, harness, lane, breadth, model and session,
 writes the old worker state after the launch (over the new runner's first state) and aborts the
-tick when its note cannot be posted; a lane entry of a vanished worker is never removed. These
-are fixed in JS and Go together after S12 (Q-S8-3).
+tick when its note cannot be posted; a lane entry of a vanished worker is never removed; a
+`null` entry in the state's `events` makes every tick throw `Cannot read properties of null
+(reading 'created_at')` while pruning, so the supervisor records nothing but that
+`storage_error` until the entry is removed by hand. The flip evaluation (S8b) relaunches a
+`pending_launch` at every evaluation (once a minute) without a cooldown while `flip run` fails
+before clearing it. These are fixed in JS and Go together after S12 (Q-S8-3).
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 

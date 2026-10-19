@@ -26,6 +26,10 @@ type fixture struct {
 	live      map[float64]bool
 	runs      []SyncSpec
 	runResult SyncResult
+	// respond, when set, answers each RunSync instead of runResult.
+	respond   func(SyncSpec) SyncResult
+	spawns    []spawnCall
+	spawnErr  error
 	incidents []incident.Draft
 	ids       int
 	// onMailbox runs each time the supervisor opens the mailbox, before it posts.
@@ -43,7 +47,14 @@ func newFixture(t *testing.T) *fixture {
 		Alive: func(pid any) bool { n, _ := pid.(float64); return f.live[n] },
 		RunSync: func(spec SyncSpec) SyncResult {
 			f.runs = append(f.runs, spec)
+			if f.respond != nil {
+				return f.respond(spec)
+			}
 			return f.runResult
+		},
+		Spawn: func(name string, args []string, dir string) error {
+			f.spawns = append(f.spawns, spawnCall{name, args, dir})
+			return f.spawnErr
 		},
 		Mailbox: func() *mailbox.Mailbox {
 			if f.onMailbox != nil {
@@ -57,6 +68,13 @@ func newFixture(t *testing.T) *fixture {
 		Incident: func(d incident.Draft) { f.incidents = append(f.incidents, d) },
 	})
 	return f
+}
+
+// spawnCall is one recorded Spawn.
+type spawnCall struct {
+	Name string
+	Args []string
+	Dir  string
 }
 
 // at sets the clock to t0 + seconds (fractions allowed).

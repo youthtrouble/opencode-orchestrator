@@ -6,8 +6,10 @@
 //   - Wait reports the exit code as the "close" event does: nil (JS null) for a child killed by
 //     a signal, never Go's -1.
 //   - Lines splits a stream into lines as readline does.
+//   - RunSync runs a child to completion as spawnSync does, with its timeout option.
 //   - StartDetached starts a fire-and-forget child in a session of its own (the bridge's
-//     post-run usage refresh, PE-12).
+//     post-run usage refresh, PE-12); Detached.StartReaped does the same for a long-lived
+//     caller, reaping the child when it exits.
 //
 // One difference is deliberate (PE-B3 in the S5a plan): the JS sends one signal and waits for
 // "close" forever. Here a signalled child that has not exited after Spec.Grace is killed, and

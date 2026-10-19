@@ -599,3 +599,48 @@ func TestIsoSecondsIsNewDateTimesThousandToISOString(t *testing.T) {
 		}
 	}
 }
+
+// TestTickLaneNamedProtoUsesThePrototypeSetter: `state.lanes["__proto__"] = entry` without an
+// own key of that name replaces the prototype and writes no key; an own key (JSON.parse
+// creates one) is assigned in place.
+func TestTickLaneNamedProtoUsesThePrototypeSetter(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("logs")
+	f.write("workers/__proto__.json", `{"run_id": "r", "status": "finished"}`)
+	state := f.mustTick(`{"lanes": {"a": 1}}`)
+	wantJSON(t, compact(t, jsjson.Path(state, "lanes")), `{"a":1}`)
+
+	f.at(1)
+	state = f.mustTick(`{"lanes": {"__proto__": 1, "a": 1}}`)
+	if got := strings.Join(jsjson.Path(state, "lanes").(*jsjson.Object).Keys(), ","); got != "__proto__,a" {
+		t.Errorf("lanes keys %s", got)
+	}
+	if run := jsjson.Path(state, "lanes", "__proto__", "run"); run != "r" {
+		t.Errorf("own __proto__ entry run %v", run)
+	}
+}
+
+// TestTickKeepsANonStringRunIDAsItsJSValue: obs.run is worker.run_id itself, compared with
+// the recorded run by ===, and recorded as that value.
+func TestTickKeepsANonStringRunIDAsItsJSValue(t *testing.T) {
+	cases := []struct {
+		recorded string
+		wantNext float64
+	}{
+		{`5`, t0 + 1000},  // same run: the recorded next_check stays
+		{`"5"`, t0 + 120}, // "5" !== 5: a new run, next_check from now
+		{`[5]`, t0 + 120}, // never === a value parsed from another file
+	}
+	for _, c := range cases {
+		f := newFixture(t)
+		f.live[7] = true
+		f.write("workers/w.json", `{"run_id": 5, "status": "running", "pid": 7, "breadth": "focused", "updated_at": "`+iso(0)+`"}`)
+		state := f.mustTick(`{"lanes": {"w": {"run": ` + c.recorded + `, "next_check": ` + jsjson.TemplateString(float64(t0+1000)) + `}}}`)
+		if run := jsjson.Path(state, "lanes", "w", "run"); run != 5.0 {
+			t.Errorf("recorded %s: run %#v, want the number 5", c.recorded, run)
+		}
+		if next := jsjson.Path(state, "lanes", "w", "next_check"); next != c.wantNext {
+			t.Errorf("recorded %s: next_check %v, want %v", c.recorded, next, c.wantNext)
+		}
+	}
+}

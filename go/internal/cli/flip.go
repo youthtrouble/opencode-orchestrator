@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
 )
@@ -107,21 +105,12 @@ func workerLauncher(root string) flipcmd.Launcher {
 		if err != nil {
 			return nil, "", ""
 		}
-		var stdout, stderr bytes.Buffer
-		child, err := procs.Start(procs.Spec{
-			Name:   self,
-			Args:   append([]string{"worker"}, args...),
-			Dir:    root,
-			Stdout: &stdout,
-			Stderr: &stderr,
-			Grace:  launcherGrace,
+		result := procs.RunSync(procs.SyncSpec{
+			Name:  self,
+			Args:  append([]string{"worker"}, args...),
+			Dir:   root,
+			Grace: launcherGrace,
 		})
-		if err != nil {
-			return nil, "", ""
-		}
-		// Copying into buffers cannot fail, and a status Wait could not collect is already
-		// nil, which is how spawnSync reports it.
-		status, _ := child.Wait()
-		return status, jsstr.DecodeUTF8(stdout.Bytes()), jsstr.DecodeUTF8(stderr.Bytes())
+		return result.Status, result.Stdout, result.Stderr
 	}
 }
