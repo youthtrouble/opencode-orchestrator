@@ -39,5 +39,9 @@
     { "action": "read",  "resource": "*.env.example",          "effect": "allow" }
   ],
 
+  // The orchestrator plugin's runtime is "js" (default) or "go" (every tool and hook through `orch`).
+  // Select go with ORCH_RUNTIME=go in the opencode service environment, or replace "*" with the
+  // object form [{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]
+  // (optional "binary": "/absolute/path/to/orch"). See README "Plugin runtime".
   "plugins": ["*"]  // plugins/*.ts in this directory are auto-discovered
 }

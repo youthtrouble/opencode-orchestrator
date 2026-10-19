@@ -354,12 +354,12 @@ a reset. Enable it deliberately only after verifying the relevant bridge.
 checkout/
   AGENTS.md, opencode.jsonc     operating contract and native fallback config
   agents/, commands/, skills/  role prompts and conductor workflow
-  plugins/orchestrator.ts      tools, budget injection, model synchronization
+  plugins/orchestrator.ts      tools, budget injection, model synchronization (js or go runtime)
   orchestrator/
     models.json                routing/configuration source of truth
     bin/, lib/                 CLI adapters, usage, routing and coordination
     tests/                     fast runtime unit tests (doctor runs these)
-  tests/install.test.mjs        separate installer integration matrix
+  tests/                       installer integration matrix and plugin tests (fake opencode context)
   go/                          Go port (`orch`), in progress; see "Go runtime (in progress)"
   install.sh, uninstall.sh     reversible config management
 ```
@@ -455,8 +455,8 @@ a model will follow instructions.
 ## Verification and limitations
 
 - **Verified:** the fast unit suite (`orchestrator/tests/`: routing, flip, supervision, incident
-  and usage-cache tests); a separate temporary-HOME installer suite (`tests/`) with stubbed external
-  commands; strict registry JSON; syntax/privacy checks; initial packaging
+  and usage-cache tests); a separate temporary-HOME suite (`tests/`) with stubbed external
+  commands for the installer and the plugin in both runtimes; strict registry JSON; syntax/privacy checks; initial packaging
   environment health checks, not a fresh verification of the current live environment. Installer
   integration tests do not touch real config or authenticate a model.
 - **Observed initial packaging issue:** Codex exec delegation on codex-cli 0.162.1 failed argument
@@ -476,12 +476,17 @@ node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 ```
 
+`tests/plugin-orch-parity.test.mjs` builds `orch` with Go into a temp dir (about 30 s with its
+cases), or uses `ORCH_TEST_BIN`; without either it skips. Under a temp `HOME`, set `GOCACHE` to a
+shared cache so each run does not fill a new one.
+
 ## Go runtime (in progress)
 
 `go/` holds `orch`, a static Go binary that replaces `orchestrator/bin/*.mjs` one for one. Every
-script is now ported; what remains is switching the plugin to `orch` (S10), installing it (S11)
-and removing the JS runtime (S12). Until then the JS runtime stays the default: the plugin, the
-commands and the bridges do not call `orch` yet. Both runtimes share the same state, including the
+script is now ported, and the plugin can run on `orch` when you opt in (see [Plugin
+runtime](#plugin-runtime)); what remains is installing `orch` (S11) and removing the JS runtime
+(S12). Until then the JS runtime stays the default, and the commands, skills and docs still name
+the `bin/*.mjs` scripts. Both runtimes share the same state, including the
 usage cache, so the two can run on the same machine. Implemented: `orch version`, `orch usage
 [--refresh] [--json]` (output byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
 plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
@@ -506,9 +511,59 @@ runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--f
 only a human gate). `orch kickoff --brief FILE ...` runs the `kickoff.mjs` preflight, door choice and
 launch (mirroring its latent defects: `--dry-run` still runs the preflight, `--door` is not
 validated); its parity group covers the headless and interactive launches and a supervisor really
-started. The plugin still calls the JS scripts.
+started.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
 diffs every implemented command against the JS.
+
+### Plugin runtime
+
+`plugins/orchestrator.ts` has two runtimes. `js` (the default) imports `orchestrator/lib/*.mjs` and
+runs `orchestrator/bin/*.mjs`, as before. `go` runs every tool and hook through `orch` and never
+loads the JS: routing, effort, the budget gate, the mailbox, manifests and incidents are `orch`
+subcommands, and delegate, the workers, the supervisor and the usage-limit flip spawn `orch
+<script>` with the arguments the script gets.
+
+- **Select** with `ORCH_RUNTIME=go` in the environment of the opencode process that loads the
+  plugin. For the background service the plan quotes `opencode service set env ORCH_RUNTIME go`
+  then `opencode service restart` (and `opencode service unset env ORCH_RUNTIME` to undo); that
+  syntax is **unverified** until the S10 live check. A plugin option wins over the environment:
+  replace `"plugins": ["*"]` in `opencode.jsonc` with
+  `[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]` (optionally
+  `"binary": "/absolute/path/to/orch"`). Whether options reach an auto-discovered plugin is also
+  **unverified** until that check. The value is trimmed and case-insensitive; anything other than
+  `js` or `go` is a configuration error.
+- **Binary**: the option `binary` (a leading `~` is expanded), then `ORCH_BIN`, then
+  `~/.local/bin/orch`, then each `PATH` entry. An explicit `binary` or `ORCH_BIN` that is not an
+  executable file is an error, never skipped. The binary is resolved once when the plugin loads,
+  so reload opencode after installing or moving `orch`. In go mode `orch` reads the registry
+  `ORCH_REGISTRY`, else `$ORCH_HOME/models.json`, else the installed `models.json`.
+- **Failure policy**: fail loudly, never fall back to JS. With an unknown runtime or no binary the
+  plugin still loads, every `orch_*` tool returns the configuration error (`orch binary not found
+  (looked in: ...)`), and the hooks degrade as when usage is unavailable (no budget block, no
+  subagent gate). The `execute.after` incident for that error cannot be recorded.
+- **Go-mode deviations** (accepted in the S10 plan):
+  - D-S10-1: `manifest_create` with no paths is a tool error (JS writes an empty manifest).
+  - D-S10-2: an `execute.after` incident without a known project directory names the plugin's
+    working directory as its project (JS records none).
+  - D-S10-3: incident context values travel as `--ctx k=v` strings, cut at a second `=`.
+  - D-S10-4: free text beginning with `--` that would travel as an argument is refused before
+    `orch` runs (bodies and details go on stdin and are exempt).
+  - D-S10-5 (PE-4): an incident's `version` is the `orch` version, not the checkout's git HEAD.
+  - D-S10-6 (PE-11): an aborted or timed-out delegate shows the Go bridge's FAILED result instead
+    of the stderr tail.
+  - D-S10-7 (both runtimes, a fix): a command that cannot be started is a failed run (in go mode
+    an `orch <sub>: could not start ...` tool error) instead of an uncaught crash of the host.
+- **Rollback**: unset `ORCH_RUNTIME` (or set it, or the option, to `js`) and reload or restart.
+- **Which runtime answered**: `orch_usage_status` metadata carries `runtime` and `orch` (the
+  binary path); a new incident's `version` is the `orch` version in go mode (`0.5.0 (<rev>)`, or
+  a bare `0.5.0` for a binary built outside a git checkout), and in js mode is the
+  checkout's `.git/HEAD` text (for example `ref: refs/heads/main`) or `unknown`.
+
+`tests/plugin-routing.test.mjs` and `tests/plugin-tools.test.mjs` drive both runtimes through a
+fake opencode context against fakes; `tests/plugin-orch-parity.test.mjs` runs each lib-backed
+tool and hook in both runtimes against the real `orch` (built into a temp dir, or
+`ORCH_TEST_BIN`) and compares the results. It skips only when neither `go` nor `ORCH_TEST_BIN`
+is available.
 
 ## Design notes
 

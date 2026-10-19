@@ -3,9 +3,10 @@
 `orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one. The
 port is incremental (plan: `.orchestrator/plans/go-port.md`); until it is complete the JS runtime
 stays the default and both share the same `.orchestrator/` state. Every command is ported; what
-remains is switching the plugin to `orch` (S10), installing it (S11) and removing the JS (S12).
+remains is installing it (S11) and removing the JS (S12). The plugin calls `orch` when its runtime
+is `go` (see "Plugin runtime" in the [README](../README.md#plugin-runtime)); `js` stays the default.
 
-Implemented (every `bin/*.mjs` command; the plugin still calls the JS scripts):
+Implemented (every `bin/*.mjs` command; the plugin calls `orch` when its runtime is `go`):
 
 | Command | Replaces | Behaviour |
 |---|---|---|
@@ -28,8 +29,8 @@ Implemented (every `bin/*.mjs` command; the plugin still calls the JS scripts):
 | `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command, the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
 | `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b>` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else `orch flip pause --active <home>` and the message, exit 75), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in `.git/info/exclude`), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (its trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). |
 
-The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
-`orch` yet.
+The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin calls `orch` when
+its runtime is `go`; see "Plugin runtime" in the [README](../README.md#plugin-runtime).
 
 ## Build
 
@@ -47,7 +48,8 @@ the Go runtime requires on darwin; that is as static as a macOS binary gets. `bi
 gitignored.
 
 The release number lives in `internal/version/VERSION` (embedded). `orch version` appends the
-VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b+dirty)`.
+VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b+dirty)`; a build
+outside a git checkout (a source tarball or `git archive`) records none and prints `0.5.0`.
 
 ## Environment
 
@@ -533,9 +535,9 @@ The other documented differences, each asserted by its own parity case:
   in its log.
 - PE-3: `orch mailbox post --json` prints the whole message it appended; the JS ignores
   `--json`. As in `list`, only a bare `--json` counts (`--json x` is the value of a key).
-- PE-4: an incident's `version` is `orch version` (e.g. `0.5.0 (8b23cd3)`); the JS writes its
-  checkout's `.git/HEAD`, trimmed to 40 characters (`ref: refs/heads/main`), or `unknown` when
-  there is none.
+- PE-4: an incident's `version` is `orch version` (e.g. `0.5.0 (8b23cd3)`, or `0.5.0` when built
+  outside a git checkout); the JS writes its checkout's `.git/HEAD`, trimmed to 40 characters
+  (`ref: refs/heads/main`), or `unknown` when there is none.
 - PE-5, reference V8 (approved by the human, mailbox 0b533797): the report comparator is
   inconsistent for equal counts whose `last` values are equal or incomparable, so the order
   depends on every comparison the sort makes, and V8's sort differs between Node release lines.

@@ -72,13 +72,22 @@ process.exit(answer.code ?? 0);
 `, { mode: 0o755 });
 }
 
+// A background usage refresh (the plugin's refreshSoon) can outlive its test: in JS mode it waits
+// out the 20 s `codex app-server` timeout against the fakes, then writes home/.local/state/.../
+// usage.json and so recreates a root that t.after already removed. Its child process and timer
+// keep the event loop alive, so by "exit" every such write has landed: sweep the roots again then.
+const sandboxRoots = new Set();
+process.on("exit", () => { for (const root of sandboxRoots) fs.rmSync(root, { recursive: true, force: true }); });
+
 /**
  * A temp root with home/ (orchestrator tree, usage cache, opencode auth), project/ and fakebin/.
- * JS sandboxes have the real libs and logging fakes of the spawned scripts in bin/. In go
- * sandboxes every lib/*.mjs and bin/*.mjs is poison: using one logs its name and fails.
+ * JS sandboxes have the real libs and, in bin/, logging fakes of the spawned scripts (or, with
+ * `realScripts`, a copy of the real bin/). In go sandboxes every lib/*.mjs and bin/*.mjs is
+ * poison: using one logs its name and fails. `usage` seeds a given cache document instead of `cache`.
  */
-export function createSandbox(t, { runtime, cache = "green", cacheAgeMs = 0, fakeOrchOnPath = runtime === "go" }) {
+export function createSandbox(t, { runtime, cache = "green", cacheAgeMs = 0, usage = null, fakeOrchOnPath = runtime === "go", realScripts = false }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-test-"));
+  sandboxRoots.add(root);
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home");
   const orchestrator = path.join(home, ".config", "opencode", "orchestrator");
@@ -91,6 +100,7 @@ export function createSandbox(t, { runtime, cache = "green", cacheAgeMs = 0, fak
     fakebin: path.join(root, "fakebin"),
     log: path.join(root, "calls.jsonl"),
     poison: path.join(root, "poison.log"),
+    fakeOrch: fakeOrchOnPath,
     answersFile: path.join(root, "answers.json"),
     answers: {},
   };
@@ -100,10 +110,13 @@ export function createSandbox(t, { runtime, cache = "green", cacheAgeMs = 0, fak
   if (runtime === "go") {
     for (const name of CHECKOUT_LIBS) writePoisonLib(path.join(orchestrator, "lib", name), name);
     for (const name of CHECKOUT_SCRIPTS) writePoisonScript(path.join(orchestrator, "bin", name), name);
+  } else if (realScripts) {
+    fs.cpSync(path.join(REPO, "orchestrator", "bin"), path.join(orchestrator, "bin"), { recursive: true });
   } else {
     for (const script of SPAWNED_SCRIPTS) writeFakeOrch(path.join(orchestrator, "bin", `${script}.mjs`), script, null, script);
   }
-  if (cache) writeUsageCache(sandbox, usageFixture(cache, { ageMs: cacheAgeMs }));
+  if (usage) writeUsageCache(sandbox, usage);
+  else if (cache) writeUsageCache(sandbox, usageFixture(cache, { ageMs: cacheAgeMs }));
   fs.mkdirSync(path.join(home, ".local", "share", "opencode"), { recursive: true });
   fs.writeFileSync(path.join(home, ".local", "share", "opencode", "auth.json"), JSON.stringify({ openai: { type: "oauth" } }));
   writeFakeOrch(path.join(sandbox.fakebin, "codex"), "codex", { stdout: "review ok\n" });
@@ -208,8 +221,13 @@ function fakeContext(sandbox, options) {
 }
 
 // setup starts an un-awaited warm-up routing(false). Let it settle so it cannot race a case.
+// Only the fake orch logs its calls. A real `orch routing --json` over a seeded cache leaves no
+// observable trace (it only reads the cache), so it gets a fixed grace period instead: this
+// assumes the binary answers within 300 ms. Over no cache it starts a collection, which the
+// no-cache parity case waits for itself.
 async function settleWarmUp(sandbox) {
   if (sandbox.runtime === "js") return new Promise((r) => setTimeout(r, 50));
+  if (!sandbox.fakeOrch) return new Promise((r) => setTimeout(r, 300));
   const deadline = Date.now() + 2000;
   while (Date.now() < deadline) {
     if (calls(sandbox).some((c) => c.self !== "codex" && c.argv.join(" ") === "routing --json")) break;

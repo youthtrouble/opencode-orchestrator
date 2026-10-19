@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- plugin: runtime switch groundwork. `plugins/orchestrator.ts` selects its runtime from the
+- plugin: an opt-in `go` runtime (S10, three parts). Selection and routing: `plugins/orchestrator.ts` selects its runtime from the
   plugin option `runtime`, then `ORCH_RUNTIME`, else `js` (only `js` and `go` are accepted); in
   `go` mode it resolves `orch` from the option `binary`, `ORCH_BIN`, `~/.local/bin/orch`, then
   `PATH`, and a bad configuration fails loudly (tools error, hooks degrade) instead of falling
@@ -11,7 +11,7 @@
   failure now resolves with code -1 instead of an uncaught error. `js` (the default) is
   unchanged. New `tests/plugin-routing.test.mjs` drives the plugin through a fake opencode
   context.
-- plugin: go mode now runs on `orch` alone (no `lib/*.mjs` import, no `bin/*.mjs` run).
+- plugin, go runtime, state files and spawns: go mode now runs on `orch` alone (no `lib/*.mjs` import, no `bin/*.mjs` run).
   mailbox_post/list, manifest_create/verify, the incident tool and the `execute.after` incident
   hook call `orch mailbox|manifest|incident` (bodies and details on stdin, the project root always
   by flag), and delegate, worker_start, worker_status, supervisor and the conductor flip spawn
@@ -22,6 +22,16 @@
   `binary` expands a leading `~`, `ORCH_HOME`/`ORCH_REGISTRY` are resolved to absolute paths, an
   `orch` timeout says it timed out, and model sync and the usage-limit flip log a misconfigured
   runtime instead of swallowing it. New `tests/plugin-tools.test.mjs`. `js` (the default) is unchanged.
+- plugin, go runtime, differential and docs: new `tests/plugin-orch-parity.test.mjs` runs the
+  plugin in both runtimes against the real `orch` (built into a temp dir, or `ORCH_TEST_BIN`;
+  skipped when neither exists) over byte-identical sandboxes and compares the tool and hook
+  results: usage_status, native delegate, red codex_review, mailbox post/list, manifest
+  create/verify (byte-equal manifests), incident (the log line differs only in `at` and the PE-4
+  `version`), worker_status, supervisor status, the context hook and the red `execute.before`
+  gate. README gains "Plugin runtime" (selection, binary resolution, fail-loudly policy,
+  D-S10-1..7, rollback, how to tell which runtime answered); `go/README.md` and an
+  `opencode.jsonc` comment above `"plugins"` point to it. The `opencode service set env` syntax
+  and object-form options for an auto-discovered plugin are unverified until the S10 live check.
 - Go port: the `kickoff` parity group gains the launching cases: headless conductor lanes on
   claude and opencode (runners settled and everything they wrote compared), the interactive
   `claude` and `opencode` launches (exit code passed through; a signal exits 0) and a dry run that
