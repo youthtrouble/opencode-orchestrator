@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — unreleased
+
+The Go runtime release. `orch`, one static Go binary, ports every `orchestrator/bin/*.mjs` script,
+and a parity harness diffs each command against the JS. The plugin gains `runtime: "go"|"js"`
+(default `js`). `install.sh` builds `orch` with Go or downloads the release asset (`--skip-binary`
+opts out), and the doctor gains an `orch binary` row. The JS runtime stays the default; its removal
+is planned for 0.6.0 behind a human gate.
 
 - plugin: an opt-in `go` runtime (S10, three parts). Selection and routing: `plugins/orchestrator.ts` selects its runtime from the
   plugin option `runtime`, then `ORCH_RUNTIME`, else `js` (only `js` and `go` are accepted); in
@@ -38,7 +44,7 @@
   really starts and then stops a supervisor serve. The fake `opencode` gains a `--prompt` mode
   (`$HOME/fake-opencode-tui/`), and the fakes no longer call `basename`. `orch watch`'s routing
   error is matched with `errors.As` (`watch.IsRoutingError` removed). Every `bin/*.mjs` script is
-  now ported; the plugin switch (S10), install (S11) and JS removal (S12) remain.
+  now ported.
 - Go port: `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto|claude|opencode] [--headless]
   [--unattended] [--cwd DIR] [--dry-run]` mirrors `bin/kickoff.mjs`: brief checks, refreshed
   routing, door choice, the both-red pause, the preflight (policy, gate, supervisor, git exclude),
@@ -76,7 +82,7 @@
   tick (phases, the two-phase intent, events, redispatch of budget-deferred lanes) is ported and
   unit-tested with an injected clock; `start` and `serve` arrive in S8c and exit 2 until then.
   New PE-16 (hand-edited non-object shapes). New `supervisor` parity group, run in CI.
-- Go port (`go/`, not yet used by the plugin or commands): `orch usage [--refresh] [--json]`
+- Go port (`go/`; the first command ported): `orch usage [--refresh] [--json]`
   produces output byte-identical to `bin/usage.mjs` and shares its usage cache in both directions,
   including keeping the last good reading when a refresh fails within 30 minutes of the last
   cache write. The window rolls, as in the JS: repeated failures keep the reading, aged by

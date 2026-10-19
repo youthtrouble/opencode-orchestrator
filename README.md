@@ -10,9 +10,10 @@ records enough state to resume later. Usage windows steer work away from a const
 - **ChatGPT subscription via Codex / opencode:** OpenAI work can run natively through opencode's
   ChatGPT sign-in, or through the Codex CLI bridge.
 
-This is an inspectable collection of prompts, configuration, a plugin and dependency-free Node
-scripts, not a guarantee of unattended delivery. It has shipped itself once end to end (plan,
-build, cross-vendor review, verification, publish); see [verification and limitations](#verification-and-limitations).
+This is an inspectable collection of prompts, configuration, a plugin, dependency-free Node
+scripts and their Go port (`orch`), not a guarantee of unattended delivery. It has shipped itself
+once end to end (plan, build, cross-vendor review, verification, publish); see
+[verification and limitations](#verification-and-limitations).
 
 There are two front doors over the same project state:
 
@@ -48,6 +49,9 @@ All paths assume the default install (`~/.config/opencode/orchestrator/bin`, abb
 - Config and installer state on the same filesystem, so backup/restore can use atomic renames.
 - The current runtime expects `~/.config/opencode`. Nondefault `XDG_CONFIG_HOME` is rejected by the
   installer; installing elsewhere would not retarget the runtime's hardcoded home-relative paths.
+- Optional: Go 1.25+ on `PATH`, so the installer builds the `orch` binary from the checkout.
+  Without Go it downloads the release asset with `curl`, which works only once 0.5.0 is published.
+  `./install.sh --skip-binary` installs the JS runtime only, without `orch`.
 
 Release checks used macOS, Node v26.5.1, opencode v2.0.32, Claude Code 2.1.287 and codex-cli 0.162.1.
 Linux and Node 22 are supported assumptions, not independently exercised release environments.
@@ -112,6 +116,19 @@ or when there is no release asset for the platform. A failed download or checksu
 recoverable `preparing` receipt. `./install.sh --skip-binary` installs exactly as before, without
 `orch`. If the directory is not on `PATH`, the plugin still finds `~/.local/bin/orch`; other
 locations need `ORCH_BIN=<path>`.
+
+### Upgrading from 0.4.x
+
+An active 0.4.x installation has no `orch` in its receipt, and a reinstall is not migrated
+automatically. Either uninstall and reinstall (`./uninstall.sh`, then `./install.sh`), so the
+receipt records the binary, or build it by hand into the default location:
+
+```sh
+(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch ./cmd/orch)
+```
+
+A hand-built `orch` is not tracked by the receipt: uninstall leaves it in place, and a later
+`./install.sh` refuses while it exists (remove it, set `ORCH_BIN_DIR`, or pass `--skip-binary`).
 
 ### Uninstall and recover
 
@@ -302,7 +319,8 @@ The plugin registers the `orch` namespace (often displayed as `orch_*`):
 | `supervisor`                         | Start/status/stop/ack supervision                                            |
 | `incident`                           | Record a redacted orchestrator incident for the next audit                   |
 
-The same building blocks are available as `node ~/.config/opencode/orchestrator/bin/<script>.mjs`.
+The same building blocks are available as `node ~/.config/opencode/orchestrator/bin/<script>.mjs`
+(or `orch <script>`; see [Go runtime](#go-runtime-orch)).
 Relevant scripts include `usage`, `claude-exec`, `codex-exec`, `opencode-exec`, `worker`,
 `supervisor`, `mailbox`, `manifest`, `incident`, `policy`, `flip`, `kickoff`, `watch` and `doctor`;
 read their source headers for arguments. The presence of a tool does not mean its external CLI path
@@ -382,7 +400,7 @@ checkout/
     bin/, lib/                 CLI adapters, usage, routing and coordination
     tests/                     fast runtime unit tests (doctor runs these)
   tests/                       installer integration matrix and plugin tests (fake opencode context)
-  go/                          Go port (`orch`), in progress; see "Go runtime (in progress)"
+  go/                          Go runtime (`orch`); see "Go runtime (`orch`)"
   install.sh, uninstall.sh     reversible config management
 ```
 
@@ -480,17 +498,21 @@ a model will follow instructions.
 
 - **Verified:** the fast unit suite (`orchestrator/tests/`: routing, flip, supervision, incident
   and usage-cache tests); a separate temporary-HOME suite (`tests/`) with stubbed external
-  commands for the installer and the plugin in both runtimes; strict registry JSON; syntax/privacy checks; initial packaging
-  environment health checks, not a fresh verification of the current live environment. Installer
-  integration tests do not touch real config or authenticate a model.
+  commands for the installer and the plugin in both runtimes; the Go build, vet, gofmt, tests
+  and JS-vs-Go parity harness (`go/`, in CI on macOS and Linux); strict registry JSON;
+  syntax/privacy checks; initial packaging environment health checks, not a fresh verification of
+  the current live environment. Installer integration tests do not touch real config or
+  authenticate a model.
 - **Observed initial packaging issue:** Codex exec delegation on codex-cli 0.162.1 failed argument
   parsing (exit 2) before a model turn. This is a historical observation from the initial packaging
   environment, not a newly reproduced bug on the latest live CLIs. The retained bridge is unchanged.
   Do not assume `/delegate-codex`, Codex-backed workers or the separate review invocation are
   validated because the doctor/usage feed passes. Native OpenAI subagents are a separate path.
-- **Not verified:** a real install over an existing user config, Linux/Node 22 execution, all
-  bridge/review combinations, arbitrary storage/power failures, or long unattended runs on large
-  repositories. Independent cross-vendor release review and publication are separate gates.
+- **Not verified:** the installer's `orch` download (tested only against a stubbed `curl`) and
+  `go install ...@go/v0.5.0`, both of which need the published 0.5.0 release; a real install over
+  an existing user config, Linux/Node 22 execution, all bridge/review combinations, arbitrary
+  storage/power failures, or long unattended runs on large repositories. Independent cross-vendor
+  release review and publication are separate gates.
 
 Run both suites from the checkout; installer integration is intentionally outside the doctor's
 fast unit-test set, not omitted from release verification:
@@ -500,42 +522,54 @@ node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 ```
 
+The Go checks are listed in [CONTRIBUTING.md](CONTRIBUTING.md).
 `tests/plugin-orch-parity.test.mjs` builds `orch` with Go into a temp dir (about 30 s with its
 cases), or uses `ORCH_TEST_BIN`; without either it skips. Under a temp `HOME`, set `GOCACHE` to a
 shared cache so each run does not fill a new one.
 
-## Go runtime (in progress)
+## Go runtime (`orch`)
 
 `go/` holds `orch`, a static Go binary that replaces `orchestrator/bin/*.mjs` one for one. Every
-script is now ported, and the plugin can run on `orch` when you opt in (see [Plugin
-runtime](#plugin-runtime)); what remains is installing `orch` (S11) and removing the JS runtime
-(S12). Until then the JS runtime stays the default, and the commands, skills and docs still name
-the `bin/*.mjs` scripts. Both runtimes share the same state, including the
-usage cache, so the two can run on the same machine. Implemented: `orch version`, `orch usage
-[--refresh] [--json]` (output byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
-plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
-post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
-create|verify|diff`, `orch incident record|list|report|share` (appending to the same incident log),
-`orch policy show|set|unattended`, `orch flip decide|run|pause|gate|status` (the same
-`.orchestrator/flip.json`; `flip run` adds `.orchestrator/` to `.git/info/exclude`, writes the
-continue brief and launches the conductor as `orch worker start --detach`, or records a pending
-launch when the lane is locked), `orch supervisor start|serve|status|stop|ack` (the same
-`.orchestrator/supervisor-state.json`, `supervisor-acks.json` and `supervisor.lock`; `serve`
-relaunches through `orch flip`, `orch worker` and `orch claude-exec`), `orch worker
-start|status|stop` (`start` runs `orch <harness>-exec` in the foreground, or with `--detach`
-launches itself as a detached, kept-awake runner logging to `.orchestrator/logs/`), and the three
-bridges `orch claude-exec`, `orch codex-exec` and `orch opencode-exec` (the same `claude -p`, `codex
-exec` and `opencode run` command lines, result JSON and run records; `codex-exec` still passes
-`--approve-for-me` with the default `workspace-write` sandbox, which codex-cli 0.162.1 rejects,
-exactly as `bin/codex-exec.mjs` does), each byte-identical to its `bin/*.mjs` script when both read
-the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. `orch
-doctor` runs the `doctor.mjs` checks with the same rows (both print `orch binary`), plus a self-test
-row, and runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--follow]
-[--interval 20]` draws the `watch.mjs` dashboard line for line (mirroring its crash on a `flip.json`
-that holds only a human gate). `orch kickoff --brief FILE ...` runs the `kickoff.mjs` preflight,
-door choice and launch (mirroring its latent defects: `--dry-run` still runs the preflight, `--door`
-is not validated); its parity group covers the headless and interactive launches and a supervisor
-really started.
+script is ported, the plugin runs on `orch` when you opt in (see [Plugin runtime](#plugin-runtime)),
+`install.sh` installs `orch` (see [Install](#install)) and the doctor reports it in its `orch
+binary` row. What remains is removing the JS runtime (S12), planned for 0.6.0 behind a human gate.
+Until then the JS runtime stays the default, and the commands, skills and docs still name the
+`bin/*.mjs` scripts. Both runtimes share the same state, including the usage cache, so the two can
+run on the same machine.
+
+After the 0.5.0 release is tagged, `orch` can also be installed without a checkout:
+
+```sh
+go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@go/v0.5.0
+```
+
+`go install` puts the binary in `$(go env GOBIN)`, or `~/go/bin` when that is unset, not in
+`~/.local/bin`, so point the plugin at it with `ORCH_BIN=<path>` or put that directory on `PATH`.
+
+Implemented: `orch version`, `orch usage [--refresh] [--json]` (output byte-identical to
+`bin/usage.mjs`, including the rolling 30-minute last good reading), the plugin-facing `orch
+routing`, `orch budget gate` and `orch effort`, `orch mailbox post|list|ack|reply|inbox` (appending
+to the same `.orchestrator/mailbox/` files), `orch manifest create|verify|diff`, `orch incident
+record|list|report|share` (appending to the same incident log), `orch policy show|set|unattended`,
+`orch flip decide|run|pause|gate|status` (the same `.orchestrator/flip.json`; `flip run` adds
+`.orchestrator/` to `.git/info/exclude`, writes the continue brief and launches the conductor as
+`orch worker start --detach`, or records a pending launch when the lane is locked), `orch supervisor
+start|serve|status|stop|ack` (the same `.orchestrator/supervisor-state.json`, `supervisor-acks.json`
+and `supervisor.lock`; `serve` relaunches through `orch flip`, `orch worker` and `orch
+claude-exec`), `orch worker start|status|stop` (`start` runs `orch <harness>-exec` in the
+foreground, or with `--detach` launches itself as a detached, kept-awake runner logging to
+`.orchestrator/logs/`), and the three bridges `orch claude-exec`, `orch codex-exec` and `orch
+opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` command lines, result JSON and
+run records; `codex-exec` still passes `--approve-for-me` with the default `workspace-write`
+sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs` does), each byte-identical
+to its `bin/*.mjs` script when both read the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart
+from the documented exceptions. `orch doctor` runs the `doctor.mjs` checks with the same rows (both
+print `orch binary`), plus a self-test row, and runs the Go tests instead of `node --test` (PE-18).
+`orch watch [--cwd DIR] [--follow] [--interval 20]` draws the `watch.mjs` dashboard line for line
+(mirroring its crash on a `flip.json` that holds only a human gate). `orch kickoff --brief FILE ...`
+runs the `kickoff.mjs` preflight, door choice and launch (mirroring its latent defects: `--dry-run`
+still runs the preflight, `--door` is not validated); its parity group covers the headless and
+interactive launches and a supervisor really started.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
 diffs every implemented command against the JS.
 

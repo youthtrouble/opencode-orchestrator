@@ -2,9 +2,10 @@
 
 `orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one. The
 port is incremental (plan: `.orchestrator/plans/go-port.md`); until it is complete the JS runtime
-stays the default and both share the same `.orchestrator/` state. Every command is ported; what
-remains is installing it (S11) and removing the JS (S12). The plugin calls `orch` when its runtime
-is `go` (see "Plugin runtime" in the [README](../README.md#plugin-runtime)); `js` stays the default.
+stays the default and both share the same `.orchestrator/` state. Every command is ported and
+`install.sh` installs `orch` (see [Install](#install)); what remains is removing the JS (S12),
+planned for 0.6.0 behind a human gate. The plugin calls `orch` when its runtime is `go` (see
+"Plugin runtime" in the [README](../README.md#plugin-runtime)); `js` stays the default.
 
 Implemented (every `bin/*.mjs` command; the plugin calls `orch` when its runtime is `go`):
 
@@ -50,6 +51,46 @@ gitignored.
 The release number lives in `internal/version/VERSION` (embedded). `orch version` appends the
 VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b+dirty)`; a build
 outside a git checkout (a source tarball or `git archive`) records none and prints `0.5.0`.
+
+## Install
+
+`../install.sh` builds `orch` from the checkout when Go 1.25+ is on `PATH` (`CGO_ENABLED=0 go build
+-trimpath -ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches
+`internal/version/VERSION`, and places it at `~/.local/bin/orch`, recorded in the install receipt.
+Without Go it downloads `orch_<VERSION>_<os>_<arch>` and `checksums.txt` from the GitHub release
+`v<VERSION>` with `curl` and places the asset only when its sha256 matches. `ORCH_BIN_DIR`
+(absolute) chooses another directory; `--skip-binary` installs without `orch`. The
+[README](../README.md#install) lists the refusals and the uninstall behaviour.
+
+After the 0.5.0 release is tagged, `orch` also installs without a checkout:
+
+```sh
+go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@go/v0.5.0
+```
+
+That binary lands in `$(go env GOBIN)`, or `~/go/bin` when it is unset; the plugin finds it only
+through `ORCH_BIN` or `PATH`.
+
+## Release checklist (maintainer, human-gated)
+
+Tagging and publishing are a human gate: no agent runs these steps.
+
+1. Bump `internal/version/VERSION` (it is `0.5.0` for this release).
+2. Date the release heading in `../CHANGELOG.md` (`## 0.5.0 — unreleased` becomes
+   `## 0.5.0 — <YYYY-MM-DD>`).
+3. On a clean tree, run `./scripts/build-all.sh`: it writes the four `dist/orch_0.5.0_*` assets
+   (darwin and linux, arm64 and amd64) and `dist/checksums.txt`.
+4. Tag the commit `v0.5.0` (the installer's download path) and `go/v0.5.0` (the Go module tag
+   `go install` resolves, since the module lives in `go/`).
+5. Publish a GitHub release for `v0.5.0` with the four `orch_0.5.0_*` assets and `checksums.txt`.
+   The installer fetches
+   `https://github.com/youthtrouble/opencode-orchestrator/releases/download/v0.5.0/<asset>`; that
+   URL shape is unverified until this release exists.
+6. In a throwaway HOME with no `go` on `PATH`, check that `./install.sh` downloads `orch`, verifies
+   its checksum and places it; then check that
+   `go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@go/v0.5.0` works.
+7. Reinstall into your own live config (`./uninstall.sh` then `./install.sh`, see the root README
+   "Upgrading from 0.4.x") yourself; it is not part of any automated run.
 
 ## Environment
 

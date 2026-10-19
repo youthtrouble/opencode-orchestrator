@@ -11,12 +11,16 @@ node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 bash -n install.sh uninstall.sh
 node -e 'JSON.parse(require("node:fs").readFileSync("orchestrator/models.json", "utf8"))'
+(cd go && go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...)
+(cd go && ./parity/run.sh)   # slow; builds go/bin/orch and diffs every command against the JS
 ```
 
-The first suite is the doctor's fast runtime check; the second is the isolated installer matrix.
-Keep slow integration cases in root `tests/`. Use temporary HOME/XDG directories and command stubs:
-never test installation against a real user config. There is no configured build or semantic
-typecheck task; report syntax checks honestly rather than calling them typechecks.
+The first suite is the doctor's fast runtime check; the second is the isolated installer matrix and
+the plugin tests. Keep slow integration cases in root `tests/`. Use temporary HOME/XDG directories
+and command stubs: never test installation against a real user config. The Go lines need Go 1.25+;
+under a temporary HOME, export `GOCACHE` to one shared directory (e.g. `$TMPDIR/orch-gocache`).
+The Node code has no configured build or semantic typecheck task; report its syntax checks
+honestly rather than calling them typechecks.
 
 Match local formatting. Prettier can format Markdown/JavaScript (including the installer's embedded
 JavaScript); no runtime npm dependencies are needed. Run the doctor only when authorized to check
