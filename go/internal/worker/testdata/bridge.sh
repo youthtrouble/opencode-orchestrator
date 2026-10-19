@@ -8,6 +8,8 @@
 #                  the child touches $FAKE_LOG/ready once its traps are set, and this script
 #                  then waits for $FAKE_LOG/release before it goes on (each wait gives up
 #                  after about 10 s, so a failed test leaves no process behind)
+#   FAKE_HOLD      set: wait about 10 s with no trap set, so a SIGINT or SIGTERM that reaches
+#                  it at any point from its exec on kills it
 #   FAKE_STDERR    printed on stderr, then FAKE_STDOUT on stdout
 #   FAKE_EXIT      exit code (default 0)
 log=$FAKE_LOG
@@ -22,6 +24,9 @@ if [ -n "$FAKE_WAIT" ]; then
     : > "$1/ready"
     i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done' child "$log"
   i=0; while [ ! -f "$log/release" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+fi
+if [ -n "$FAKE_HOLD" ]; then
+  i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
 fi
 printf '%s' "$FAKE_STDERR" >&2
 printf '%s' "$FAKE_STDOUT"

@@ -42,8 +42,9 @@ func (r *run) handleSignals(signals <-chan os.Signal) {
 }
 
 // interrupt is one signal: publish "interrupted", then pass the signal on to the bridge's
-// process group (or the bridge alone). The worker keeps waiting for the bridge to close, and
-// the branch it then takes overwrites the status.
+// process group (or the bridge alone). Foreground handles signals only once the bridge has
+// started (see runBridge). The worker keeps waiting for the bridge to close, and the branch it
+// then takes overwrites the status.
 func (r *run) interrupt(sig syscall.Signal) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -74,7 +75,12 @@ func (r *run) finish(status string, extra *jsjson.Object) {
 // The lock is held from the start to the publish, so no relayed chunk precedes "running". An
 // EPIPE on the bridge's stdin (a bridge that exits without reading its prompt) is ignored
 // (PE-13), where the JS dies of it.
-func (r *run) runBridge(prompt string) (any, error) {
+//
+// signals is handled only once the bridge is installed: the JS handlers always see the child,
+// since its spawn is synchronous, so a signal captured earlier waits in the channel and is
+// handled after "running", reaching the bridge's group. If the start fails nothing handles
+// them, as the JS dies of its spawn error.
+func (r *run) runBridge(prompt string, signals <-chan os.Signal) (any, error) {
 	r.mu.Lock()
 	child, err := procs.Start(procs.Spec{
 		Name:       r.rt.Self,
@@ -91,6 +97,7 @@ func (r *run) runBridge(prompt string) (any, error) {
 		return nil, err
 	}
 	r.child = child
+	go r.handleSignals(signals) // blocks on r.mu until "running" is published
 	running := jsjson.NewObject()
 	running.Set("status", "running")
 	running.Set("worker_pid", float64(child.Pid()))

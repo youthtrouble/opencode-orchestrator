@@ -83,14 +83,7 @@ if (opts.detach) {
   process.exit(0);
 }
 
-// Claim the exclusive lane lock BEFORE starting any model.
-fs.mkdirSync(workersDir, { recursive: true });
-try { fs.writeFileSync(lockPath(lane), String(process.pid), { flag: "wx", mode: 0o600 }); }
-catch { const prev = readState(lane); console.error(JSON.stringify({ error: "lane locked", lane, previous: prev && { status: prev.status, pid: prev.pid, alive: alive(prev.pid) }, hint: "inspect worker state; remove the lock only after confirming the process is gone" })); process.exit(3); }
-
-const state = { lane, status: "starting", pid: process.pid, harness, brief: path.relative(root, brief), breadth: opts.breadth || "standard", run_id: opts["run-id"] || crypto.randomUUID(), session_id: opts.resume || null, started_at: new Date().toISOString(), log_path: opts["log-path"] || null, model: opts.model || null };
-publish(state, {});
-
+// Read the brief before claiming the lane: a failed read must not leave a lock behind.
 const preamble = [
   `You are a worker in an orchestrated multi-agent project at ${root}.`,
   `First read ${path.relative(root, brief)} (your bounded brief) and .orchestrator/STATE.md if it exists.`,
@@ -101,6 +94,14 @@ const preamble = [
   `If blocked, post kind blocked instead and stop. Be honest: unrun checks are "not run", unmet criteria mean "partial". Never approve your own work, never bypass permissions, never touch another lane's files.`,
 ].join("\n");
 const prompt = lane === "conductor" ? fs.readFileSync(brief, "utf8") : `${preamble}\n\n--- BRIEF ---\n${fs.readFileSync(brief, "utf8")}`;
+
+// Claim the exclusive lane lock BEFORE starting any model.
+fs.mkdirSync(workersDir, { recursive: true });
+try { fs.writeFileSync(lockPath(lane), String(process.pid), { flag: "wx", mode: 0o600 }); }
+catch { const prev = readState(lane); console.error(JSON.stringify({ error: "lane locked", lane, previous: prev && { status: prev.status, pid: prev.pid, alive: alive(prev.pid) }, hint: "inspect worker state; remove the lock only after confirming the process is gone" })); process.exit(3); }
+
+const state = { lane, status: "starting", pid: process.pid, harness, brief: path.relative(root, brief), breadth: opts.breadth || "standard", run_id: opts["run-id"] || crypto.randomUUID(), session_id: opts.resume || null, started_at: new Date().toISOString(), log_path: opts["log-path"] || null, model: opts.model || null };
+publish(state, {});
 
 const bridge = path.join(HERE, harness === "codex" ? "codex-exec.mjs" : harness === "opencode" ? "opencode-exec.mjs" : "claude-exec.mjs");
 const bridgeArgs = [bridge, "--cwd", root, "--timeout-min", opts["timeout-min"] || "120"];

@@ -94,17 +94,24 @@ type Runtime struct {
 	Notify func(c chan<- os.Signal)
 }
 
-// Foreground is `worker.mjs start` without --detach (l.86-147): it claims the lane's lock,
-// publishes the state, runs the bridge with the brief as its prompt, relays the bridge's
-// progress, records how it ended and prints {lane, status, session_id, exit_code}. The exit
-// code is 0 for a finished or deferred run, 1 otherwise, ExitLaneLocked when the lane is held.
+// Foreground is `worker.mjs start` without --detach (l.86-148): it reads the brief, claims the
+// lane's lock, publishes the state, runs the bridge with the brief as its prompt, relays the
+// bridge's progress, records how it ended and prints {lane, status, session_id, exit_code}. The
+// exit code is 0 for a finished or deferred run, 1 otherwise, ExitLaneLocked when the lane is
+// held.
 //
-// A returned error is the exception the JS dies of (exit 1, after the output so far). A
-// failure before the bridge starts (the workers directory, reading the brief) leaves the lock
-// and the "starting" state, as in the JS; from the bridge's start on, the lock is removed on
-// every path, as the JS `finally` does.
+// A returned error is the exception the JS dies of (exit 1, after the output so far). An
+// unreadable brief fails before the lock is claimed, so it leaves neither lock nor state, and
+// wins over a held lane. A failure creating the workers directory leaves nothing either; from
+// the lock's claim on, a failure before the bridge starts leaves the lock and the "starting"
+// state, as in the JS, and from the bridge's start on the lock is removed on every path, as the
+// JS `finally` does.
 func (l *Launch) Foreground(rt Runtime) (int, error) {
 	p := l.project
+	prompt, err := l.prompt()
+	if err != nil {
+		return 1, err
+	}
 	if err := nodefs.MkdirAll(p.WorkersDir); err != nil {
 		return 1, err
 	}
@@ -113,14 +120,10 @@ func (l *Launch) Foreground(rt Runtime) (int, error) {
 	}
 	r := &run{launch: l, rt: rt, state: p.NewState(l.initialState(rt), rt.Now)}
 	r.state.Publish(jsjson.NewObject())
-	prompt, err := l.prompt()
-	if err != nil {
-		return 1, err
-	}
+	// Signals are captured from here on; runBridge starts handling them once the bridge exists.
 	signals := make(chan os.Signal, 2)
 	rt.Notify(signals)
-	go r.handleSignals(signals)
-	code, err := l.unlockingAfter(func() (any, error) { return r.runBridge(prompt) })
+	code, err := l.unlockingAfter(func() (any, error) { return r.runBridge(prompt, signals) })
 	if err != nil {
 		return 1, err
 	}
@@ -222,7 +225,7 @@ func (l *Launch) briefPath() string {
 }
 
 // prompt is the brief alone for the conductor lane, else the worker preamble, a separator and
-// the brief (l.94-103). The brief is read as UTF-8 (a directory fails with EISDIR).
+// the brief (l.86-96). The brief is read as UTF-8 (a directory fails with EISDIR).
 func (l *Launch) prompt() (string, error) {
 	data, err := nodefs.ReadFile(l.brief)
 	if err != nil {
@@ -236,7 +239,7 @@ func (l *Launch) prompt() (string, error) {
 }
 
 // preamble tells a worker how to behave in the orchestrated project, verbatim from
-// worker.mjs l.95-101.
+// worker.mjs l.87-95.
 func (l *Launch) preamble() string {
 	lane := jsjson.TemplateString(l.lane)
 	return strings.Join([]string{

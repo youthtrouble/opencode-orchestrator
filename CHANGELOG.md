@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- worker: a signal that arrives while `worker start` is still starting its bridge is passed to
+  the bridge once it runs (Go; Sol S2/R7). Both runtimes read the brief before claiming the lane, so
+  an unreadable brief no longer leaves a permanent lock (Sol S2/R11).
 - docs: the root README now tells the story (why, benefits and costs, daily commands, how it works,
   using it on a project, the mailbox in plain words, away mode) with `orch` commands throughout.
   The technical reference moves to `orchestrator/README.md` (scripts, routing, budgets, flips,

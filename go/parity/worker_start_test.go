@@ -147,6 +147,9 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		return bridgeCase{seed: s}
 	}
 
+	directoryBrief := []string{"--brief", "d.md/", "--harness", "claude"}
+	const eisdir = "Error: EISDIR: illegal operation on a directory, read"
+
 	cases := []workerStartCase{
 		// claude
 		{name: "claude/finished", args: claude, run: bridgeCase{fixture: "ok"}},
@@ -188,8 +191,12 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		{name: "usage/harness-bare", args: append(brief, "--harness")},
 		{name: "usage/brief-bare", args: []string{"--harness", "claude", "--brief"}, crash: crashC1, errorLine: briefBoolean},
 		{name: "usage/cwd-bare", args: append(claude, "--cwd"), crash: crashC1, errorLine: cwdBoolean},
-		{name: "crash/brief-is-a-directory", args: []string{"--brief", "d.md/", "--harness", "claude"}, brief: text(""), run: bridgeCase{seed: seedProjectDir("d.md")},
-			crash: crashC1, errorLine: "Error: EISDIR: illegal operation on a directory, read"},
+		// S2/R11: the brief is read before the lane is claimed, so neither leaves a lock or a
+		// state, and the read error wins over a held lane (exit 1, not 3).
+		{name: "crash/brief-is-a-directory", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seedProjectDir("d.md")},
+			crash: crashC1, errorLine: eisdir},
+		{name: "crash/brief-is-a-directory-lane-locked", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seeds(seedProjectDir("d.md"), seedWorkerLock("d"))},
+			crash: crashC1, errorLine: eisdir},
 
 		// lane locked
 		{name: "locked/live-holder", args: claude, run: locked(`{"lane":"b","status":"running","pid":` + live + `}`)},
@@ -206,6 +213,18 @@ func (h *harness) testWorkerStart(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.workerStartInvocation(t, c)) })
 	}
+	// comparePair only diffs one runtime's files against the other's, so it would pass if both
+	// left a lock; this asserts the absence in each.
+	t.Run("unreadable-brief-claims-nothing", func(t *testing.T) {
+		js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: directoryBrief, brief: text(""), run: bridgeCase{seed: seedProjectDir("d.md")}}))
+		for runtime, o := range map[string]outcome{"js": js, "orch": orch} {
+			for _, path := range []string{"project/workers/d.lock", "project/workers/d.json"} {
+				if _, present := o.files[path]; present {
+					t.Errorf("%s left %s", runtime, path)
+				}
+			}
+		}
+	})
 	t.Run("cross-runtime", h.testWorkerCrossRuntime)
 	t.Run("PE-13/unread-prompt", h.testWorkerUnreadPrompt)
 	t.Run("node-crash-block-reduction", testNodeCrashBlockReduction)

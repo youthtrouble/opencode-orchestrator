@@ -60,7 +60,7 @@ func newFakeRun(t *testing.T, env map[string]string) *fakeRun {
 	f := &fakeRun{log: t.TempDir(), notified: make(chan chan<- os.Signal, 1)}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("FAKE_LOG", f.log)
-	for _, key := range []string{"FAKE_NO_STDIN", "FAKE_WAIT", "FAKE_STDERR", "FAKE_STDOUT", "FAKE_EXIT"} {
+	for _, key := range []string{"FAKE_NO_STDIN", "FAKE_WAIT", "FAKE_HOLD", "FAKE_STDERR", "FAKE_STDOUT", "FAKE_EXIT"} {
 		t.Setenv(key, env[key])
 	}
 	return f
@@ -607,6 +607,58 @@ func TestSignalDuringTheRunReachesTheBridgeGroup(t *testing.T) {
 	}
 }
 
+// S2/R7: a signal captured before the bridge has started is handled once it runs, as the JS
+// handlers always see the child: "interrupted" follows "running" and the signal reaches the
+// bridge's group. The fake holds with no trap, so the forwarded SIGTERM kills it whenever it
+// lands, and the run ends failed with no exit code (a dropped signal would let it finish).
+func TestSignalBeforeTheBridgeStartsReachesItOnceItRuns(t *testing.T) {
+	p := testProject(t, "brief")
+	f := newFakeRun(t, map[string]string{"FAKE_HOLD": "1", "FAKE_STDOUT": okResult})
+	rt := f.runtime(t)
+	rt.Notify = func(c chan<- os.Signal) { c <- syscall.SIGTERM }
+	var statuses []string
+	rt.Now = statusRecordingClock(t, p.StatePath("b"), &statuses)
+	launch, err := p.PrepareStart(opts("--brief", "b.md", "--harness", "claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := launch.Foreground(rt)
+	if err != nil || code != 1 {
+		t.Fatalf("Foreground = %d, %v; want 1", code, err)
+	}
+	statuses = append(statuses, statusIn(t, readText(t, p.StatePath("b"))))
+	if want := []string{"starting", "running", "interrupted", "failed"}; !slices.Equal(statuses, want) {
+		t.Errorf("published statuses %q, want %q", statuses, want)
+	}
+	if got := stateFile(t, p, "b"); !strings.Contains(got, `"exit_code": null,`) {
+		t.Errorf("the bridge was not ended by the forwarded signal:\n%s", got)
+	}
+	requireNoLock(t, p, "b")
+}
+
+// statusRecordingClock is fixedClock that also records, on every call, the status in the state
+// file: Publish reads the clock before it writes, so the calls see each publish but the last,
+// once each. Consecutive repeats (the relay's progress publishes) are kept once.
+func statusRecordingClock(t *testing.T, statePath string, statuses *[]string) func() time.Time {
+	t.Helper()
+	clock := fixedClock()
+	return func() time.Time {
+		if data, err := os.ReadFile(statePath); err == nil {
+			status := statusIn(t, string(data))
+			if n := len(*statuses); n == 0 || (*statuses)[n-1] != status {
+				*statuses = append(*statuses, status)
+			}
+		}
+		return clock()
+	}
+}
+
+func statusIn(t *testing.T, state string) string {
+	t.Helper()
+	status, _ := jsjson.Path(parse(t, state), "status").(string)
+	return status
+}
+
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	waitFor(t, func() bool { _, err := os.Stat(path); return err == nil }, path)
@@ -623,8 +675,7 @@ func waitFor(t *testing.T, ready func() bool, what string) {
 	}
 }
 
-// From the bridge's start on the lock is removed however the run ends; a crash before that
-// (the brief is a directory) leaves the lock and the "starting" state, as in the JS.
+// From the bridge's start on the lock is removed however the run ends.
 func TestLockIsRemovedOnEveryPathAfterTheBridgeStarts(t *testing.T) {
 	t.Run("C2 after the relay", func(t *testing.T) {
 		p := testProject(t, "brief")
@@ -655,21 +706,40 @@ func TestLockIsRemovedOnEveryPathAfterTheBridgeStarts(t *testing.T) {
 		}
 		requireNoLock(t, p, "b")
 	})
-	t.Run("a brief that is a directory", func(t *testing.T) {
+}
+
+// S2/R11: the brief is read before the lane is claimed, so an unreadable brief leaves neither
+// lock nor state, and its error wins over a held lane.
+func TestUnreadableBriefClaimsNothing(t *testing.T) {
+	directoryBrief := func(t *testing.T) Project {
 		p := testProject(t, "brief")
 		if err := os.Mkdir(filepath.Join(p.Root, "d.md"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		f := newFakeRun(t, nil)
-		code, err := startForeground(t, p, f, "--brief", "d.md", "--harness", "claude")
-		if code != 1 || err == nil || err.Error() != "EISDIR: illegal operation on a directory, read" {
+		return p
+	}
+	const eisdir = "EISDIR: illegal operation on a directory, read"
+	t.Run("a free lane", func(t *testing.T) {
+		p := directoryBrief(t)
+		code, err := startForeground(t, p, newFakeRun(t, nil), "--brief", "d.md", "--harness", "claude")
+		if code != 1 || err == nil || err.Error() != eisdir {
 			t.Errorf("Foreground = %d, %v; want EISDIR", code, err)
 		}
-		if got := readText(t, p.LockPath("d")); got != "4242" {
-			t.Errorf("lock %q, want it kept with the worker's pid", got)
+		requireNoLock(t, p, "d")
+		if _, err := os.Lstat(p.StatePath("d")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("state %s: %v, want none", p.StatePath("d"), err)
 		}
-		if got := stateFile(t, p, "d"); !strings.Contains(got, `"status": "starting"`) {
-			t.Errorf("state:\n%s", got)
+	})
+	t.Run("a locked lane", func(t *testing.T) {
+		p := directoryBrief(t)
+		writeFile(t, p.LockPath("d"), "1")
+		f := newFakeRun(t, nil)
+		code, err := startForeground(t, p, f, "--brief", "d.md", "--harness", "claude")
+		if code != 1 || err == nil || err.Error() != eisdir || f.stderr.String() != "" {
+			t.Errorf("Foreground = %d, %v, stderr %q; want EISDIR before the lane-locked refusal", code, err, f.stderr.String())
+		}
+		if got := readText(t, p.LockPath("d")); got != "1" {
+			t.Errorf("the lock was changed to %q", got)
 		}
 	})
 }
