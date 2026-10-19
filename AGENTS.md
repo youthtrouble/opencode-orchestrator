@@ -65,6 +65,13 @@ independent slice; record a human gate (`flip.mjs gate`) only when nothing indep
 `product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
 post the question, continue.
 
+## Never idle on a review gate (pipelining)
+When a slice waits for a review the other vendor cannot give yet, do not wait. Start the next slice
+whose dependencies are met (check the plan's In scope / Mirrors lines), coded by the vendor that has
+headroom now. Keep slices separable: disjoint files where possible, each slice committed on a local
+branch `slice/<id>` once its own checks pass, never pushed before its gate. Queue the pending reviews
+in STATE.md and run them the moment the reviewer's window opens; push slices to main in plan order.
+
 ## Two front doors and flipping
 
 The project is driven by one conductor at a time: the opencode conductor (OpenAI-native) or the

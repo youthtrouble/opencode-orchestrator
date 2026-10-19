@@ -9,6 +9,10 @@
   `last_good_at`. Also adds the plugin-facing `orch routing [--refresh | --cached] [--json]`,
   `orch budget gate --vendor V [--force] [--frontier]` and `orch effort --role R [--size S]`.
   The `usage` parity group compares all four against the JS.
+- Go port: `orch mailbox post|list|ack|reply|inbox` matches `bin/mailbox.mjs` byte for byte
+  (stdout, exit codes, `.orchestrator/mailbox/*.jsonl`) and appends one write per line, so JS
+  and Go writers can share a mailbox. `post --json` prints the whole message. Uncaught JS errors
+  print only their error line. The new `mailbox` parity group runs in CI.
 
 ## 0.4.1 — 2026-10-18
 
