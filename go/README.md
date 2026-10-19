@@ -14,6 +14,7 @@ Implemented so far (the rest of `bin/*.mjs` is still JS-only):
 | `orch budget gate --vendor anthropic\|openai [--force] [--frontier]` | `budgetGate()` in `lib/budget.mjs` | Compact `{allowed, level, resets_at, note}`; exit 0 whether or not the work is allowed, 2 on bad flags or an unknown vendor. |
 | `orch effort --role ROLE [--size SIZE]` | `effortFor()` in `lib/routing.mjs` | The effort-policy value as plain text, or `null`; exit 2 on bad flags or without `--role`. |
 | `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --json` prints the whole message instead of `{id, at}` (PE-3). Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
+| `orch manifest create\|verify\|diff` | `bin/manifest.mjs` | Byte-identical output, exit codes and manifest files: the same walk (symlinks, FIFOs and other non-regular entries inside a walked directory are skipped and never opened; an explicit symlink argument is followed), UTF-16 key order and `manifest_sha256`. Uncaught JS errors print only their error line. |
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
 `orch` yet.
@@ -49,10 +50,10 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 cd go
 go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
-./parity/run.sh --only json,usage,mailbox   # chosen parity groups; ./parity/run.sh runs them all
+./parity/run.sh --only json,usage,mailbox,manifest   # chosen parity groups; ./parity/run.sh runs them all
 ```
 
-`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json` and `mailbox` parity groups on macOS and Linux
+`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox` and `manifest` parity groups on macOS and Linux
 with `CGO_ENABLED=0` and Node installed. Malformed prompt byte tests also compare against Node
 when it is available; fixed byte expectations run even without Node.
 
@@ -83,6 +84,14 @@ Groups:
   in newly appended record fields and their write receipts, with exact format checks.
   Seeded records, read-only output and literal user content are compared unchanged.
 
+- `manifest`: `orch manifest` against `bin/manifest.mjs` over a seeded tree holding every
+  ignored directory name (as a directory and as a file), NFC/NFD, private-use and astral names
+  (UTF-16 order), index-like names, a root `__proto__` file, symlinks to files and directories, a
+  symlink loop and a FIFO; explicit ignored directories and symlink arguments, broken symlinks,
+  `--root` with `../x`, duplicates, `--baseline`, `--out` outside `.orchestrator`; verify and
+  diff over hand-made manifests of every shape (prototype keys such as `constructor`, arrays,
+  strings, null). Only `created_at` is normalised, in its exact place and format.
+
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`) and declare that it ends in an uncaught JS exception (`crash`, below).
 
@@ -98,6 +107,11 @@ prints only the error line:
   whole line in Node's stderr, with exit 1 from both. Filesystem errnos outside the 20
   that `orch` spells as Node does (EACCES, EEXIST, EISDIR, ELOOP, ENOENT, ENOTDIR, ...) print
   Go's own error text instead; that difference is known and not asserted.
+- C1 also covers Node's own coded and type errors with fixed text, such as
+  `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received undefined`
+  (`manifest verify` without a file) and `TypeError: Cannot convert undefined or null to object`
+  (a manifest without `files`). Paths in these messages use the physical working directory, as
+  `process.cwd()` does, not `$PWD`.
 - C2, malformed hand-edited state (a message whose `kind` is not a string, `refs` missing, ...):
   both stderrs must contain a line starting `TypeError: `; V8's wording is not reproduced.
 
@@ -107,7 +121,8 @@ The other documented differences, each asserted by its own parity case:
   body at 400) or a string message spread into one key per code unit gives U+FFFD in Go. Text
   output is identical (Node prints a lone surrogate as U+FFFD); JSON escapes differ: the JS writes
   `"\ud83d"`, `orch` the raw U+FFFD.
-- PE-2: the crash output above.
+- PE-2: the crash output above. A manifest file that `JSON.parse` rejects prints a
+  `SyntaxError: ` line in both runtimes; the message after the class differs.
 - PE-3: `orch mailbox post --json` prints the whole message it appended; the JS ignores
   `--json`. As in `list`, only a bare `--json` counts (`--json x` is the value of a key).
 

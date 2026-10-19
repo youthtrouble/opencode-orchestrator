@@ -17,11 +17,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 )
 
@@ -284,17 +284,12 @@ func sliceStart(start float64, length int) int {
 // kept unless it fails to parse or its value is falsy.
 func (b *Mailbox) read(name string) ([]any, error) {
 	file := filepath.Join(b.Dir, name)
-	if _, err := os.Stat(file); err != nil {
-		return nil, nil // fs.existsSync: any stat failure counts as missing
+	if !nodefs.Exists(file) {
+		return nil, nil
 	}
-	data, err := os.ReadFile(file)
+	data, err := nodefs.ReadFile(file)
 	if err != nil {
-		operation := "read"
-		var pathError *os.PathError
-		if errors.As(err, &pathError) && pathError.Op == "open" {
-			operation = "open"
-		}
-		return nil, nodeFileError(err, operation, file)
+		return nil, err
 	}
 	var values []any
 	for _, line := range strings.Split(jsstr.DecodeUTF8(data), "\n") {
@@ -313,102 +308,21 @@ func (b *Mailbox) append(name string, value *jsjson.Object) error {
 	if err != nil {
 		return err
 	}
-	if err := mkdirRecursive(b.Dir); err != nil {
-		return nodeFileError(err, "mkdir", b.Dir)
+	if err := nodefs.MkdirAll(b.Dir); err != nil {
+		return err
 	}
 	f, err := os.OpenFile(filepath.Join(b.Dir, name), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
 	if err != nil {
-		return nodeFileError(err, "open", filepath.Join(b.Dir, name))
+		return nodefs.FileError(err, "open", filepath.Join(b.Dir, name))
 	}
 	// One write per line, so lines appended concurrently by orch and the JS never interleave.
 	_, writeErr := f.Write(append(line, '\n'))
 	closeErr := f.Close()
 	if writeErr != nil {
-		return nodeFileError(writeErr, "write", "")
+		return nodefs.FileError(writeErr, "write", "")
 	}
 	if closeErr != nil {
-		return nodeFileError(closeErr, "close", "")
+		return nodefs.FileError(closeErr, "close", "")
 	}
 	return nil
-}
-
-// mkdirRecursive mirrors Node's fs.mkdirSync(dir, {recursive: true}) (MKDirpSync in
-// node_file.cc) so the errno matches Node's: os.MkdirAll stats before creating, so a regular file
-// at dir reports ENOTDIR and a dangling or looping symlink reports EEXIST, where Node reports
-// EEXIST, ENOENT and ELOOP. Node reports every failure against the requested dir; the caller does.
-func mkdirRecursive(dir string) error {
-	pending := []string{dir}
-	for len(pending) > 0 {
-		path := pending[len(pending)-1]
-		pending = pending[:len(pending)-1]
-		var errno syscall.Errno // stays 0 when Mkdir succeeds
-		if err := os.Mkdir(path, 0o777); err != nil && !errors.As(err, &errno) {
-			return err
-		}
-		switch errno {
-		case 0:
-		case syscall.EACCES, syscall.ENOSPC, syscall.ENOTDIR, syscall.EPERM:
-			return errno
-		case syscall.ENOENT:
-			parent := filepath.Dir(path)
-			if parent == path {
-				return syscall.EEXIST
-			}
-			pending = append(pending, path, parent)
-		default:
-			info, statErr := os.Stat(path) // follows symlinks, like uv_fs_stat
-			if statErr != nil {
-				return statErr
-			}
-			if !info.IsDir() {
-				if errno == syscall.EEXIST && len(pending) > 0 {
-					return syscall.ENOTDIR
-				}
-				return syscall.EEXIST
-			}
-		}
-	}
-	return nil
-}
-
-// nodeErrnoMessages spells each errno the way Node's uvException does. Errnos outside this
-// table keep Go's own error text.
-var nodeErrnoMessages = map[syscall.Errno]string{
-	syscall.EBADF:        "EBADF: bad file descriptor",
-	syscall.EACCES:       "EACCES: permission denied",
-	syscall.EPERM:        "EPERM: operation not permitted",
-	syscall.EISDIR:       "EISDIR: illegal operation on a directory",
-	syscall.ENOTDIR:      "ENOTDIR: not a directory",
-	syscall.ENOENT:       "ENOENT: no such file or directory",
-	syscall.EEXIST:       "EEXIST: file already exists",
-	syscall.ENOSPC:       "ENOSPC: no space left on device",
-	syscall.EROFS:        "EROFS: read-only file system",
-	syscall.EMFILE:       "EMFILE: too many open files",
-	syscall.ELOOP:        "ELOOP: too many symbolic links encountered",
-	syscall.ENAMETOOLONG: "ENAMETOOLONG: name too long",
-	syscall.ENFILE:       "ENFILE: file table overflow",
-	syscall.EIO:          "EIO: i/o error",
-	syscall.EFBIG:        "EFBIG: file too large",
-	syscall.EINTR:        "EINTR: interrupted system call",
-	syscall.ENOMEM:       "ENOMEM: not enough memory",
-	syscall.EINVAL:       "EINVAL: invalid argument",
-	syscall.EBUSY:        "EBUSY: resource busy or locked",
-	syscall.ETXTBSY:      "ETXTBSY: text file is busy",
-}
-
-// nodeFileError translates a filesystem failure into the message Node prints for the same
-// operation, reported against the path Node names.
-func nodeFileError(err error, operation, path string) error {
-	var errno syscall.Errno
-	if !errors.As(err, &errno) {
-		return err
-	}
-	message, ok := nodeErrnoMessages[errno]
-	if !ok {
-		return err
-	}
-	if operation == "read" || path == "" {
-		return fmt.Errorf("%s, %s", message, operation)
-	}
-	return fmt.Errorf("%s, %s '%s'", message, operation, path)
 }

@@ -1,4 +1,4 @@
-package mailbox
+package nodefs
 
 import (
 	"errors"
@@ -36,7 +36,7 @@ func TestNodeFileErrorMessages(t *testing.T) {
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			err := &os.PathError{Op: tc.op, Path: tc.path, Err: tc.errno}
-			if got := nodeFileError(err, tc.op, tc.path).Error(); got != tc.want {
+			if got := FileError(err, tc.op, tc.path).Error(); got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
@@ -112,5 +112,30 @@ func symlink(t *testing.T, target, link string) {
 	}
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// process.cwd() is the physical directory even when $PWD names it through a symlink.
+func TestResolveUsesThePhysicalWorkingDirectory(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical := filepath.Join(root, "physical")
+	if err := os.Mkdir(physical, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	symlink(t, physical, link)
+	t.Chdir(link)
+	t.Setenv("PWD", link)
+	for _, tc := range []struct{ in, want string }{
+		{"", physical},
+		{"a/../b/", filepath.Join(physical, "b")},
+		{"/x//y/", "/x/y"},
+	} {
+		if got, err := Resolve(tc.in); err != nil || got != tc.want {
+			t.Errorf("Resolve(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+		}
 	}
 }

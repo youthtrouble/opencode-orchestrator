@@ -13,6 +13,10 @@
   (stdout, exit codes, `.orchestrator/mailbox/*.jsonl`) and appends one write per line, so JS
   and Go writers can share a mailbox. `post --json` prints the whole message. Uncaught JS errors
   print only their error line. The new `mailbox` parity group runs in CI.
+- Go port: `orch manifest create|verify|diff` matches `bin/manifest.mjs` byte for byte (stdout,
+  exit codes, manifest files), including the walk's symlink and FIFO handling and UTF-16 key
+  order, and `internal/runrecord` writes run records with the same names and bytes as
+  `writeRunRecord`. The new `manifest` parity group runs in CI.
 
 ## 0.4.1 — 2026-10-18
 

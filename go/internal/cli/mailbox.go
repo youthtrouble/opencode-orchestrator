@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,11 +16,7 @@ import (
 // bin/mailbox.mjs. Where the JS dies of an uncaught exception, Mailbox prints only the error
 // line and exits 1 (see crash).
 func Mailbox(args []string, stdio Stdio) int {
-	decoded := make([]string, len(args))
-	for i, arg := range args {
-		decoded[i] = jsstr.DecodeUTF8([]byte(arg))
-	}
-	args = decoded
+	args = decodeArgv(args)
 	parsed := cliargs.ParseMailbox(args)
 	root, err := parsed.ProjectRoot(os.Getenv)
 	if err != nil {
@@ -262,26 +257,6 @@ func mailboxAck(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) i
 		return crash(stdio, err)
 	}
 	return printLine(stdio, entry)
-}
-
-// crash reports what the JS leaves uncaught: Node prints the error class and message on a
-// line of its own amid a stack trace and exits 1. orch prints that line alone.
-func crash(stdio Stdio, err error) int {
-	class := "Error"
-	if shape := (*mailbox.ShapeError)(nil); errors.As(err, &shape) {
-		class = "TypeError"
-	}
-	fmt.Fprintf(stdio.Err, "%s: %v\n", class, err)
-	return 1
-}
-
-func printLine(stdio Stdio, value *jsjson.Object) int {
-	data, err := jsjson.Marshal(value)
-	if err != nil {
-		return crash(stdio, err)
-	}
-	fmt.Fprintf(stdio.Out, "%s\n", data)
-	return 0
 }
 
 // text is `${m[key]}`.

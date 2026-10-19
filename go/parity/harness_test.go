@@ -23,6 +23,7 @@ func TestParity(t *testing.T) {
 	t.Run("json", h.testJSON)
 	t.Run("usage", h.testUsage)
 	t.Run("mailbox", h.testMailbox)
+	t.Run("manifest", h.testManifest)
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
