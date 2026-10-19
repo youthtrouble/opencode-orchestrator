@@ -1,0 +1,360 @@
+[
+  {
+    "name": "lf",
+    "chunks": [
+      "610a62"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "crlf",
+    "chunks": [
+      "610d0a62"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "lone-cr",
+    "chunks": [
+      "610d62"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "cr-then-lf-across-writes",
+    "chunks": [
+      "610d",
+      "0a62"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "cr-empty-write-lf",
+    "chunks": [
+      "610d",
+      "",
+      "0a62"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "cr-then-cr-across-writes",
+    "chunks": [
+      "610d",
+      "0d62"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "two-empty-lines",
+    "chunks": [
+      "0a0a"
+    ],
+    "lines": [
+      "",
+      ""
+    ]
+  },
+  {
+    "name": "cr-cr-lf",
+    "chunks": [
+      "0d0d0a"
+    ],
+    "lines": [
+      "",
+      ""
+    ]
+  },
+  {
+    "name": "lf-cr",
+    "chunks": [
+      "610a0d62"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "final-line-unterminated",
+    "chunks": [
+      "616263"
+    ],
+    "lines": [
+      "abc"
+    ]
+  },
+  {
+    "name": "trailing-lf",
+    "chunks": [
+      "610a"
+    ],
+    "lines": [
+      "a"
+    ]
+  },
+  {
+    "name": "trailing-cr",
+    "chunks": [
+      "610d"
+    ],
+    "lines": [
+      "a"
+    ]
+  },
+  {
+    "name": "trailing-crlf",
+    "chunks": [
+      "610d0a"
+    ],
+    "lines": [
+      "a"
+    ]
+  },
+  {
+    "name": "empty-stream",
+    "chunks": [],
+    "lines": []
+  },
+  {
+    "name": "empty-write",
+    "chunks": [
+      ""
+    ],
+    "lines": []
+  },
+  {
+    "name": "line-across-writes",
+    "chunks": [
+      "6162",
+      "63640a65",
+      "66"
+    ],
+    "lines": [
+      "abcd",
+      "ef"
+    ]
+  },
+  {
+    "name": "many-lines",
+    "chunks": [
+      "310a320d0a330d340a"
+    ],
+    "lines": [
+      "1",
+      "2",
+      "3",
+      "4"
+    ]
+  },
+  {
+    "name": "json-events",
+    "chunks": [
+      "7b2274797065223a2273797374656d227d0a7b2274797065223a22726573756c74222c22726573756c74223a22785c6e79227d0a"
+    ],
+    "lines": [
+      "{\"type\":\"system\"}",
+      "{\"type\":\"result\",\"result\":\"x\\ny\"}"
+    ]
+  },
+  {
+    "name": "malformed-utf8",
+    "chunks": [
+      "ff61c3280ae2820aeda0800af09f987a"
+    ],
+    "lines": [
+      "�a�(",
+      "�",
+      "���",
+      "�z"
+    ]
+  },
+  {
+    "name": "multibyte-split",
+    "chunks": [
+      "e282",
+      "ac0a"
+    ],
+    "lines": [
+      "€"
+    ]
+  },
+  {
+    "name": "emoji-split-three-ways",
+    "chunks": [
+      "78f0",
+      "9f98",
+      "80790a"
+    ],
+    "lines": [
+      "x😀y"
+    ]
+  },
+  {
+    "name": "incomplete-before-lf-across-writes",
+    "chunks": [
+      "61e2",
+      "0a62"
+    ],
+    "lines": [
+      "a�",
+      "b"
+    ]
+  },
+  {
+    "name": "incomplete-at-end",
+    "chunks": [
+      "6162f09f"
+    ],
+    "lines": [
+      "ab"
+    ]
+  },
+  {
+    "name": "incomplete-at-end-across-writes",
+    "chunks": [
+      "6162f0",
+      "9f"
+    ],
+    "lines": [
+      "ab"
+    ]
+  },
+  {
+    "name": "incomplete-only-at-end",
+    "chunks": [
+      "e282"
+    ],
+    "lines": []
+  },
+  {
+    "name": "incomplete-after-line-at-end",
+    "chunks": [
+      "610ac3"
+    ],
+    "lines": [
+      "a"
+    ]
+  },
+  {
+    "name": "overlong-lead-at-end",
+    "chunks": [
+      "6162c0"
+    ],
+    "lines": [
+      "ab"
+    ]
+  },
+  {
+    "name": "invalid-prefix-at-end",
+    "chunks": [
+      "6162e080"
+    ],
+    "lines": [
+      "ab"
+    ]
+  },
+  {
+    "name": "out-of-range-lead-at-end",
+    "chunks": [
+      "6162f580"
+    ],
+    "lines": [
+      "ab"
+    ]
+  },
+  {
+    "name": "lead-f8-at-end",
+    "chunks": [
+      "6162f880"
+    ],
+    "lines": [
+      "ab��"
+    ]
+  },
+  {
+    "name": "invalid-byte-at-end",
+    "chunks": [
+      "6162ff"
+    ],
+    "lines": [
+      "ab�"
+    ]
+  },
+  {
+    "name": "four-continuations-at-end",
+    "chunks": [
+      "6180808080"
+    ],
+    "lines": [
+      "a����"
+    ]
+  },
+  {
+    "name": "lead-then-four-continuations-at-end",
+    "chunks": [
+      "61f080808080"
+    ],
+    "lines": [
+      "a�����"
+    ]
+  },
+  {
+    "name": "complete-at-end",
+    "chunks": [
+      "61e282ac"
+    ],
+    "lines": [
+      "a€"
+    ]
+  },
+  {
+    "name": "incomplete-cut-by-ascii-across-writes",
+    "chunks": [
+      "f09f",
+      "98",
+      "7a0a"
+    ],
+    "lines": [
+      "�z"
+    ]
+  },
+  {
+    "name": "bom-kept",
+    "chunks": [
+      "efbbbf610a"
+    ],
+    "lines": [
+      "﻿a"
+    ]
+  },
+  {
+    "name": "nul-and-controls",
+    "chunks": [
+      "610009620b630c640a"
+    ],
+    "lines": [
+      "a\u0000\tb\u000bc\fd"
+    ]
+  }
+]
