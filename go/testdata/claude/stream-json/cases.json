@@ -1,0 +1,171 @@
+{
+  "bad-model": {
+    "exit_code": 1,
+    "synthetic": false,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-not-a-model-0-0",
+      "--max-turns",
+      "1",
+      "--",
+      "Reply with pong."
+    ],
+    "notes": "result subtype=success is_error=true num_turns=1 permission_denials=0; exit 1; events: system/ui_invalidate, system/init, assistant[text], result/success"
+  },
+  "bash-readonly-allowed": {
+    "exit_code": 0,
+    "synthetic": false,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "3",
+      "--",
+      "Use the Bash tool to run: echo pong. Then say what happened in one sentence."
+    ],
+    "notes": "result subtype=success is_error=false num_turns=2 permission_denials=0; exit 0; events: system/init, assistant[tool_use:Bash], rate_limit_event, user[tool_result], assistant[text], result/success"
+  },
+  "max-turns": {
+    "exit_code": 1,
+    "synthetic": false,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "1",
+      "--",
+      "Read README.md and reply with its first heading only."
+    ],
+    "notes": "result subtype=error_max_turns is_error=true num_turns=2 permission_denials=0; exit 1; events: system/init, assistant[tool_use:Read], rate_limit_event, user[tool_result], result/error_max_turns"
+  },
+  "ok": {
+    "exit_code": 0,
+    "synthetic": false,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "3",
+      "--",
+      "Read README.md and reply with its first heading only."
+    ],
+    "notes": "result subtype=success is_error=false num_turns=2 permission_denials=0; exit 0; events: system/ui_invalidate, system/init, assistant[tool_use:Read], rate_limit_event, user[tool_result], assistant[text], result/success"
+  },
+  "permission-denied": {
+    "exit_code": 0,
+    "synthetic": false,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "3",
+      "--",
+      "Use the Bash tool to run: touch probe.txt. Then say what happened in one sentence."
+    ],
+    "notes": "result subtype=success is_error=false num_turns=2 permission_denials=1; exit 0; events: system/ui_invalidate, system/init, assistant[tool_use:Bash], system/permission_denied, user[tool_result], rate_limit_event, system/thinking_tokens, system/thinking_tokens, assistant[thinking], assistant[text], result/success"
+  },
+  "structured-output": {
+    "exit_code": 0,
+    "synthetic": false,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--max-turns",
+      "3",
+      "--json-schema",
+      "{\"type\":\"object\",\"properties\":{\"word\":{\"type\":\"string\"}},\"required\":[\"word\"],\"additionalProperties\":false}",
+      "--",
+      "Return the word pong."
+    ],
+    "notes": "result subtype=success is_error=false num_turns=3 permission_denials=0; exit 0; events: system/ui_invalidate, system/init, assistant[text], rate_limit_event, user[text], assistant[tool_use:StructuredOutput], user[tool_result], result/success"
+  },
+  "usage-limit": {
+    "exit_code": 1,
+    "synthetic": true,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "3",
+      "--",
+      "Read README.md and reply with its first heading only."
+    ],
+    "notes": "mock: ok's system/init plus ok's result with is_error=true, subtype=success, num_turns=1 and a limit message (usage and modelUsage kept from ok). The real limit text and exit code are unknown; this text matches the first branch of claude-exec.mjs LIMIT_TEXT. Exit 1 mirrors the real is_error=true runs (max-turns, bad-model)."
+  },
+  "long-line": {
+    "exit_code": 0,
+    "synthetic": true,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "3",
+      "--",
+      "Read README.md and reply with its first heading only."
+    ],
+    "notes": "ok with the user tool_result content replaced by 1572864 deterministic ASCII characters, so one stdout line exceeds 1 MiB."
+  },
+  "success-is-error": {
+    "exit_code": 1,
+    "synthetic": true,
+    "argv_redacted": [
+      "--permission-mode",
+      "dontAsk",
+      "--permission-prompts",
+      "none",
+      "--model",
+      "claude-haiku-5-5",
+      "--allowedTools",
+      "Read",
+      "--max-turns",
+      "3",
+      "--",
+      "Read README.md and reply with its first heading only."
+    ],
+    "notes": "ok with the result's is_error=true, subtype=success and a failure text: the bridge must report the result text as the error (13da780). The real bad-model run has the same subtype/is_error shape."
+  }
+}
