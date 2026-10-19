@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Go port: `orch doctor` mirrors `bin/doctor.mjs` row for row (binaries, logins, usage feeds and
+  routing, opencode config, plugin, agents, plugin log) and exit code; PE-18 adds `orch binary`
+  and `orch self-test` rows and runs `go test ./...` for the `unit tests` row. The parity fakes
+  gain a canned-answer mode; new `doctor` parity group, run in CI.
 - Go port: `orch supervisor start|serve` replace `bin/supervisor.mjs start|serve`: `start` launches
   a detached, kept-awake `orch supervisor serve`; `serve` claims the same `supervisor.lock`, ticks
   every 5 s (lanes, events, wake channels, redispatch, conductor flip evaluation, all self-exec'd

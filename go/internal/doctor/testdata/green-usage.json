@@ -1,0 +1,50 @@
+{
+  "claude": {
+    "ok": true,
+    "source": "claude-code-keychain",
+    "plan": "team",
+    "tier": "default_claude_max_5x",
+    "session": {
+      "pct": 12,
+      "resets_at": "2099-01-01T05:00:00.123456+00:00",
+      "severity": "normal"
+    },
+    "weekly": {
+      "pct": null,
+      "resets_at": null,
+      "severity": null
+    },
+    "weekly_by_model": {
+      "fable": {
+        "pct": 20,
+        "resets_at": "2099-01-07T00:00:00.5+00:00",
+        "severity": "normal",
+        "active": true
+      }
+    },
+    "extra_usage_enabled": false,
+    "locked_reason": null
+  },
+  "codex": {
+    "ok": true,
+    "plan": "plus",
+    "five_hour": {
+      "pct": 5,
+      "resets_at": "2099-01-01T05:00:00.000Z",
+      "window_mins": 300
+    },
+    "weekly": {
+      "pct": 10,
+      "resets_at": "2099-01-07T00:00:00.000Z",
+      "window_mins": 10080
+    },
+    "rate_limit_reached": null,
+    "ordinary_usage_allowed": true,
+    "reset_credits_available": 3,
+    "credits": {
+      "hasCredits": false,
+      "unlimited": false,
+      "balance": "0"
+    }
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -16,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
 // Bounds of one serve run: the lock must appear within serveLockWait, the serve then ticks
@@ -627,7 +630,10 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 		{"conductor/paused-relaunch", "conductor", conductor(seeds(seedFlip(`{"paused": true}`), caches.green)), []string{"relaunch opencode->opencode (stay, was paused)"}},
 		// A hand-off recorded while the previous conductor held the lane: the target starts.
 		{"conductor/pending-launch", "conductor", conductor(seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode", "from": "claude", "reason": "handback: R"}}`)), []string{"pending launch claude->opencode"}},
-		// The runner's own final state replaces the redispatched_at the serve wrote (in both).
+		// Timing assumption: the serve's write of its stale in-memory lane lands before the
+		// runner's first state write, because the runner boots far slower, so the runner's own
+		// final state replaces the redispatched_at the serve wrote. Under heavy load the order
+		// can flip, in both runtimes alike.
 		// decide flips the idle opencode project (flipped there long ago) to claude, openai
 		// being red: claude is launched.
 		{"conductor/decide-flip-to-claude", "conductor", claudeConductor(seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T09:00:00.000Z"}`), caches.openaiRed)), []string{"relaunch opencode->claude (flip)"}},
@@ -652,7 +658,7 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			inv.seed = seeds(inv.seed, seedProjectDir(".orchestrator/logs"))
 			inv.env = append(inv.env, noPostRunRefresh)
 			launched, serve := inv.normalize, normalizeServe(time.Now())
-			inv.normalize = func(s string) string { return logCut.ReplaceAllString(serve(launched(s)), "${1}<cut>") }
+			inv.normalize = func(s string) string { return serve(launched(s)) }
 			serveArgs := []string{"serve", "--cwd", "."}
 			runners := strings.NewReplacer(h.runnerPrefixes(t)...)
 			js := h.runServeLaunch(t, inv, append([]string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, serveArgs...), c.lane, runners)
@@ -669,15 +675,38 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 				requireFlipEvaluated(t, "js", js)
 				requireFlipEvaluated(t, "orch", orch)
 			}
+			requireEqualCutLengths(t, js, orch)
+			js, orch = js.normalized(cutLogPaths), orch.normalized(cutLogPaths)
 			compareOutcomes(t, js, orch)
 		})
 	}
 }
 
+// requireEqualCutLengths asserts that the tails logCut masks are as long, in UTF-16 units, on
+// both sides, so a difference in where the serve cuts the answer cannot hide behind the mask.
+func requireEqualCutLengths(t *testing.T, js, orch outcome) {
+	t.Helper()
+	jsTails, orchTails := cutTailLengths(js), cutTailLengths(orch)
+	if !reflect.DeepEqual(jsTails, orchTails) {
+		t.Errorf("masked log tails differ in length: js %v, orch %v", jsTails, orchTails)
+	}
+}
+
+// cutTailLengths lists the length of every tail logCut masks in the supervisor log.
+func cutTailLengths(o outcome) []int {
+	var lengths []int
+	for _, m := range logCut.FindAllStringSubmatch(o.files["project/logs/supervisor.log"], -1) {
+		lengths = append(lengths, jsstr.Len(m[2]))
+	}
+	return lengths
+}
+
+func cutLogPaths(s string) string { return logCut.ReplaceAllString(s, "${1}<cut>") }
+
 // logCut is the end of a supervisor log line quoting a conductor launch: the serve keeps the
 // first 200 characters of `flip run`'s answer, which cut the sandbox's log path where its
 // length puts it. Runs after the serve normaliser has rewritten the line's timestamp.
-var logCut = regexp.MustCompile(`(?m)^(<iso> (?:relaunch|pending launch|flip target never started:) [^\n]*\\"log_path\\":\\")[^\n]*$`)
+var logCut = regexp.MustCompile(`(?m)^(<iso> (?:relaunch|pending launch|flip target never started:) [^\n]*\\"log_path\\":\\")([^\n]*)$`)
 
 // runServeLaunch runs one runtime's serve in a fresh sandbox, waits for the lane it launched
 // to name its runner, settles that runner and collects every file; the launch's fresh values
@@ -739,6 +768,7 @@ func (h *harness) testServeClaudeResume(t *testing.T) {
 		collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
 		o := h.runDaemon(t, sb, argv, nil, inv.env)
 		o.files = quietFilesWithRunRecord(t, argv[0], sb)
+		reapClaudeExec(t, argv[0], sb)
 		withWakePromptDigest(t, argv[0], o.files)
 		o = o.withProjectPlaceholder(t, sb)
 		o = inv.normalizeWrites(o, before)
@@ -773,6 +803,51 @@ func quietFilesWithRunRecord(t *testing.T, side string, sb sandbox) map[string]s
 		}
 		previous = current
 	}
+}
+
+// reapClaudeExec waits for the detached claude-exec the serve started in the sandbox to exit,
+// so it cannot outlive the sandbox; past claudeExecExitTimeout it kills its process group (it
+// was spawned detached, so it leads one) and fails the case.
+func reapClaudeExec(t *testing.T, side string, sb sandbox) {
+	t.Helper()
+	const claudeExecExitTimeout = 5 * time.Second
+	deadline := time.Now().Add(claudeExecExitTimeout)
+	for {
+		pids := claudeExecPids(t, sb)
+		if len(pids) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			for _, pid := range pids {
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
+			}
+			t.Errorf("%s: claude-exec %v still running after %v; its group was killed", side, pids, claudeExecExitTimeout)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// claudeExecPids lists the claude-exec processes whose argv names the sandbox project; the
+// JS runs `claude-exec.mjs --cwd <project>`, orch `orch claude-exec --cwd <project>` (macOS may
+// show the project under /private, which still contains the sandbox path).
+func claudeExecPids(t *testing.T, sb sandbox) []int {
+	t.Helper()
+	out, err := exec.Command("/bin/ps", "-axo", "pid=,command=").Output()
+	if err != nil {
+		t.Fatalf("ps: %v", err)
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		pid, command, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if !strings.Contains(command, "claude-exec") || !strings.Contains(command, sb.project) {
+			continue
+		}
+		if n, err := strconv.Atoi(pid); err == nil {
+			pids = append(pids, n)
+		}
+	}
+	return pids
 }
 
 // withWakePromptDigest checks that the run record's prompt_sha256 is the digest of the wake

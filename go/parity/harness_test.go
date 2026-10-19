@@ -32,6 +32,7 @@ func TestParity(t *testing.T) {
 	t.Run("worker", h.testWorker)
 	t.Run("flip", h.testFlip)
 	t.Run("supervisor", h.testSupervisor)
+	t.Run("doctor", h.testDoctor)
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over

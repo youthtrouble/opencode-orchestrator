@@ -10,6 +10,17 @@
 # many seconds (so it is still running when the bridge signals it); with <case>.pid present it
 # first writes its pid to $HOME/fake-claude/pid (outside the compared logs), so a case can
 # check that the process was signalled. Shell builtins only: PATH holds no coreutils.
+# Canned answers (the doctor group), checked before every other mode: when
+# $HOME/fake-answers/claude/<argv joined by "-"> exists (e.g. --version, login-status,
+# debug-agents), it is printed on stdout with every line newline-terminated and the fake exits
+# with the code in <same>.exit, or 0.
+answer="$HOME/fake-answers/claude/$(IFS=-; printf '%s' "$*")"
+if [ -f "$answer" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$answer"
+  code=0
+  if [ -f "$answer.exit" ]; then IFS= read -r code < "$answer.exit"; fi
+  exit "$code"
+fi
 script="$HOME/fake-claude"
 if [ -f "$script/case" ]; then
   IFS= read -r case < "$script/case"

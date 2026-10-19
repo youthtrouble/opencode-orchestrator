@@ -18,6 +18,17 @@
 # $HOME/fake-log/codex-queue-argv.txt and the fake exits with the code the file holds.
 #
 # Shell builtins only: PATH holds no coreutils.
+# Canned answers (the doctor group), checked before every other mode: when
+# $HOME/fake-answers/codex/<argv joined by "-"> exists (e.g. --version, login-status,
+# debug-agents), it is printed on stdout with every line newline-terminated and the fake exits
+# with the code in <same>.exit, or 0.
+answer="$HOME/fake-answers/codex/$(IFS=-; printf '%s' "$*")"
+if [ -f "$answer" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$answer"
+  code=0
+  if [ -f "$answer.exit" ]; then IFS= read -r code < "$answer.exit"; fi
+  exit "$code"
+fi
 script="$HOME/fake-codex"
 if [ "$1" = app-server ] && [ -d "$script" ]; then
   n=0

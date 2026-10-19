@@ -496,8 +496,9 @@ and `orch opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` 
 result JSON and run records; `codex-exec` still passes `--approve-for-me` with the default
 `workspace-write` sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs`
 does), each byte-identical to its `bin/*.mjs` script when
-both read the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. `doctor.mjs`, `kickoff.mjs` and
-`watch.mjs` are not ported yet, and the plugin still calls the JS scripts.
+both read the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. `orch doctor` runs
+the `doctor.mjs` checks with the same rows, plus its own binary and self-test rows, and runs the
+Go tests instead of `node --test` (PE-18). `kickoff.mjs` and `watch.mjs` are not ported yet, and the plugin still calls the JS scripts.
 [go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness
 that diffs every implemented command against the JS.
 

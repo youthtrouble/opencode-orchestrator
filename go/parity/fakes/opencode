@@ -10,6 +10,17 @@
 # is written to opencode-cwd.txt and CLAUDECODE (or <unset>) to opencode-env.txt. Then
 # <case>.jsonl, .stderr, .signal, .sleep and .exit act as in the claude fake. Shell builtins
 # only: PATH holds no coreutils.
+# Canned answers (the doctor group), checked before every other mode: when
+# $HOME/fake-answers/opencode/<argv joined by "-"> exists (e.g. --version, login-status,
+# debug-agents), it is printed on stdout with every line newline-terminated and the fake exits
+# with the code in <same>.exit, or 0.
+answer="$HOME/fake-answers/opencode/$(IFS=-; printf '%s' "$*")"
+if [ -f "$answer" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$answer"
+  code=0
+  if [ -f "$answer.exit" ]; then IFS= read -r code < "$answer.exit"; fi
+  exit "$code"
+fi
 if [ "$1 $2" = "auth list" ] && [ -f "$HOME/fake-opencode/auth-list.txt" ]; then
   while IFS= read -r line; do printf '%s\n' "$line"; done < "$HOME/fake-opencode/auth-list.txt"
   exit 0
