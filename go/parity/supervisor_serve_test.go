@@ -86,8 +86,9 @@ var (
 	superLock = regexp.MustCompile(`^\d+$`)
 	// incidentProject is the project name (the sandbox directory's base name) an incident records.
 	incidentProject = regexp.MustCompile(`("project":")\d{3}(")`)
-	// superEpoch is a lane's next check or an event's retry time: now plus an interval.
-	superEpoch = regexp.MustCompile(`("(?:next_check|retry_after)": )(\d+)`)
+	// superEpoch is a lane's next check, an event's retry time or a flip evaluation's tick
+	// time: now plus an interval (zero for the flip fields).
+	superEpoch = regexp.MustCompile(`("(?:next_check|retry_after|last_flip_check|last_relaunch_at)": )(\d+)`)
 	// superPid is the serving process's pid, recorded in the state at every tick.
 	superPid = regexp.MustCompile(`("pid": )\d+`)
 	// superLogLine is a supervisor log line's timestamp.
@@ -98,9 +99,9 @@ var (
 	incidentFresh = regexp.MustCompile(`("at":")(` + isoMillis.String() + `)(".*"version":")[^"]*(")`)
 )
 
-// supervisorIntervals are the cadences a fresh next_check or retry_after adds to the tick's
-// time (focused, standard and deep lanes).
-var supervisorIntervals = []int64{120, 300, 600}
+// supervisorIntervals are the cadences a fresh epoch field adds to the tick's time: none for
+// last_flip_check and last_relaunch_at, then the focused, standard and deep lane cadences.
+var supervisorIntervals = []int64{0, 120, 300, 600}
 
 // cadenceAfter reports the cadence by which value (epoch seconds) follows a tick inside
 // [startSec, nowSec]. The run is far shorter than the gaps between cadences, so at most one
@@ -229,6 +230,14 @@ func finishedLane(lane string) seed {
 	return seedWorkerState(lane, `{"lane": "`+lane+`", "status": "finished", "run_id": "run-`+lane+`", "pid": 0, "harness": "claude", "breadth": "standard"}`)
 }
 
+// ownPid is this test process: a pid both runtimes see alive.
+var ownPid = strconv.Itoa(os.Getpid())
+
+// stopFile is present before the first loop: serve stops without ticking.
+var stopFile = seedProjectFile(".orchestrator/supervisor.stop", "")
+
+func seedConductor(content string) seed { return seedWorkerState("conductor", content) }
+
 // testSupervisorServe compares one tick of `orch supervisor serve` with bin/supervisor.mjs.
 func (h *harness) testSupervisorServe(t *testing.T) {
 	command := func(code int) seed { return seedWake("[" + commandChannel(code) + "]") }
@@ -264,6 +273,18 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "redispatch/already", seed: seeds(seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2020-01-01T00:00:00.000Z", "redispatched_at": "2020-01-02T00:00:00.000Z"}`))},
 		{name: "state/null", seed: seedSupervisorState(`null`), crash: crashC1, errorLine: "TypeError: Cannot set properties of null (setting 'storage_error')"},
 		{name: "state/number", seed: seedSupervisorState(`5`), crash: crashC1, errorLine: "TypeError: Cannot create property 'storage_error' on number '5'"},
+		{name: "stop-first/null-state", seed: seeds(seedSupervisorState(`null`), stopFile), crash: crashC1, errorLine: "TypeError: Cannot set properties of null (setting 'status')"},
+		{name: "stop-first/string-state", seed: seeds(seedSupervisorState(`"x"`), stopFile), crash: crashC1, errorLine: "TypeError: Cannot create property 'status' on string 'x'"},
+		{name: "lane/finished-live-pid", seed: seeds(seedWorkerState("a", `{"lane": "a", "status": "finished", "run_id": "run-a", "pid": `+ownPid+`, "harness": "claude"}`), command(0))},
+		{name: "lane/running-live-pid", seed: seeds(seedWorkerState("a", `{"lane": "a", "status": "running", "run_id": "run-a", "pid": `+ownPid+`, "harness": "claude"}`), command(0))},
+		{name: "flip/awaiting-human", seed: seedFlip(`{"to": "claude", "at": "2026-10-19T10:00:00.000Z", "awaiting_human": {"reason": "push to main"}}`)},
+		{name: "flip/awaiting-human-already-logged", seed: seeds(seedFlip(`{"awaiting_human": {"reason": "push"}}`), seedSupervisorState(`{"awaiting_human_logged": true}`))},
+		{name: "flip/live-conductor", seed: seeds(seedConductor(`{"status": "running", "harness": "claude", "pid": `+ownPid+`, "started_at": "2026-10-19T10:00:00.000Z"}`), seedFlip(`{"to": "opencode", "paused": true}`))},
+		{name: "flip/conductor-lock-held", seed: seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "redispatched_at": "2026-10-19T10:00:00.000Z"}`), seedWorkerLock("conductor"), seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode"}}`), seedSupervisorState(`{"last_relaunch_at": 4102444800}`))},
+		{name: "flip/finished-early-in-cooldown", seed: seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), seedSupervisorState(`{"last_relaunch_at": 4102444800}`))},
+		{name: "flip/never-started-in-backoff", seed: seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T09:00:00.000Z", "redispatched_at": "2026-10-19T09:30:00.000Z"}`), seedFlip(`{"to": "opencode", "at": "2026-10-19T10:00:00.000Z"}`), seedSupervisorState(`{"last_relaunch_at": 4102444800}`))},
+		{name: "flip/checked-this-minute", seed: seeds(seedFlip(`{"paused": true}`), seedSupervisorState(`{"last_flip_check": 4102444800}`))},
+		{name: "config/null-deferred-lane", seed: seeds(seedSupervisorConfig(`null`), seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`))},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

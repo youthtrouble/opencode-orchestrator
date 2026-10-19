@@ -309,17 +309,24 @@ Groups:
   retried, `logs/` absent (the ENOENT path) and the mailbox directory a file; channels
   `codex-queue` (the fake's `queue` mode: exit 0, 1, unscripted 97), `opencode-run`, unknown
   type, no type, `null`, two channels; redispatch disabled and already done; states `null` and
-  `5` (C1); a live lock (exit 1). `channel/delivered` checks that the event reaches the command,
+  `5` (C1); a live lock (exit 1); (S8c part 2) the stop file present at the first loop over a
+  `null` and a `"x"` state (C1, `status`), a finished and a running lane whose pid is alive,
+  a `null` config with a deferred lane not yet due; the flip evaluation without a launch: a
+  human gate (first note, and already logged), a live conductor, a held conductor lock with a
+  pending launch, a finished-early conductor and a never-started flip target inside their
+  cooldowns, and an evaluation already done this minute. `channel/delivered` checks that the event reaches the command,
   the mailbox and the log in both runtimes. Asserted differences: PE-16(1) (`[]` state), PE-16(2)
   (`null` acks with a failed event due) and PE-17 (no `opencode` on PATH). `start`: fresh, stop
   file removed, stale lock, already running (this test's pid), keep-awake through the fake
   `which` (the wrapper's argv checked per runtime); each launched serve is stopped through its
   stop file and waited for by the pid `start` printed. Normalised, only inside the run's time
   window: `checked_at`, `created_at`, `stopped_at`, log line times, `next_check`, `retry_after`
-  and `next_check_at` (as tick time plus 120, 300 or 600 s), the state's `pid`, a claimed
-  lock's pid, mailbox ids, an incident's `at`, `version` and project name. Not yet compared
-  (S8c part 2): the flip evaluation, full redispatch and conductor launches, `claude-resume`,
-  restart across runtimes and the slow opt-in case.
+  and `next_check_at` (as tick time plus 120, 300 or 600 s), `last_flip_check` and
+  `last_relaunch_at` (as tick time), the state's `pid`, a claimed lock's pid, mailbox ids, an
+  incident's `at`, `version` and project name. Not yet compared: conductor launches (pending,
+  decided, never-started), a paused project in its cooldown (the JS serve did not stop within
+  20 s), full redispatch launches, `claude-resume`, restart across runtimes and the slow
+  opt-in case.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and
@@ -409,7 +416,7 @@ The other documented differences, each asserted by its own parity case:
   state's `result_summary` at 2000, the failure incident's summary at 160 and detail (the last
   1500 units of the bridge's stdout) and the blocked message body at 1500; in `orch flip gate`
   the human's message subject at 80, in `orch flip run` the `launcher` text at 400; in `orch
-  supervisor` (drafted in S8b, asserted in S8c) a flip log line's quoted output at 200 and the
+  supervisor` (drafted in S8b, not yet asserted by a parity case) a flip log line's quoted output at 200 and the
   redispatch note body at 500) or a
   string message spread into one key per code unit gives U+FFFD in Go. Hashes are identical (Node
   hashes a lone surrogate as U+FFFD). With an empty `HOME` the JS home pattern is empty and
@@ -421,7 +428,7 @@ The other documented differences, each asserted by its own parity case:
   class differs. Extended to `orch flip run`: when the worker launcher dies, `run`'s `launcher`
   field (`(stdout || stderr).trim()`, cut at 400 units) holds Node's crash block in the JS (its
   throwing location, source excerpt, error line and stack) and only the error line in `orch`.
-  Extended to `orch supervisor` (drafted in S8b, asserted in S8c): a crashing `flip run`, `flip
+  Extended to `orch supervisor` (drafted in S8b, not yet asserted by a parity case): a crashing `flip run`, `flip
   decide` or `worker start` child quoted in a log line or the redispatch note shows Node's crash
   block in the JS and the error line in `orch`; so does `serve`'s own crash in its log.
 - PE-3: `orch mailbox post --json` prints the whole message it appended; the JS ignores
@@ -474,7 +481,7 @@ The other documented differences, each asserted by its own parity case:
   Assumption (Q-S6-4). Extended to `orch flip run`: once the worker launcher has exited it waits
   at most 10 s for the launcher's pipes; `spawnSync` waits for them forever. No output changes
   (the detached runner writes to its log, not to the launcher's pipes). Extended to `orch
-  supervisor` (drafted in S8b, asserted in S8c): every child it waits for (`codex queue`, a
+  supervisor` (drafted in S8b, not yet asserted by a parity case): every child it waits for (`codex queue`, a
   `command` channel, `flip decide`, `flip run`, `worker start`) runs through `procs.RunSync`,
   which SIGKILLs a child that ignores the 30 s channel timeout's SIGTERM 10 s later and waits at
   most 10 s for pipes held by grandchildren; `spawnSync` waits for both forever. No output
