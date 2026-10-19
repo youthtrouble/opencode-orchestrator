@@ -120,9 +120,123 @@ function privateDirectory(directory) {
   );
 }
 
-function command(name, argv) {
-  const result = spawnSync(name, argv, { stdio: "inherit" });
+function command(name, argv, options = {}) {
+  const result = spawnSync(name, argv, { stdio: "inherit", ...options });
   requireCondition(!result.error && result.status === 0, `${name} ${argv.join(" ")} failed.`);
+}
+
+function orchDestination(home) {
+  const requested = process.env.ORCH_BIN_DIR || path.join(home, ".local", "bin");
+  requireCondition(path.isAbsolute(requested), "ORCH_BIN_DIR must be absolute; nothing changed.");
+  const directory = canonical(requested);
+  const destination = path.join(directory, "orch");
+  requireCondition(
+    !exists(destination),
+    `orch already exists at ${destination}; remove it, set ORCH_BIN_DIR, or use --skip-binary; nothing changed.`,
+  );
+  requireCondition(
+    !inside(directory, target) && !inside(directory, checkout) && !inside(directory, stateRoot),
+    "The orch directory must be outside the config, checkout and installer state; nothing changed.",
+  );
+  requireCondition(
+    existingDevice(directory) === existingDevice(stateRoot),
+    "The orch directory and installer state must share a filesystem; set ORCH_BIN_DIR or use --skip-binary.",
+  );
+  return { directory, destination };
+}
+
+function releaseVersion() {
+  const versionFile = path.join("go", "internal", "version", "VERSION");
+  for (const entry of [versionFile, path.join("go", "go.mod")])
+    requireCondition(exists(path.join(checkout, entry)), `Missing release entry: ${entry}`);
+  const version = fs.readFileSync(path.join(checkout, versionFile), "utf8").trim();
+  requireCondition(version !== "", `Missing release entry: ${versionFile}`);
+  return version;
+}
+
+// The single place that decides where orch comes from; S11b adds the release download here.
+function orchSource() {
+  const go = spawnSync("go", ["version"], { stdio: "ignore" });
+  requireCondition(
+    !go.error && go.status === 0,
+    "orch binary unavailable: install Go 1.25+, or pass --skip-binary; nothing changed.",
+  );
+  return "build";
+}
+
+function planOrch(home) {
+  return { ...orchDestination(home), version: releaseVersion(), source: orchSource() };
+}
+
+function buildOrch(file) {
+  command("go", ["build", "-trimpath", "-ldflags=-s -w", "-o", file, "./cmd/orch"], {
+    cwd: path.join(checkout, "go"),
+    env: { ...process.env, CGO_ENABLED: "0" },
+  });
+}
+
+function acquireOrch(orch, file) {
+  buildOrch(file);
+  fs.chmodSync(file, 0o755);
+  const reported = spawnSync(file, ["version"], { encoding: "utf8" });
+  const firstLine = (reported.stdout || "").split("\n")[0].trim();
+  requireCondition(
+    !reported.error && reported.status === 0 && firstLine.split(/\s+/)[0] === orch.version,
+    `orch version reported "${firstLine}", expected ${orch.version}.`,
+  );
+}
+
+// Hard link then unlink: never replaces a file that appeared at the destination meanwhile.
+function placeOrch(orch, file) {
+  fs.mkdirSync(orch.directory, { recursive: true, mode: 0o755 });
+  fs.linkSync(file, orch.destination);
+  fs.unlinkSync(file);
+}
+
+// PATH entries may carry a trailing slash or a symlinked spelling of the canonical directory.
+function onPath(directory) {
+  return (process.env.PATH || "")
+    .split(":")
+    .filter((entry) => entry !== "")
+    .some((entry) => {
+      const resolved = path.resolve(entry);
+      return resolved === directory || (fs.existsSync(resolved) && fs.realpathSync(resolved) === directory);
+    });
+}
+
+function reportOrch(orch) {
+  if (!orch) {
+    console.log("orch: skipped (--skip-binary)");
+    return;
+  }
+  console.log(`orch: ${orch.destination}`);
+  if (!onPath(orch.directory))
+    console.log(
+      `Note: ${orch.directory} is not on PATH; the plugin looks in ~/.local/bin/orch itself, other locations need ORCH_BIN=${orch.destination}.`,
+    );
+}
+
+// Archives, never deletes. Before installation finished (preparing/prepared) the destination may
+// hold a file that appeared after the pre-check, so only the file we placed (same dev+ino) moves.
+// Later phases archive any regular file there: the README update rebuilds orch in place, which
+// legitimately replaces the inode we recorded.
+function archiveOrch(record) {
+  if (typeof record.binary !== "string" || !exists(record.binary)) return;
+  if (!fs.lstatSync(record.binary).isFile()) {
+    console.log(`orch at ${record.binary} is not a regular file; left in place.`);
+    return;
+  }
+  if (["preparing", "prepared"].includes(record.phase) && !sameIdentity(record.binary, record.binaryIdentity)) {
+    console.log(`orch at ${record.binary} was not placed by this installation; left in place.`);
+    return;
+  }
+  const removed = path.join(active, "removed-binary");
+  if (exists(removed)) {
+    console.log(`orch at ${record.binary} left in place: ${removed} already exists.`);
+    return;
+  }
+  fs.renameSync(record.binary, removed);
+  console.log(`orch archived from ${record.binary}`);
 }
 
 function writeRecord(record) {
@@ -141,13 +255,18 @@ function readRecord() {
       ["symlink", "copy"].includes(record.mode) &&
       ["preparing", "prepared", "backed-up", "installed", "active"].includes(record.phase) &&
       typeof record.hadPrevious === "boolean" &&
-      (record.phase === "preparing" || (/^[a-f0-9]{64}$/.test(record.fingerprint) && record.installedIdentity)),
+      (record.phase === "preparing" || (/^[a-f0-9]{64}$/.test(record.fingerprint) && record.installedIdentity)) &&
+      (record.binary === undefined ||
+        record.binary === null ||
+        (typeof record.binary === "string" &&
+          path.isAbsolute(record.binary) &&
+          path.basename(record.binary) === "orch")),
     "Unrecognized installation receipt; nothing changed.",
   );
   return record;
 }
 
-function install() {
+function install(orch) {
   requireCondition(!exists(active), "An installation or recovery receipt already exists; run uninstall.sh first.");
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.mkdirSync(active, { mode: 0o700 });
@@ -171,8 +290,18 @@ function install() {
     if (mode === "copy") copyEntry(from, to);
     else fs.symlinkSync(from, to);
   }
-  Object.assign(record, { phase: "prepared", installedIdentity: identity(staged), fingerprint: fingerprint(staged) });
+  const acquired = path.join(active, "orch");
+  if (orch) acquireOrch(orch, acquired);
+  Object.assign(record, {
+    phase: "prepared",
+    installedIdentity: identity(staged),
+    fingerprint: fingerprint(staged),
+    binary: orch ? orch.destination : null,
+    // A hard link keeps dev+ino, so uninstall can tell our placed file from one that raced in.
+    binaryIdentity: orch ? identity(acquired) : null,
+  });
   writeRecord(record);
+  if (orch) placeOrch(orch, acquired);
   if (hadPrevious) fs.renameSync(target, backup);
   record.phase = "backed-up";
   writeRecord(record);
@@ -184,6 +313,7 @@ function install() {
   record.phase = "active";
   writeRecord(record);
   console.log(`Installed (${mode}). Private receipt: ${receipt}`);
+  reportOrch(orch);
 }
 
 function uninstall() {
@@ -232,6 +362,7 @@ function uninstall() {
     requireCondition(!exists(target), "Restore target is occupied; backup preserved.");
     fs.renameSync(backup, target);
   }
+  archiveOrch(record);
   const archive = path.join(stateRoot, `uninstalled-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`);
   fs.renameSync(active, archive);
   console.log(`Uninstalled; previous config restored when present. Private archive: ${archive}`);
@@ -242,13 +373,15 @@ let stateRoot, active, receipt, backup, target;
 try {
   requireCondition(Number(process.versions.node.split(".")[0]) >= 22, "Node 22+ is required.");
   requireCondition(["darwin", "linux"].includes(process.platform), "Supported platforms: macOS and Linux.");
-  const allowed = action === "install" ? ["--force", "--copy", "--help"] : ["--help"];
+  const allowed = action === "install" ? ["--force", "--copy", "--skip-binary", "--help"] : ["--help"];
   requireCondition(
     ["install", "uninstall"].includes(action) && args.every((arg) => allowed.includes(arg)),
     "Unknown argument; use --help.",
   );
   if (args.includes("--help")) {
-    console.log(action === "install" ? "Usage: ./install.sh [--copy] [--force]" : "Usage: ./uninstall.sh");
+    console.log(
+      action === "install" ? "Usage: ./install.sh [--copy] [--force] [--skip-binary]" : "Usage: ./uninstall.sh",
+    );
     process.exit(0);
   }
   const home = os.homedir();
@@ -276,6 +409,7 @@ try {
     console.log("No installation receipt; nothing changed.");
   } else {
     // Dependencies and target refusal are checked before even creating private state.
+    let orch = null;
     if (action === "install") {
       requireCondition(!exists(active), "An installation or recovery receipt already exists; run uninstall.sh first.");
       requireCondition(
@@ -296,6 +430,7 @@ try {
         existingDevice(path.dirname(target)) === existingDevice(stateRoot),
         "Config and installer state must share a filesystem for atomic backup/restore.",
       );
+      orch = args.includes("--skip-binary") ? null : planOrch(home);
     }
     privateDirectory(stateRoot);
     const lock = path.join(stateRoot, "operation.lock");
@@ -303,7 +438,7 @@ try {
     fs.writeFileSync(descriptor, String(process.pid));
     fs.closeSync(descriptor);
     try {
-      if (action === "install") install();
+      if (action === "install") install(orch);
       else uninstall();
     } finally {
       fs.unlinkSync(lock);

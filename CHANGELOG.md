@@ -151,6 +151,17 @@
   on the Go worker and bridges), or `pending_launch` when the lane is locked. PE-1, PE-2 and
   PE-10 are extended to its `launcher` text and wait; worktree `.git` files still crash, as in
   the JS. The `flip` parity group gains pending and full launches against the fakes.
+- install (S11a): `install.sh` builds `orch` from the checkout (`CGO_ENABLED=0 go build -trimpath
+  -ldflags="-s -w"`), checks that `orch version` matches `go/internal/version/VERSION`, and places
+  it at `~/.local/bin/orch` (or `$ORCH_BIN_DIR/orch`) with a no-clobber hard link; the receipt
+  records it as `binary`. An existing `orch` at the destination, a relative or overlapping
+  `ORCH_BIN_DIR`, a different filesystem from the installer state, or no `go` on `PATH` is refused
+  before any change. New `--skip-binary` installs exactly as before (`binary: null`). Uninstall
+  archives the recorded binary as `removed-binary` in the private archive (never deletes it). It
+  leaves in place a non-regular file, a file an interrupted install did not place (the receipt
+  records the placed file's identity as `binaryIdentity`), and any file when `removed-binary`
+  already exists. A receipt `binary` must be an absolute path named `orch`. 0.4.x receipts
+  without `binary` still uninstall.
 
 ## 0.4.7 — 2026-10-19
 

@@ -96,6 +96,16 @@ After deployment, the installer runs `opencode reload`, then the doctor at the *
 mutations. A reload or doctor failure returns nonzero and preserves the installed target, receipt
 and backup for recovery; it is not reported as a successful installation.
 
+The installer also builds the Go `orch` binary from the checkout (`CGO_ENABLED=0 go build -trimpath
+-ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches `go/internal/version/VERSION`,
+and places it at `~/.local/bin/orch`; set `ORCH_BIN_DIR` (absolute) to choose another directory.
+Until the release download lands this needs Go 1.25+ on `PATH`. The installer refuses before any
+change when `orch` already exists at the destination, `ORCH_BIN_DIR` is relative, inside the
+config, checkout or installer state, or on another filesystem than the installer state, or when
+`go` is missing. `./install.sh --skip-binary` installs exactly as before, without `orch`. If the
+directory is not on `PATH`, the plugin still finds `~/.local/bin/orch`; other locations need
+`ORCH_BIN=<path>`.
+
 ### Uninstall and recover
 
 ```sh
@@ -108,7 +118,11 @@ Uninstall verifies the receipt, target identity, managed contents/link destinati
 identity. It restores the previous config when one existed and archives the removed installation
 and receipt under a unique private `uninstalled-*` directory. It never recursively deletes an
 installation. Known runtime additions are preserved in that archive; backups are never placed in
-tracked source. Repeating uninstall with no active receipt is a no-op.
+tracked source. Repeating uninstall with no active receipt is a no-op. A recorded `orch` binary
+is moved into that archive as `removed-binary`. It is left in place, with a message, when it is
+not a regular file, when an interrupted install never placed it (a different file now sits at
+the destination), or when the archive already holds a `removed-binary`. Uninstall code from
+0.4.x ignores the `binary` receipt field, so after a downgrade `orch` stays where it was.
 
 Changed/unrecognized targets, missing/replaced backups and invalid receipts are refused. Preserve
 and reconcile local changes before retrying; do not delete recovery state to bypass a refusal.
@@ -157,6 +171,7 @@ files. Edit in the checkout, commit, push. For a symlink installation, pull upda
 git pull
 node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
+(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch ./cmd/orch)
 opencode reload
 node ~/.config/opencode/orchestrator/bin/doctor.mjs
 ```

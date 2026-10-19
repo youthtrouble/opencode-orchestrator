@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const release = new URL("../", import.meta.url);
 const managed = [
@@ -47,6 +47,9 @@ function fixture(t) {
       fs.writeFileSync(path.join(checkout, entry, "example.txt"), entry);
     }
   }
+  fs.mkdirSync(path.join(checkout, "go", "internal", "version"), { recursive: true });
+  fs.writeFileSync(path.join(checkout, "go", "go.mod"), "module fixture\n");
+  fs.writeFileSync(path.join(checkout, "go", "internal", "version", "VERSION"), "0.5.0\n");
   fs.mkdirSync(path.join(checkout, "orchestrator", "bin"));
   fs.writeFileSync(
     path.join(checkout, "orchestrator", "bin", "doctor.mjs"),
@@ -70,6 +73,25 @@ exit "\${FAIL_DOCTOR:-0}"
 `,
     { mode: 0o755 },
   );
+  // The fake go "builds" a script that reports FAKE_ORCH_VERSION, so no real toolchain runs.
+  fs.writeFileSync(
+    path.join(bin, "go"),
+    `#!/bin/sh
+if [ "$1" = "version" ]; then echo "go version go1.25.0 fake"; exit 0; fi
+[ "$1" = "build" ] || exit 2
+out=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = "-o" ]; then out=$arg; fi
+  previous=$arg
+done
+printf '["go","build","%s","%s"]\\n' "$(pwd -P)" "$out" >> "$TEST_LOG"
+if [ "\${FAIL_BUILD:-0}" = "1" ]; then exit 1; fi
+if [ -n "\${RACE_ORCH:-}" ]; then /bin/mkdir -p "\${RACE_ORCH%/*}"; printf '%s' "user's own orch" > "$RACE_ORCH"; fi
+printf '#!/bin/sh\\necho "\${FAKE_ORCH_VERSION:-0.5.0} (fake)"\\n' > "$out"
+`,
+    { mode: 0o755 },
+  );
   const env = {
     ...process.env,
     HOME: home,
@@ -80,6 +102,7 @@ exit "\${FAIL_DOCTOR:-0}"
     TEST_NODE: process.execPath,
     FAIL_RELOAD: "0",
     FAIL_DOCTOR: "0",
+    FAIL_BUILD: "0",
   };
   const run = (script, args = [], extraEnv = {}) =>
     new Promise((resolve, reject) => {
@@ -104,7 +127,8 @@ exit "\${FAIL_DOCTOR:-0}"
       .readdirSync(state)
       .filter((name) => name.startsWith("uninstalled-"))
       .map((name) => path.join(state, name));
-  return { root, checkout, home, bin, state, target, log, env, run, receipt, archives };
+  const binary = path.join(home, ".local", "bin", "orch");
+  return { root, checkout, home, bin, state, target, log, env, run, receipt, archives, binary };
 }
 
 function success(result) {
@@ -129,6 +153,17 @@ function previousTarget(f, type) {
   }
   const info = fs.lstatSync(f.target);
   return { ino: info.ino, dev: info.dev, link: info.isSymbolicLink() ? fs.readlinkSync(f.target) : null };
+}
+
+function assertPlacedOrch(f) {
+  assert.equal(f.receipt().binary, f.binary);
+  assert.equal(fs.statSync(f.binary).mode & 0o777, 0o755);
+  assert.equal(spawnSync(f.binary, ["version"], { encoding: "utf8" }).stdout, "0.5.0 (fake)\n");
+}
+
+function assertNothingChanged(f) {
+  assert.equal(present(path.join(f.home, ".config")), false);
+  assert.equal(present(f.state), false);
 }
 
 function assertOriginal(f, original) {
@@ -159,11 +194,14 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
       assert.equal(present(path.join(f.checkout, "service.json")), false);
       const commands = fs.readFileSync(f.log, "utf8").trim().split("\n").map(JSON.parse);
       assert.deepEqual(commands, [
+        ["go", "build", path.join(f.checkout, "go"), path.join(f.state, "active", "orch")],
         ["opencode", "reload"],
         ["doctor", path.join(f.target, "orchestrator", "bin", "doctor.mjs")],
       ]);
+      assertPlacedOrch(f);
       success(await f.run(path.relative(f.checkout, path.join(f.target, "uninstall.sh"))));
       assert.equal(present(f.target), false);
+      assert.equal(present(f.binary), false);
       assert.equal(
         fs.readFileSync(path.join(f.archives()[0], "removed-config", "service.json"), "utf8"),
         "fake runtime state",
@@ -171,8 +209,11 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
       success(await f.run("uninstall.sh"));
       assert.equal(f.archives().length, 1);
       success(await f.run("install.sh", args));
+      assertPlacedOrch(f);
       success(await f.run("uninstall.sh"));
+      assert.equal(present(f.binary), false);
       assert.equal(f.archives().length, 2);
+      for (const archive of f.archives()) assert.equal(present(path.join(archive, "removed-binary")), true);
     });
 
     for (const type of ["directory", "file", "symlink", "broken symlink"]) {
@@ -319,5 +360,173 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
     for (const name of ["opencode", "claude", "codex"]) fs.unlinkSync(path.join(f.bin, name));
     success(await f.run("uninstall.sh"));
     assertOriginal(f, original);
+  });
+
+  test("--skip-binary installs without go and records no binary", async (t) => {
+    const f = fixture(t);
+    fs.rmSync(path.join(f.checkout, "go"), { recursive: true });
+    fs.unlinkSync(path.join(f.bin, "go"));
+    const installed = await f.run("install.sh", ["--skip-binary"]);
+    success(installed);
+    assert.match(installed.stdout, /orch: skipped \(--skip-binary\)/);
+    assert.equal(f.receipt().binary, null);
+    assert.equal(present(f.binary), false);
+    assert.equal(fs.readFileSync(f.log, "utf8").includes('"go"'), false);
+    success(await f.run("uninstall.sh"));
+    assert.equal(present(path.join(f.archives()[0], "removed-binary")), false);
+  });
+
+  test("--skip-binary with go present runs no build", async (t) => {
+    const f = fixture(t);
+    success(await f.run("install.sh", ["--skip-binary"]));
+    assert.equal(fs.readFileSync(f.log, "utf8").includes('"go"'), false);
+    assert.equal(f.receipt().binary, null);
+    assert.equal(present(f.binary), false);
+  });
+
+  test("missing go refuses before mutations", async (t) => {
+    const f = fixture(t);
+    fs.unlinkSync(path.join(f.bin, "go"));
+    failure(await f.run("install.sh"), /--skip-binary/);
+    assertNothingChanged(f);
+  });
+
+  test("an existing orch at the destination is refused and left byte-identical", async (t) => {
+    const f = fixture(t);
+    fs.mkdirSync(path.dirname(f.binary), { recursive: true });
+    fs.writeFileSync(f.binary, "user's own orch");
+    failure(await f.run("install.sh"), /orch already exists/);
+    assert.equal(fs.readFileSync(f.binary, "utf8"), "user's own orch");
+    assert.equal(present(path.join(f.home, ".config")), false);
+    assert.equal(present(f.state), false);
+  });
+
+  test("ORCH_BIN_DIR must be absolute and outside the checkout, config and state", async (t) => {
+    const f = fixture(t);
+    fs.mkdirSync(path.join(f.checkout, "bin"));
+    const linkedIntoCheckout = path.join(f.root, "linked bin");
+    fs.symlinkSync(path.join(f.checkout, "bin"), linkedIntoCheckout);
+    failure(await f.run("install.sh", [], { ORCH_BIN_DIR: "relative/bin" }), /ORCH_BIN_DIR must be absolute/);
+    for (const directory of [
+      path.join(f.checkout, "bin"),
+      linkedIntoCheckout,
+      path.join(f.target, "bin"),
+      path.join(f.state, "bin"),
+    ])
+      failure(await f.run("install.sh", [], { ORCH_BIN_DIR: directory }), /must be outside/);
+    assertNothingChanged(f);
+  });
+
+  test("an ORCH_BIN_DIR on PATH with a trailing slash gets no PATH note", async (t) => {
+    const f = fixture(t);
+    const directory = path.join(f.root, "custom bin");
+    const installed = await f.run("install.sh", [], { ORCH_BIN_DIR: directory, PATH: `${f.bin}:${directory}/` });
+    success(installed);
+    assert.doesNotMatch(installed.stdout, /is not on PATH/);
+  });
+
+  test("an orch that appears at the destination during the build is never archived", async (t) => {
+    const f = fixture(t);
+    const original = previousTarget(f, "directory");
+    failure(await f.run("install.sh", ["--force"], { RACE_ORCH: f.binary }), /EEXIST/);
+    assert.equal(f.receipt().phase, "prepared");
+    assert.equal(f.receipt().binary, f.binary);
+    const uninstalled = await f.run("uninstall.sh");
+    success(uninstalled);
+    assert.match(uninstalled.stdout, /not placed by this installation; left in place/);
+    assert.equal(fs.readFileSync(f.binary, "utf8"), "user's own orch");
+    assert.equal(present(path.join(f.archives()[0], "removed-binary")), false);
+    assertOriginal(f, original);
+  });
+
+  test("an existing removed-binary leaves orch in place with a message", async (t) => {
+    const f = fixture(t);
+    success(await f.run("install.sh"));
+    fs.writeFileSync(path.join(f.state, "active", "removed-binary"), "earlier archive");
+    const uninstalled = await f.run("uninstall.sh");
+    success(uninstalled);
+    assert.match(uninstalled.stdout, /left in place: .*removed-binary already exists/);
+    assert.equal(present(f.binary), true);
+    assert.equal(fs.readFileSync(path.join(f.archives()[0], "removed-binary"), "utf8"), "earlier archive");
+  });
+
+  test("a custom absolute ORCH_BIN_DIR is used, recorded and noted when off PATH", async (t) => {
+    const f = fixture(t);
+    const directory = path.join(f.root, "custom bin");
+    const installed = await f.run("install.sh", [], { ORCH_BIN_DIR: directory });
+    success(installed);
+    const destination = path.join(directory, "orch");
+    assert.equal(f.receipt().binary, destination);
+    assert.equal(present(destination), true);
+    assert.equal(present(f.binary), false);
+    assert.match(installed.stdout, new RegExp(`orch: ${destination}`));
+    assert.match(installed.stdout, /is not on PATH/);
+    success(await f.run("uninstall.sh"));
+    assert.equal(present(destination), false);
+    assert.equal(present(path.join(f.archives()[0], "removed-binary")), true);
+  });
+
+  for (const [name, extraEnv, pattern] of [
+    ["failed build", { FAIL_BUILD: "1" }, /go build .* failed/],
+    ["version mismatch", { FAKE_ORCH_VERSION: "9.9.9" }, /expected 0\.5\.0/],
+  ]) {
+    test(`${name} is nonzero, leaves the target untouched and is recoverable`, async (t) => {
+      const f = fixture(t);
+      const original = previousTarget(f, "directory");
+      failure(await f.run("install.sh", ["--force"], extraEnv), pattern);
+      assert.equal(f.receipt().phase, "preparing");
+      assertOriginal(f, original);
+      assert.equal(present(f.binary), false);
+      success(await f.run("uninstall.sh"));
+      assertOriginal(f, original);
+    });
+  }
+
+  test("a legacy 0.4.x receipt without binary uninstalls and leaves orch in place", async (t) => {
+    const f = fixture(t);
+    success(await f.run("install.sh"));
+    const { checkout, target, installedIdentity, fingerprint } = f.receipt();
+    // The exact key set written by the 0.4.x installer.
+    const legacy = {
+      version: 1,
+      checkout,
+      target,
+      mode: "symlink",
+      phase: "active",
+      hadPrevious: false,
+      previousIdentity: null,
+      installedIdentity,
+      fingerprint,
+    };
+    fs.writeFileSync(path.join(f.state, "active", "record.json"), JSON.stringify(legacy, null, 2) + "\n");
+    success(await f.run("uninstall.sh"));
+    assert.equal(present(f.binary), true);
+  });
+
+  test("a receipt binary that is not an absolute path to orch is refused", async (t) => {
+    const f = fixture(t);
+    success(await f.run("install.sh"));
+    const unrelated = path.join(f.home, ".ssh", "id_ed25519");
+    fs.mkdirSync(path.dirname(unrelated));
+    fs.writeFileSync(unrelated, "private key");
+    for (const binary of [42, "relative/orch", unrelated]) {
+      const record = f.receipt();
+      record.binary = binary;
+      fs.writeFileSync(path.join(f.state, "active", "record.json"), JSON.stringify(record));
+      failure(await f.run("uninstall.sh"), /Unrecognized installation receipt/);
+    }
+    assert.equal(present(f.binary), true);
+    assert.equal(fs.readFileSync(unrelated, "utf8"), "private key");
+  });
+
+  test("a non-regular orch at uninstall is left in place", async (t) => {
+    const f = fixture(t);
+    success(await f.run("install.sh"));
+    fs.unlinkSync(f.binary);
+    fs.mkdirSync(f.binary);
+    const uninstalled = await f.run("uninstall.sh");
+    success(uninstalled);
+    assert.match(uninstalled.stdout, /not a regular file/);
+    assert.equal(fs.lstatSync(f.binary).isDirectory(), true);
   });
 });
