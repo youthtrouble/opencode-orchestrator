@@ -23,6 +23,14 @@ func TestMailboxReplyIsTheInboxHint(t *testing.T) {
 	}
 }
 
+// bin/flip.mjs gate names this exact command in the human's message body.
+func TestFlipGateClearIsTheGateMessageCommand(t *testing.T) {
+	const want = "node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear"
+	if got := FlipGateClear(); got != want {
+		t.Errorf("FlipGateClear() = %q, want %q", got, want)
+	}
+}
+
 // bin/claude-exec.mjs records its incidents under its own file name.
 func TestScriptFileIsTheScriptBasename(t *testing.T) {
 	if got := ScriptFile("claude-exec"); got != "claude-exec.mjs" {

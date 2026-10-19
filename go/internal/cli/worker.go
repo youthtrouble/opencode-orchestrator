@@ -31,7 +31,7 @@ var errResolveArgBoolean = &jsTypeError{"ERR_INVALID_ARG_TYPE", cliargs.ErrPathA
 func Worker(args []string, stdio Stdio) int {
 	argv := decodeArgv(args) // process.argv.slice(2): parsed here, and passed on by --detach
 	opts, positional := cliargs.ParseArgs(argv, workerValueKeys, workerFlagKeys)
-	root, err := workerRoot(opts)
+	root, err := projectRoot(opts)
 	if err != nil {
 		return crash(stdio, err)
 	}
@@ -116,9 +116,9 @@ func workerCrash(stdio Stdio, err error) int {
 	return crash(stdio, err)
 }
 
-// workerRoot is `path.resolve(opts.cwd || process.cwd())`: resolving "" gives the working
-// directory too.
-func workerRoot(opts cliargs.Opts) (string, error) {
+// projectRoot is `path.resolve(opts.cwd || process.cwd())`, the project root of worker and
+// flip: resolving "" gives the working directory too, and a bare --cwd is Node's TypeError.
+func projectRoot(opts cliargs.Opts) (string, error) {
 	if opts.IsFlag("cwd") {
 		return "", errResolveArgBoolean
 	}

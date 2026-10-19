@@ -214,15 +214,6 @@ func toolDetail(block any) string {
 	return ""
 }
 
-// objectPrototypeMethods maps the names Object.prototype holds a method under to the name in
-// that method's source text, which `tools_used[name] || 0` reads for a tool not yet counted.
-var objectPrototypeMethods = map[string]string{
-	"constructor": "Object", "__defineGetter__": "__defineGetter__", "__defineSetter__": "__defineSetter__",
-	"hasOwnProperty": "hasOwnProperty", "__lookupGetter__": "__lookupGetter__", "__lookupSetter__": "__lookupSetter__",
-	"isPrototypeOf": "isPrototypeOf", "propertyIsEnumerable": "propertyIsEnumerable", "toString": "toString",
-	"valueOf": "valueOf", "toLocaleString": "toLocaleString",
-}
-
 // countTool is `tools_used[name] = (tools_used[name] || 0) + 1` on a plain object: "__proto__"
 // reads Object.prototype and ignores the string assigned to it, and the other inherited names
 // read a method, so its source text gets "1" appended, as does every later count of it.
@@ -232,8 +223,8 @@ func (e *claudeEvents) countTool(name string) {
 	}
 	tools := jsjson.Path(e.result, "tools_used").(*jsjson.Object)
 	current, own := tools.Get(name)
-	if inherited, isMethod := objectPrototypeMethods[name]; !own && isMethod {
-		current = "function " + inherited + "() { [native code] }"
+	if inherited, isInherited := jsjson.InheritedText(name); !own && isInherited {
+		current = inherited
 	}
 	switch count := current.(type) {
 	case float64:

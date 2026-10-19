@@ -140,3 +140,28 @@ func TestOtherDoor(t *testing.T) {
 		}
 	}
 }
+
+// TestDecideNonDoorReadsDoorVendorAsThePlainObjectDoes: a name that is no door has no posture,
+// so its vendor counts as red; the reason prints DOOR_VENDOR[name], which for a name a plain
+// object inherits is that property's text (expected values from Node v26.5.1).
+func TestDecideNonDoorReadsDoorVendorAsThePlainObjectDoes(t *testing.T) {
+	reg := parse(t, `{}`)
+	for active, vendor := range map[string]string{
+		"constructor": "function Object() { [native code] }",
+		"__proto__":   "[object Object]",
+		"toString":    "function toString() { [native code] }",
+		"true":        "undefined",
+		"gemini":      "undefined",
+	} {
+		t.Run(active, func(t *testing.T) {
+			got := Decide(Input{Active: active, Postures: postures(t, routing.Green, routing.Green, 120), Registry: reg, Now: now})
+			want := Decision{ActionFlip, DoorOpencode, vendor + " is red; openai has headroom"}
+			if got != want {
+				t.Errorf("Decide(%q) = %+v, want %+v", active, got, want)
+			}
+			if paused := Decide(Input{Active: active, Postures: postures(t, routing.Red, routing.Green, 120), Registry: reg, Now: now}); paused.Action != ActionPause {
+				t.Errorf("Decide(%q) with OpenAI red = %+v, want pause", active, paused)
+			}
+		})
+	}
+}

@@ -65,6 +65,12 @@
   `systemd-inhibit`, `runtime.keep_awake`), printing `{lane, runner_pid, log_path, run_id,
   keep_awake}`. The `worker` parity group gains multi-step detached cases (settle, a stopped
   running worker under PE-11) over new `which`, `caffeinate` and `systemd-inhibit` fakes.
+- Go port: `orch flip decide|pause|gate|status` matches `bin/flip.mjs` byte for byte (stdout,
+  stderr, exit codes, `.orchestrator/flip.json`, mailbox), every `flip.json` shape included
+  (`gate` on a number, string or `true` dies of the JS TypeError; a bare `--reason` on `gate`
+  posts no message, as in the JS). New PE-15: `decide` reads `flip.json`'s `at` in the ECMAScript
+  date formats only, so a hand-written legacy date never holds back a hand-back. `orch flip run`
+  is a placeholder (exit 2) until S7b. New `flip` parity group, run in CI.
 
 ## 0.4.7 — 2026-10-19
 

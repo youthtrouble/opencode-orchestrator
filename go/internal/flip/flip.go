@@ -120,10 +120,15 @@ func Decide(in Input) Decision {
 	return Decision{ActionStay, in.Active, "home door with headroom"}
 }
 
-// vendorText is `${DOOR_VENDOR[door]}`: "undefined" for a door that is neither of the two.
+// vendorText is `${DOOR_VENDOR[door]}`: DOOR_VENDOR is a plain object, so a name it inherits
+// from Object.prototype ("constructor", "__proto__", ...) prints that property's text, and any
+// other name that is not a door prints "undefined".
 func vendorText(door string) string {
 	if vendor, known := DoorVendor[door]; known {
 		return vendor
+	}
+	if inherited, ok := jsjson.InheritedText(door); ok {
+		return inherited
 	}
 	return "undefined"
 }

@@ -23,6 +23,12 @@ func MailboxReply() string {
 	return Script("mailbox") + " reply"
 }
 
+// FlipGateClear is the command line that clears a human gate, which `flip gate` tells the
+// human to run.
+func FlipGateClear() string {
+	return Script("flip") + " gate --clear"
+}
+
 // ClaudeExecHelp is what `claude-exec.mjs --help` prints: lines 2-12 of the script, the
 // header comment and the import line that follows it (the JS slices its own source).
 const ClaudeExecHelp = `// Delegate a bounded task to Claude Code (print mode) on the Claude subscription, structured result back.

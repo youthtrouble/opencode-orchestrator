@@ -1,0 +1,39 @@
+package flipcmd
+
+import (
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flip"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
+)
+
+// Pause records that the conductor stopped because both vendors are red, so the supervisor
+// relaunches a door once a window is usable again, and returns the line to print. It creates
+// .orchestrator/, then rewrites flip.json as {...previous, paused: {at, door, reason}}: every
+// other key is kept, an existing paused keeps its position, a string previous value spreads
+// into index keys and a number or true into nothing. It posts a handoff to the supervisor.
+// The errors are Node's filesystem errors of the mkdir and the write.
+func (p Project) Pause(opts cliargs.Opts) (*jsjson.Object, error) {
+	active := opts.Or("active", flip.DoorOpencode)
+	if err := p.makeStateDir(); err != nil {
+		return nil, err
+	}
+	record := jsjson.Spread(p.ReadFlip())
+	paused := jsjson.NewObject()
+	paused.Set("at", jsjson.ISOString(p.Now()))
+	paused.Set("door", active)
+	paused.Set("reason", opts.Or("reason", "both vendors red"))
+	record.Set("paused", paused)
+	if err := p.writeFlip(record); err != nil {
+		return nil, err
+	}
+	p.postIgnoringErrors(mailbox.Draft{
+		From:    conductor(active),
+		To:      "supervisor",
+		Kind:    "handoff",
+		Subject: "conductor paused: both vendors red",
+		Body:    "Supervisor will relaunch when a window resets.",
+		Refs:    []string{stateRef},
+	})
+	return doorAnswer("paused", active), nil
+}
