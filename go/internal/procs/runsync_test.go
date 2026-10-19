@@ -62,7 +62,8 @@ func runTrapping(t *testing.T, trap, forever string) SyncResult {
 	ready := filepath.Join(t.TempDir(), "ready")
 	got := RunSync(SyncSpec{Name: script(t, trap+`; : > "$1"; `+forever), Args: []string{ready}, Timeout: trapTimeout, Grace: killGrace})
 	if _, err := os.Stat(ready); err != nil {
-		t.Fatalf("the child had not installed its trap when the timeout fired: %v", err)
+		t.Fatalf("the child had not installed its trap when the timeout fired: %v (Err %v, status %s, TimedOut %v, stderr %q)",
+			err, got.Err, show(got.Status), got.TimedOut, got.Stderr)
 	}
 	return got
 }

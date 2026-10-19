@@ -11,9 +11,7 @@ import (
 // install writes an /bin/sh script that prints who it is, at dir/name with mode.
 func install(t *testing.T, dir, name, says string, mode os.FileMode) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\necho "+says+"\n"), mode); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, filepath.Join(dir, name), "#!/bin/sh\necho "+says+"\n", mode)
 }
 
 // run starts name in dir with only the given PATH and returns its trimmed stdout.

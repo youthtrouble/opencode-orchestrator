@@ -27,10 +27,22 @@ const (
 func script(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "child")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+	writeExecutable(t, path, "#!/bin/sh\n"+body+"\n", 0o755)
+	return path
+}
+
+// writeExecutable writes a file that a test is about to exec. It holds syscall.ForkLock for
+// reading while the file is open for writing, so no concurrent fork (a parallel test starting
+// its child) can inherit the write descriptor; an inherited one makes Linux refuse to exec the
+// file with ETXTBSY until that child execs in turn (golang/go#22315).
+func writeExecutable(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, []byte(content), mode)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return path
 }
 
 // startReady starts script body, which must print "ready" once its signal handling is in
