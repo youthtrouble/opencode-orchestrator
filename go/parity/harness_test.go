@@ -27,6 +27,7 @@ func TestParity(t *testing.T) {
 	t.Run("manifest", h.testManifest)
 	t.Run("incident", h.testIncident)
 	t.Run("policy", h.testPolicy)
+	t.Run("bridges", h.testBridges)
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
@@ -106,6 +107,9 @@ func newHarness(t *testing.T) *harness {
 // set, rewrites stdout, stderr and file contents of both before comparing (for values that
 // legitimately differ between runs, such as a fresh timestamp); crash, when set, is the
 // class of uncaught JS exception the case ends in (see crashError). C1 also pins errorLine;
+// progress, when set, is the prefix of the progress lines a crash may follow (see
+// crashAfterProgressError). projectPaths replaces the sandbox project directory with "$PROJECT"
+// in stdout, stderr and every file, for commands that print or record their working directory.
 // normalizeWrites receives seeded files separately so fresh fields cannot mask seed mutations.
 type invocation struct {
 	js              []string
@@ -117,6 +121,8 @@ type invocation struct {
 	normalize       func(string) string
 	crash           crashClass
 	errorLine       string
+	progress        string
+	projectPaths    bool
 	normalizeWrites func(outcome, map[string]string) outcome
 }
 
@@ -149,7 +155,11 @@ func (h *harness) comparePair(t *testing.T, inv invocation) {
 	t.Helper()
 	js, orch := h.runPair(t, inv)
 	if inv.crash != noCrash {
-		if err := crashError(inv.crash, inv.errorLine, js, orch); err != nil {
+		err := crashError(inv.crash, inv.errorLine, js, orch)
+		if inv.progress != "" {
+			err = crashAfterProgressError(inv.crash, inv.errorLine, inv.progress, js, orch)
+		}
+		if err != nil {
 			t.Error(err)
 		}
 		js.stderr, orch.stderr = "", ""
@@ -194,6 +204,9 @@ func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 				t.Fatal(err)
 			}
 		}
+		if inv.projectPaths {
+			o = o.withProjectPlaceholder(t, sb)
+		}
 		if inv.normalizeWrites != nil {
 			o = inv.normalizeWrites(o, before)
 		}
@@ -232,6 +245,31 @@ func crashError(class crashClass, expected string, js, orch outcome) error {
 	return nil
 }
 
+// crashAfterProgressError compares a crash that follows progress output: orch's stderr is
+// progress lines (each starting with prefix) and then the error line. The JS stderr must begin
+// with exactly those progress lines and hold no further line starting with prefix; the rest of
+// each stderr is then compared as crashError compares a crash.
+func crashAfterProgressError(class crashClass, expected, prefix string, js, orch outcome) error {
+	cut := strings.LastIndex(strings.TrimSuffix(orch.stderr, "\n"), "\n") + 1
+	progress := orch.stderr[:cut]
+	for _, line := range strings.SplitAfter(progress, "\n") {
+		if line != "" && !strings.HasPrefix(line, prefix) {
+			return fmt.Errorf("orch stderr line %q before the error line is not progress", line)
+		}
+	}
+	rest, found := strings.CutPrefix(js.stderr, progress)
+	if !found {
+		return fmt.Errorf("progress differs\n  js: %q\norch: %q", js.stderr, progress)
+	}
+	for _, line := range strings.Split(rest, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return fmt.Errorf("js printed progress orch did not: %q", line)
+		}
+	}
+	js.stderr, orch.stderr = rest, orch.stderr[cut:]
+	return crashError(class, expected, js, orch)
+}
+
 func compareOutcomes(t *testing.T, js, orch outcome) {
 	t.Helper()
 	if js.exitCode != orch.exitCode {
@@ -266,6 +304,22 @@ func (o outcome) normalized(normalize func(string) string) outcome {
 		files[name] = normalize(content)
 	}
 	return outcome{exitCode: o.exitCode, stdout: normalize(o.stdout), stderr: normalize(o.stderr), files: files}
+}
+
+// withProjectPlaceholder replaces the sandbox project directory, as the physical path Node's
+// process.cwd() reports and as created, with "$PROJECT".
+func (o outcome) withProjectPlaceholder(t *testing.T, sb sandbox) outcome {
+	t.Helper()
+	physical, err := filepath.EvalSymlinks(sb.project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replace := strings.NewReplacer(physical, "$PROJECT", sb.project, "$PROJECT").Replace
+	files := map[string]string{}
+	for name, content := range o.files {
+		files[name] = replace(content)
+	}
+	return outcome{exitCode: o.exitCode, stdout: replace(o.stdout), stderr: replace(o.stderr), files: files}
 }
 
 // sandbox is a fresh temp HOME and a fresh project (with .git/), the working directory.

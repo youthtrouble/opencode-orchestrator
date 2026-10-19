@@ -240,12 +240,34 @@ func TestReadPrompt(t *testing.T) {
 			t.Errorf("ReadPrompt(/dev/null) = %q, %v; want empty prompt", got, err)
 		}
 	})
-	t.Run("missing prompt file is an error", func(t *testing.T) {
-		_, err := ReadPrompt(Opts{"prompt-file": valueOpt(filepath.Join(dir, "absent.md"))}, nil, fileWithContent(t, ""))
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("error = %v, want not-exist", err)
-		}
-	})
+}
+
+// The bridges print these messages and exit 2, as the JS prints e.message of readFileSync.
+func TestReadPromptFileErrorsHaveNodeMessages(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir()) // Node names the physical path
+	if err != nil {
+		t.Fatal(err)
+	}
+	unreadable := filepath.Join(dir, "unreadable.md")
+	if err := os.WriteFile(unreadable, []byte("secret"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, file, want string }{
+		{"ENOENT", filepath.Join(dir, "absent.md"), "ENOENT: no such file or directory, open '" + filepath.Join(dir, "absent.md") + "'"},
+		{"EISDIR is a read error without a path", dir, "EISDIR: illegal operation on a directory, read"},
+		{"EACCES", unreadable, "EACCES: permission denied, open '" + unreadable + "'"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.name == "EACCES" && os.Geteuid() == 0 {
+				t.Skip("root reads files of mode 000")
+			}
+			_, err := ReadPrompt(Opts{"prompt-file": valueOpt(c.file)}, nil, fileWithContent(t, ""))
+			if err == nil || err.Error() != c.want {
+				t.Errorf("error = %v, want %q", err, c.want)
+			}
+		})
+	}
 }
 
 func fileWithContent(t *testing.T, content string) *os.File {

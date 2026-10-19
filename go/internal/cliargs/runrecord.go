@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
 // ParseArgs mirrors parseArgs in lib/run-record.mjs, used by the bridges, worker, supervisor,
@@ -41,16 +41,20 @@ func ParseArgs(argv []string, valueKeys, flagKeys []string) (Opts, []string) {
 // its message and exit 2.
 var ErrNoPrompt = errors.New("no prompt: pass --prompt, --prompt-file, positional text, or stdin")
 
-// ErrPromptFileWithoutValue carries the message Node prints when a bare --prompt-file reaches
-// path.resolve(true); the bridges print it and exit 2, as the JS does.
-var ErrPromptFileWithoutValue = errors.New(`The "paths[0]" argument must be of type string. Received type boolean (true)`)
+// ErrPathArgBoolean is the message of the TypeError [ERR_INVALID_ARG_TYPE] Node throws when a
+// bare value key (the JS value true) reaches path.resolve.
+var ErrPathArgBoolean = errors.New(`The "paths[0]" argument must be of type string. Received type boolean (true)`)
 
-// ErrPromptWithoutValue reports a bare --prompt. Outstanding parity deviation: the JS returns
-// boolean true and crashes at spawn or stdin. Reconcile before releasing a consuming command.
+// ErrPromptFileWithoutValue is a bare --prompt-file reaching path.resolve(true); the bridges
+// print its message and exit 2, as the JS does.
+var ErrPromptFileWithoutValue = ErrPathArgBoolean
+
+// ErrPromptWithoutValue reports a bare --prompt, which the bridges refuse (exit 2) where the JS
+// would run the model on the prompt "true" (a documented parity exception, PE-8).
 var ErrPromptWithoutValue = errors.New("no prompt: --prompt needs a value")
 
 // ReadPrompt mirrors readPrompt in lib/run-record.mjs. Sources in order: --prompt-file (read,
-// resolved from the working directory), --prompt, positional tokens joined by spaces, then
+// resolved from the working directory; a read failure has Node's fs message), --prompt, positional tokens joined by spaces, then
 // stdin when it is not a terminal (an empty pipe or /dev/null yields ""), else ErrNoPrompt.
 func ReadPrompt(opts Opts, positional []string, stdin *os.File) (string, error) {
 	if opts.Truthy("prompt-file") {
@@ -80,12 +84,15 @@ func ReadPrompt(opts Opts, positional []string, stdin *os.File) (string, error) 
 	return "", ErrNoPrompt
 }
 
+// readPromptFile is fs.readFileSync(path.resolve(file), "utf8"), failing with Node's message:
+// "ENOENT: no such file or directory, open '<abs>'", or "EISDIR: illegal operation on a
+// directory, read" for a directory.
 func readPromptFile(file string) (string, error) {
-	abs, err := filepath.Abs(file)
+	abs, err := nodefs.Resolve(file)
 	if err != nil {
-		return "", fmt.Errorf("resolve prompt file: %w", err)
+		return "", err
 	}
-	data, err := os.ReadFile(abs)
+	data, err := nodefs.ReadFile(abs)
 	if err != nil {
 		return "", err
 	}

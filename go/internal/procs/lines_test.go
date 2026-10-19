@@ -68,6 +68,10 @@ func TestLinesSplitting(t *testing.T) {
 		{"empty stream", nil, []string{}},
 		{"malformed utf-8", []string{"\xffa\xe2\x82\n"}, []string{"�a�"}},
 		{"multibyte split across writes", []string{"\xe2\x82", "\xac\n"}, []string{"€"}},
+		{"line separator", []string{"a\u2028b"}, []string{"a", "b"}},
+		{"paragraph separator", []string{"a\u2029b"}, []string{"a", "b"}},
+		{"line separator split across writes", []string{"a\xe2\x80", "\xa8b"}, []string{"a", "b"}},
+		{"cr then line separator", []string{"a\r", "\u2028b"}, []string{"a", "", "b"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

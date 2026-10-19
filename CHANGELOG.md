@@ -28,6 +28,18 @@
   logs differently, PE-5), the registry read exactly as `policy.mjs`
   reads it, and an explicitly empty `HOME` kept as Node keeps it. Entries carry `orch`'s version
   (PE-4). The new `incident` and `policy` parity groups run in CI.
+- Go port: `orch claude-exec` matches `bin/claude-exec.mjs` byte for byte when both read the same
+  registry (argv passed to `claude`, stdout JSON, `[claude]` progress lines, exit codes, run
+  records, incident lines), lines split as Node's readline splits them (U+2028 and U+2029 too),
+  including trailing bare value keys read as the JS `true` and Node's timer clamp. Documented
+  differences: a bare `--prompt` is refused with exit 2 (PE-8), no Node warnings (PE-9), claude is
+  killed 10 s after a signal it ignores (PE-10), SIGTERM/SIGINT are forwarded to claude and the run
+  is still reported (PE-11), the post-run usage refresh runs as a detached, bounded `orch usage
+  --refresh` that orch does not wait for, so it completes where the JS one exits first (PE-12;
+  `ORCH_NO_POST_RUN_REFRESH=1` turns it off for the parity harness), and U+FFFD where a UTF-16 cut leaves a lone surrogate (PE-1). A `--prompt-file`
+  that cannot be read prints Node's fs message (ENOENT, EISDIR, EACCES) and exits 2, as the JS does. The new `bridges`
+  parity group replays the captured claude stream-json fixtures through a scripted fake and runs
+  in CI.
 - Contract: no sleep-waiting while independent work exists; re-read the mailbox between waits.
 
 ## 0.4.7 — 2026-10-19

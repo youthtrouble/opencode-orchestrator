@@ -17,6 +17,7 @@ Implemented so far (the rest of `bin/*.mjs` is still JS-only):
 | `orch manifest create\|verify\|diff` | `bin/manifest.mjs` | Byte-identical output, exit codes and manifest files: the same walk (symlinks, FIFOs and other non-regular entries inside a walked directory are skipped and never opened; an explicit symlink argument is followed), UTF-16 key order and `manifest_sha256`. Uncaught JS errors print only their error line. |
 | `orch incident record\|list\|report\|share` | `bin/incident.mjs` | Byte-identical output, exit codes, incident log lines and share bundle: the same redaction (home directory, `/Users/<name>`, `/home/<name>`, emails, tokens, uuids, `ses_` ids, with JS white space and a 2000-unit cut), fingerprint (JS `toLowerCase`, final sigma included) and report order (V8's TimSort, `internal/jssort`, so ties and incomparable timestamps order as in Node). Appends to `~/.local/state/opencode/orchestrator/incidents.jsonl` like the mailbox does; an explicitly empty `HOME` is kept as Node keeps it (the log is then relative to the working directory and redaction uses an empty home), never replaced by the account's home. Entries carry `orch`'s version instead of the checkout's git HEAD (PE-4). `share` writes no `project` key and uploads nothing. |
 | `orch policy show\|set key=value...\|unattended [--cwd DIR]` | `bin/policy.mjs` | Byte-identical output, exit codes and `.orchestrator/policy.json`: the registry's `autonomy` (without `$comment`) overridden by the project file; `set` refuses `key=never` except `force_push`, and any `force_push` other than `never`. The registry is read as `JSON.parse` of the file, then `.autonomy`, as the JS does (Node's fs errors, a `SyntaxError`, a `TypeError` for `null`, no autonomy for any other shape); `set` has written its file when that fails. A `policy.json` holding an array makes `set` fail instead (PE-6). |
+| `orch claude-exec [--model M] [--effort E] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/claude-exec.mjs` | Byte-identical argv passed to `claude`, stdout JSON, `[claude]` progress lines, exit codes (0, 1, 2, 75), `.orchestrator/runs/*.json` record, incident lines and usage cache: the same option values (a trailing bare value key is the JS `true`: `--model` alone runs model `true`, `--timeout-min` alone is one minute), budget gate and refusal, event handling (lines split as readline splits them, U+2028 and U+2029 included; UTF-16 cuts; `tools_used` property-key quirks), stderr tail, timeout with Node's timer clamp, usage-limit path with its awaited refresh, and `CLAUDECODE` removed from claude's environment. Differences: a bare `--prompt` is refused (PE-8); no Node warnings (PE-9); claude is killed 10 s after a signal it ignores and its pipes are waited on for at most 10 s (PE-10); SIGTERM/SIGINT are forwarded to claude and the run is reported (PE-11); the post-run usage refresh runs detached and completes (PE-12); U+FFFD where a UTF-16 cut leaves a lone surrogate (PE-1). Uncaught JS errors print only their error line, after the progress lines printed so far. |
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness. The plugin does not call
 `orch` yet.
@@ -44,6 +45,7 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 |---|---|---|
 | `ORCH_HOME` | `~/.config/opencode/orchestrator` | The orchestrator tree (the JS `ROOT`). |
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
+| `ORCH_NO_POST_RUN_REFRESH` | unset | `1` stops `orch claude-exec` from starting its detached post-run usage refresh (PE-12). Set only by the parity harness. |
 | `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
 
 ## Checks
@@ -52,10 +54,10 @@ VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b
 cd go
 go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
-./parity/run.sh --only json,usage,mailbox,manifest,incident,policy   # chosen groups; ./parity/run.sh runs them all
+./parity/run.sh --only json,usage,mailbox,manifest,incident,policy,bridges   # chosen groups; ./parity/run.sh runs them all
 ```
 
-`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`, `incident` and `policy` parity groups on macOS and Linux
+`.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`, `incident`, `policy` and `bridges` parity groups on macOS and Linux
 with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare against Node
 when it is available; fixed byte expectations run even without Node.
 
@@ -67,7 +69,7 @@ design (PE-5).
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
 project directory containing `.git/`, with an environment of only `HOME`, `PATH`, `ORCH_HOME` and
-`ORCH_REGISTRY`. `PATH` is `parity/fakes` (stand-ins for `claude`, `codex`, `opencode` and `security` that
+`ORCH_REGISTRY` (plus `ORCH_NO_POST_RUN_REFRESH=1` in the bridge cases, PE-12). `PATH` is `parity/fakes` (stand-ins for `claude`, `codex`, `opencode` and `security` that
 fail unless a case scripts them, so no case reads the real keychain or calls a real endpoint), then the directories of `node` and `sqlite3`. Exit codes, stdout,
 stderr and every file under the project `.orchestrator/` and the HOME state dir must match.
 
@@ -105,6 +107,23 @@ Groups:
   `testdata/jssort/gen.mjs` that must reproduce `orders.json` on Node 26 or later. Normalised: a new entry's `at` and
   `version` (PE-4), its `project` when it is the sandbox's temp directory name, the receipt's
   `at`, the bundle's `generated_at` and the HOME prefix of the log path in the usage line.
+- `bridges`: `orch claude-exec` against `bin/claude-exec.mjs`, with `parity/fakes/claude` scripted
+  per case (`$HOME/fake-claude/case` names files the fake prints as stdout and stderr, its exit
+  code, or a signal it kills itself with or a sleep; it logs its argv, one argument per line, to
+  `$HOME/fake-log/claude-argv.txt`, which is compared as a file). It replays every fixture in
+  `testdata/claude/stream-json/` and covers every flag, the four prompt sources and their file
+  errors, `--help`, `--quiet`, the gate (red refusal, `--force`, a fable model against a red Fable
+  weekly window, unknown usage, a codex that cannot be spawned), the usage-limit path with a
+  scripted refresh and with a failing one, a claude killed by a signal, a stderr tail of more than
+  3 lines, the timeout (PE-9), each trailing bare value key, the crashes (bare `--cwd`,
+  `--json-schema` and `--add-dir`, a missing schema file, spawn ENOENT and EACCES, a missing
+  `--cwd`, a null event or block, non-iterable content, non-string text or result, bare `--resume`
+  on the normal path), odd event shapes, events holding raw U+2028 and U+2029, and PE-8 and PE-1
+  (the three cuts inside an emoji) as asserted differences. Every case seeds a
+  fresh green usage cache unless it needs another, and only the usage-limit cases script the
+  codex fake. Normalised: `started_at`, `duration_ms`, the run-record stamp (in paths and file
+  names), the seconds in the `done` line, the sandbox project path (`$PROJECT`), a new incident's
+  `at`, `version` and temp-directory `project`, and a re-collected cache's `generated_at`.
 - `policy`: every `orch policy` command against `bin/policy.mjs` over override files of every
   shape (none, unparsable, BOM, `null`, string, array, own `__proto__`, a directory), `--cwd` in
   every position, refusals and `force_push`, the TypeErrors of a primitive `policy.json`, and
@@ -113,7 +132,9 @@ Groups:
   `ORCH_REGISTRY`). Nothing is normalised.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
-(`extraFiles`) and declare that it ends in an uncaught JS exception (`crash`, below).
+(`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and
+declare that it ends in an uncaught JS exception (`crash`, below), possibly after progress lines
+(`progress`).
 
 ## Crash output and parity exceptions
 
@@ -136,11 +157,18 @@ prints only the error line:
   `process.cwd()` does, not `$PWD`.
 - C2, malformed hand-edited state (a message whose `kind` is not a string, `refs` missing, ...):
   both stderrs must contain a line starting `TypeError: `; V8's wording is not reproduced.
+- A crash after progress (`orch claude-exec`, which logs `[claude] ...` lines before it can fail):
+  `orch` prints the progress lines, then the error line. Node's stderr must begin with exactly
+  those progress lines and print no further one; the rest is compared as C1 or C2. Where the JS
+  dies inside its line handler while claude still runs (a `null` event, say), `orch` also sends
+  claude SIGTERM before it exits, instead of leaving it running.
 
 The other documented differences, each asserted by its own parity case:
 
 - PE-1: a UTF-16 slice that splits a surrogate pair (the reply subject cut at 140 units, the inbox
-  body at 400, an incident summary at 300, redacted text at 2000, the fingerprint input at 200) or a
+  body at 400, an incident summary at 300, redacted text at 2000, the fingerprint input at 200;
+  in `orch claude-exec` the result error text at 200, the incident summary at 160 and the run
+  record's `prompt_head` at 400, which reach stdout, the run record and the incident) or a
   string message spread into one key per code unit gives U+FFFD in Go. Hashes are identical (Node
   hashes a lone surrogate as U+FFFD). With an empty `HOME` the JS home pattern is empty and
   matches between the halves of every astral character, splitting them the same way. Text
@@ -175,6 +203,39 @@ The other documented differences, each asserted by its own parity case:
 - PE-7: `toLowerCase` of code points Go's Unicode 15.0 tables do not know, or whose case
   properties changed since (U+0295, U+1171E), follows Go, not Node's newer ICU data. The test of
   `jsstr.ToLower` against every code point lists them (196 with Node v26.5.1 / Unicode 17.0).
+- PE-8: `orch claude-exec` with a trailing bare `--prompt` prints `no prompt: --prompt needs a
+  value` and exits 2 before the budget gate. The JS runs claude on the prompt `true` (a real model
+  turn), then crashes hashing it on the normal path, or prints its usage-limit JSON. Neither the
+  worker nor `flip run` passes a bare `--prompt`; they pipe the brief on stdin. Accepted by the
+  human (51e9d79b).
+- PE-9: `orch claude-exec` prints no Node process warnings. With a `--timeout-min` whose delay Node
+  clamps to 1 ms (NaN, below 1 ms, above 2147483647 ms, e.g. `0`, `-1`, `abc`, `35792`), Node 26
+  prints a `TimeoutNaNWarning`, `TimeoutNegativeWarning` or `TimeoutOverflowWarning` on stderr;
+  `orch` applies the same 1 ms delay silently. The parity cases drop those lines from the JS stderr.
+- PE-10: after `orch claude-exec` signals claude (the timeout, a forwarded signal, a crash), it
+  sends SIGKILL if claude has not exited 10 s later, and once claude has exited it waits at most
+  10 s for its stdout and stderr to close (a grandchild may hold them). The JS sends one SIGTERM
+  and waits for `close` forever. No output changes; a signalled claude still has `exit_code: null`.
+  Accepted by the human (51e9d79b).
+- PE-11: SIGTERM and SIGINT sent to `orch claude-exec` are forwarded to claude, and the run then
+  ends as any run does once claude closes: for a claude the signal killed, `exit_code: null`, the
+  `claude exited null: ...` error, a run record, the incident, the JSON and exit 1. The JS dies at once and leaves claude running. claude stays in
+  the bridge's process group, so a signal to the whole group reaches it in both runtimes.
+- PE-12: after a normal run the JS starts a usage refresh it never awaits; `process.exit` follows
+  in the same tick, before any of its awaits resolve, so it never writes `usage.json` (it only
+  runs a token lookup and spawns a `codex app-server` that dies with it). `orch claude-exec`
+  makes the refresh real (plan 3.10 item 3, kept by the human in 51e9d79b): once the result is
+  printed it starts `orch usage --refresh` in a session of its own, stdio on `/dev/null`, and
+  exits without waiting, so its exit code and timing are unchanged. The refresh is bounded by the
+  timeouts of the feeds it reads (security 30 s, the Claude endpoint 15 s, codex app-server
+  20 s, sqlite3 5 s, `opencode auth list` 15 s) and writes `usage.json` as `orch usage
+  --refresh` does (which needs a readable registry). The usage-limit path is unchanged: both runtimes await their refresh there.
+  The parity harness sets `ORCH_NO_POST_RUN_REFRESH=1` for the bridge cases, so no refresh
+  writes into a sandbox after its files are compared. A `usage.json` written during a run comes
+  from the budget gate, which both runtimes run alike when they read the same registry: with an
+  empty `HOME` and no `ORCH_REGISTRY`, the JS reads its own checkout's `models.json` and its gate
+  collects and writes a failed reading, while `orch` finds no registry under `ORCH_HOME` and
+  proceeds without collecting (see Environment).
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
 
@@ -229,3 +290,7 @@ rng.randrange(2) else "t"+str(i), "component": "c", "kind": "note", "summary": "
 `node testdata/jssort/gen.mjs`: the sha256 of each order V8 produces.
 `testdata/jsstr/lower.json` is generated by `node testdata/jsstr/gen-lower.mjs`: the
 `toLowerCase` of every code point and the final-sigma context sets as Node observes them.
+
+`testdata/claude/stream-json/` holds redacted `claude -p --output-format stream-json` captures
+(Claude Code 2.1.287) and three synthetic cases built from them by `gen.mjs`; how they were
+captured, redacted (`testdata/redact.mjs`) and generated is in its `PROVENANCE.md`.

@@ -1,5 +1,35 @@
 #!/bin/sh
 # Parity fake. It sits first on PATH so no parity case can reach the real CLI. A case that
 # needs this CLI must script it; reaching this unscripted fake is a test failure.
+#
+# Scripted mode: when $HOME/fake-claude/case names a case, each argv element is appended as
+# one line to $HOME/fake-log/claude-argv.txt, then $HOME/fake-claude/<case>.jsonl is printed
+# on stdout and <case>.stderr on stderr (each if present), and the fake exits with the code in
+# <case>.exit. Instead of exiting, <case>.signal makes it kill itself with that signal (so
+# claude-exec sees a close code of null) and <case>.sleep makes it become /bin/sleep for that
+# many seconds (so it is still running when the bridge signals it). Shell builtins only: PATH
+# holds no coreutils.
+script="$HOME/fake-claude"
+if [ -f "$script/case" ]; then
+  IFS= read -r case < "$script/case"
+  for arg in "$@"; do printf '%s\n' "$arg" >> "$HOME/fake-log/claude-argv.txt"; done
+  if [ -f "$script/$case.jsonl" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$script/$case.jsonl"
+  fi
+  if [ -f "$script/$case.stderr" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line" >&2; done < "$script/$case.stderr"
+  fi
+  if [ -f "$script/$case.signal" ]; then
+    IFS= read -r sig < "$script/$case.signal"
+    kill "-$sig" $$
+  fi
+  if [ -f "$script/$case.sleep" ]; then
+    IFS= read -r seconds < "$script/$case.sleep"
+    exec /bin/sleep "$seconds"
+  fi
+  code=0
+  if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
+  exit "$code"
+fi
 echo "parity fake $(basename "$0"): not scripted for this case (argv: $*)" >&2
 exit 97

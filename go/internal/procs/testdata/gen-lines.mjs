@@ -47,6 +47,24 @@ const cases = [
   ["incomplete-cut-by-ascii-across-writes", [bytes([0xf0, 0x9f]), bytes([0x98]), "z\n"]],
   ["bom-kept", [bytes([0xef, 0xbb, 0xbf], "a\n")]],
   ["nul-and-controls", [bytes("a", [0x00], "\tb\x0bc\x0cd\n")]],
+  ["line-separator", ["a b"]],
+  ["paragraph-separator", ["a b"]],
+  ["line-separator-then-lf", ["a \nb"]],
+  ["lf-then-line-separator", ["a\n b"]],
+  ["cr-then-line-separator", ["a\r b"]],
+  ["line-separator-then-cr", ["a \rb"]],
+  ["line-separator-then-crlf", ["a \r\nb"]],
+  ["cr-then-line-separator-across-writes", ["a\r", " b"]],
+  ["trailing-line-separator", ["a "]],
+  ["only-line-separator", [" "]],
+  ["line-separator-split-after-lead", [bytes("a", [0xe2]), bytes([0x80, 0xa8], "b")]],
+  ["line-separator-split-before-last", [bytes("a", [0xe2, 0x80]), bytes([0xa8], "b")]],
+  ["paragraph-separator-split-three-ways", [bytes("a", [0xe2]), bytes([0x80]), bytes([0xa9], "b")]],
+  ["line-separator-split-then-lf", [bytes("a", [0xe2, 0x80]), bytes([0xa8], "\nb")]],
+  ["line-separator-cut-at-end", [bytes("a", [0xe2, 0x80])]],
+  ["line-separator-lead-after-invalid", [bytes("a", [0xe2, 0xe2, 0x80, 0xa8], "b")]],
+  ["line-separator-in-json-event", ['{"type":"assistant","text":"x y"}\n']],
+  ["other-unicode-spaces-kept", ["a\u0085b‧c‪d\u000be\n"]],
 ];
 
 async function linesOf(chunks) {

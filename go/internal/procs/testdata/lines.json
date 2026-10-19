@@ -356,5 +356,194 @@
     "lines": [
       "a\u0000\tb\u000bc\fd"
     ]
+  },
+  {
+    "name": "line-separator",
+    "chunks": [
+      "61e280a862"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "paragraph-separator",
+    "chunks": [
+      "61e280a962"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-then-lf",
+    "chunks": [
+      "61e280a80a62"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "lf-then-line-separator",
+    "chunks": [
+      "610ae280a862"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "cr-then-line-separator",
+    "chunks": [
+      "610de280a862"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-then-cr",
+    "chunks": [
+      "61e280a80d62"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-then-crlf",
+    "chunks": [
+      "61e280a80d0a62"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "cr-then-line-separator-across-writes",
+    "chunks": [
+      "610d",
+      "e280a862"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "trailing-line-separator",
+    "chunks": [
+      "61e280a8"
+    ],
+    "lines": [
+      "a"
+    ]
+  },
+  {
+    "name": "only-line-separator",
+    "chunks": [
+      "e280a8"
+    ],
+    "lines": [
+      ""
+    ]
+  },
+  {
+    "name": "line-separator-split-after-lead",
+    "chunks": [
+      "61e2",
+      "80a862"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-split-before-last",
+    "chunks": [
+      "61e280",
+      "a862"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "paragraph-separator-split-three-ways",
+    "chunks": [
+      "61e2",
+      "80",
+      "a962"
+    ],
+    "lines": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-split-then-lf",
+    "chunks": [
+      "61e280",
+      "a80a62"
+    ],
+    "lines": [
+      "a",
+      "",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-cut-at-end",
+    "chunks": [
+      "61e280"
+    ],
+    "lines": [
+      "a"
+    ]
+  },
+  {
+    "name": "line-separator-lead-after-invalid",
+    "chunks": [
+      "61e2e280a862"
+    ],
+    "lines": [
+      "a�",
+      "b"
+    ]
+  },
+  {
+    "name": "line-separator-in-json-event",
+    "chunks": [
+      "7b2274797065223a22617373697374616e74222c2274657874223a2278e280a879227d0a"
+    ],
+    "lines": [
+      "{\"type\":\"assistant\",\"text\":\"x",
+      "y\"}"
+    ]
+  },
+  {
+    "name": "other-unicode-spaces-kept",
+    "chunks": [
+      "61c28562e280a763e280aa640b650a"
+    ],
+    "lines": [
+      "ab‧c‪d\u000be"
+    ]
   }
 ]
