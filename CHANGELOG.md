@@ -7,9 +7,12 @@
   every 5 s (lanes, events, wake channels, redispatch, conductor flip evaluation, all self-exec'd
   on `orch`) and stops through `supervisor.stop`. New `supervisor` parity cases run both daemons
   for one tick; PE-17 (a missing `opencode` does not stop `orch supervisor serve`) is asserted.
-  Further serve cases cover the stop file at the first loop, live-pid lanes, a `null` config and
-  the conductor flip evaluation's non-launching paths; conductor and redispatch launches are not
-  yet compared.
+  Further serve cases cover the stop file at the first loop, live-pid lanes, a `null` config,
+  running lanes (quiet and check), the conductor flip evaluation (each case now required to reach
+  it, with `decide` over a seeded usage cache), conductor launches (paused relaunch, pending launch,
+  `decide` flip, finished-early `--resume`, never-started) and a redispatch launch with their
+  runners settled, the `claude-resume` channel, restarts across runtimes and an opt-in slow case
+  (`ORCH_PARITY_SLOW=1`).
 - Go port: `orch supervisor status|stop|ack` matches `bin/supervisor.mjs` byte for byte (stdout,
   stderr, exit codes, `.orchestrator/supervisor-acks.json`), every state and acks shape included
   (Object.prototype names acknowledged, `__proto__` included, as in the JS). The supervisor's lane
