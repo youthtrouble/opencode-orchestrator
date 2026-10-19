@@ -260,6 +260,30 @@ func tierEntry(registry *jsjson.Object, vendor, tier string) *RoleEntry {
 	}
 }
 
+// ModelName is the JS `v.model.split("/")[1]` of a role entry, read from the registry tier
+// because the entry's Model cannot tell a missing model from an empty one: "undefined" for a
+// model without a slash, the JS TypeError for a model that is not a string.
+func ModelName(registry *jsjson.Object, e *RoleEntry) (string, error) {
+	tier := jsjson.Path(registry, "vendors", e.Vendor, "tiers", e.Tier)
+	raw, present := jsjson.Lookup(tier, "opencode")
+	switch model := raw.(type) {
+	case string:
+		_, after, found := strings.Cut(model, "/")
+		if !found {
+			return "undefined", nil
+		}
+		name, _, _ := strings.Cut(after, "/")
+		return name, nil
+	case nil:
+		if present {
+			return "", jsjson.CannotReadOfNull("split")
+		}
+		return "", &jsjson.TypeError{Message: "Cannot read properties of undefined (reading 'split')"}
+	default:
+		return "", &jsjson.TypeError{Message: "v.model.split is not a function"}
+	}
+}
+
 func stringAt(v any, key string) string {
 	s, _ := jsjson.Path(v, key).(string)
 	return s

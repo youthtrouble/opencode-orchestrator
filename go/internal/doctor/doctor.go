@@ -12,6 +12,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
 )
 
@@ -210,7 +211,11 @@ func (c *checks) feedsAndRouting() error {
 	} else {
 		c.pushDetail(Fail, "Codex usage feed", jsjson.Path(codex, "error"))
 	}
-	c.pushDetail(OK, "routing", routingSummary(r))
+	summary, err := routingSummary(r)
+	if err != nil {
+		return err
+	}
+	c.pushDetail(OK, "routing", summary)
 	return nil
 }
 
@@ -233,20 +238,20 @@ func field(v any, key string) string {
 }
 
 // routingSummary is `role=<model after "/">@<via>` or `role=PAUSED`, joined by one space.
-func routingSummary(r *usage.Routing) string {
+func routingSummary(r *usage.Routing) (string, error) {
 	parts := make([]string, 0, len(r.Resolved.Roles))
 	for _, a := range r.Resolved.Roles {
 		if a.Entry == nil {
 			parts = append(parts, a.Role+"=PAUSED")
 			continue
 		}
-		model := "undefined" // model.split("/")[1] of a model without a slash
-		if _, after, found := strings.Cut(a.Entry.Model, "/"); found {
-			model, _, _ = strings.Cut(after, "/")
+		model, err := routing.ModelName(r.Registry, a.Entry)
+		if err != nil {
+			return "", err
 		}
 		parts = append(parts, a.Role+"="+model+"@"+a.Entry.Via)
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, " "), nil
 }
 
 var mentionsOrchestrator = regexp.MustCompile(`orchestrator`)

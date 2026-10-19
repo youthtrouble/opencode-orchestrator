@@ -5,9 +5,9 @@ package registry
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
 // NotObjectError reports a registry file whose top-level JSON value is not an object.
@@ -19,11 +19,13 @@ func (e *NotObjectError) Error() string {
 	return fmt.Sprintf("registry: %s: top-level value is not an object", e.File)
 }
 
-// Load mirrors loadRegistry in lib/usage.mjs: JSON.parse of the whole file.
+// Load mirrors loadRegistry in lib/usage.mjs: JSON.parse of the whole file. A read failure is
+// worded as Node words it ("ENOENT: no such file or directory, open '<file>'"), because
+// commands that report the routing error (doctor's FAIL usage/routing row) print it verbatim.
 func Load(file string) (*jsjson.Object, error) {
-	data, err := os.ReadFile(file)
+	data, err := nodefs.ReadFile(file)
 	if err != nil {
-		return nil, fmt.Errorf("registry: %w", err)
+		return nil, err
 	}
 	value, err := jsjson.Unmarshal(data)
 	if err != nil {

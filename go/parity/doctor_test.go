@@ -77,16 +77,47 @@ func (h *harness) testDoctor(t *testing.T) {
 			}
 			js, orch := h.runPair(t, inv)
 			js.stdout = maskJSUnitTests(t, js.stdout)
-			orch.stdout = maskOrchRows(t, orch.stdout, filepath.Dir(h.orchJS))
+			orch.stdout = maskOrchRows(t, orch.stdout, filepath.Dir(h.orchJS), orchSelfTestRow)
 			compareOutcomes(t, js, orch)
 		})
 	}
+	t.Run("registry-missing", func(t *testing.T) {
+		t.Parallel()
+		h.testDoctorRegistryMissing(t, healthy)
+	})
+}
+
+// testDoctorRegistryMissing runs doctor over a copied JS tree without models.json (the JS reads
+// <ROOT>/models.json whatever ORCH_REGISTRY says). Both print Node's ENOENT line as the
+// usage/routing failure.
+func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed) {
+	root := h.jsTreeWithRegistry(t, registryMissing)
+	inv := invocation{
+		js:        []string{h.node, filepath.Join(root, "bin", "doctor.mjs")},
+		orch:      []string{h.orchBin, "doctor"},
+		seed:      healthy,
+		env:       []string{"ORCH_HOME=" + root, "ORCH_REGISTRY=" + filepath.Join(root, "models.json")},
+		normalize: normalizeGeneratedAt,
+	}
+	js, orch := h.runPair(t, inv)
+	// PE-18: the JS unit tests need models.json and fail; orch's self-test fails on the same read.
+	if !jsUnitTestsFailRow.MatchString(js.stdout) {
+		t.Errorf("js: no failing unit tests row in %q", js.stdout)
+	}
+	js.stdout = jsUnitTestsFailRow.ReplaceAllString(js.stdout, "<unit tests>")
+	enoent := "ENOENT: no such file or directory, open '" + filepath.Join(root, "models.json") + "'"
+	orch.stdout = maskOrchRows(t, orch.stdout, filepath.Dir(root), "FAIL orch self-test  —  routing: "+enoent+"\n")
+	if want := "FAIL usage/routing  —  " + enoent + "\n"; !strings.Contains(js.stdout, want) {
+		t.Errorf("js: no %q in %q", want, js.stdout)
+	}
+	compareOutcomes(t, js, orch)
 }
 
 var (
-	jsUnitTestsRow  = regexp.MustCompile(`(?m)^OK   unit tests  —  pass \d+$`)
-	orchBinaryRow   = regexp.MustCompile(`(?m)^OK   orch binary  —  \S.* at /\S*\n`)
-	orchSelfTestRow = "OK   orch self-test  —  json, routing, executable\n"
+	jsUnitTestsRow     = regexp.MustCompile(`(?m)^OK   unit tests  —  pass \d+$`)
+	jsUnitTestsFailRow = regexp.MustCompile(`(?m)^FAIL unit tests  —  fail [1-9]\d*$`)
+	orchBinaryRow      = regexp.MustCompile(`(?m)^OK   orch binary  —  \S.* at /\S*\n`)
+	orchSelfTestRow    = "OK   orch self-test  —  json, routing, executable\n"
 )
 
 // maskJSUnitTests requires the JS `node --test` row to pass and masks it (PE-18).
@@ -98,12 +129,12 @@ func maskJSUnitTests(t *testing.T, stdout string) string {
 	return jsUnitTestsRow.ReplaceAllString(stdout, "<unit tests>")
 }
 
-// maskOrchRows requires orch's PE-18 rows (its binary, its self-test and a Go unit-test row
-// not run, there being no go on the parity PATH), removes the first two and masks the third.
-func maskOrchRows(t *testing.T, stdout, repo string) string {
+// maskOrchRows requires orch's PE-18 rows (its binary, selfTestRow and a Go unit-test row not
+// run, there being no go on the parity PATH), removes the first two and masks the third.
+func maskOrchRows(t *testing.T, stdout, repo, selfTestRow string) string {
 	t.Helper()
 	notRun := "WARN unit tests  —  not run (no go toolchain or module at " + filepath.Join(repo, "go") + ")"
-	for _, want := range []string{orchSelfTestRow, notRun} {
+	for _, want := range []string{selfTestRow, notRun} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("orch: no %q in %q", want, stdout)
 		}
@@ -112,6 +143,6 @@ func maskOrchRows(t *testing.T, stdout, repo string) string {
 		t.Errorf("orch: no orch binary row in %q", stdout)
 	}
 	stdout = orchBinaryRow.ReplaceAllString(stdout, "")
-	stdout = strings.Replace(stdout, orchSelfTestRow, "", 1)
+	stdout = strings.Replace(stdout, selfTestRow, "", 1)
 	return strings.Replace(stdout, notRun, "<unit tests>", 1)
 }

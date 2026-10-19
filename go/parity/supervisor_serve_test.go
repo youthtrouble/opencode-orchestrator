@@ -819,9 +819,10 @@ func reapClaudeExec(t *testing.T, side string, sb sandbox) {
 		}
 		if time.Now().After(deadline) {
 			for _, pid := range pids {
-				_ = syscall.Kill(-pid, syscall.SIGKILL)
+				_ = syscall.Kill(-pid, syscall.SIGKILL) // ESRCH when pid leads no group
+				_ = syscall.Kill(pid, syscall.SIGKILL)
 			}
-			t.Errorf("%s: claude-exec %v still running after %v; its group was killed", side, pids, claudeExecExitTimeout)
+			t.Errorf("%s: claude-exec %v still running after %v; it and its group were killed", side, pids, claudeExecExitTimeout)
 			return
 		}
 		time.Sleep(50 * time.Millisecond)

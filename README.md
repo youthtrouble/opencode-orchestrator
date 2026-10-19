@@ -479,9 +479,9 @@ node --test tests/*.test.mjs
 ## Go runtime (in progress)
 
 `go/` holds `orch`, a static Go binary that will replace `orchestrator/bin/*.mjs` one script at a
-time. The JS runtime stays the default: the plugin, the commands and the bridges do not call
-`orch` yet. Both runtimes share the same state, including the usage cache, so the two can run on
-the same machine. Implemented so far: `orch version`, `orch usage [--refresh] [--json]` (output
+time. The JS runtime stays the default: the plugin, the commands and the bridges do not call `orch`
+yet. Both runtimes share the same state, including the usage cache, so the two can run on the same
+machine. Implemented so far: `orch version`, `orch usage [--refresh] [--json]` (output
 byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
 plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
 post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
@@ -489,18 +489,22 @@ create|verify|diff`, `orch incident record|list|report|share` (appending to the 
 `orch policy show|set|unattended`, `orch flip decide|run|pause|gate|status` (the same
 `.orchestrator/flip.json`; `flip run` adds `.orchestrator/` to `.git/info/exclude`, writes the
 continue brief and launches the conductor as `orch worker start --detach`, or records a pending
-launch when the lane is locked), `orch supervisor start|serve|status|stop|ack` (the same `.orchestrator/supervisor-state.json`,
-`supervisor-acks.json` and `supervisor.lock`; `serve` relaunches through `orch flip`, `orch worker`
-and `orch claude-exec`), `orch worker start|status|stop` (`start` runs `orch <harness>-exec` in the foreground, or with `--detach` launches itself as a detached, kept-awake runner logging to `.orchestrator/logs/`), and the three bridges `orch claude-exec`, `orch codex-exec`
-and `orch opencode-exec` (the same `claude -p`, `codex exec` and `opencode run` command lines,
-result JSON and run records; `codex-exec` still passes `--approve-for-me` with the default
-`workspace-write` sandbox, which codex-cli 0.162.1 rejects, exactly as `bin/codex-exec.mjs`
-does), each byte-identical to its `bin/*.mjs` script when
-both read the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. `orch doctor` runs
-the `doctor.mjs` checks with the same rows, plus its own binary and self-test rows, and runs the
-Go tests instead of `node --test` (PE-18). `kickoff.mjs` and `watch.mjs` are not ported yet, and the plugin still calls the JS scripts.
-[go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness
-that diffs every implemented command against the JS.
+launch when the lane is locked), `orch supervisor start|serve|status|stop|ack` (the same
+`.orchestrator/supervisor-state.json`, `supervisor-acks.json` and `supervisor.lock`; `serve`
+relaunches through `orch flip`, `orch worker` and `orch claude-exec`), `orch worker
+start|status|stop` (`start` runs `orch <harness>-exec` in the foreground, or with `--detach`
+launches itself as a detached, kept-awake runner logging to `.orchestrator/logs/`), and the three
+bridges `orch claude-exec`, `orch codex-exec` and `orch opencode-exec` (the same `claude -p`, `codex
+exec` and `opencode run` command lines, result JSON and run records; `codex-exec` still passes
+`--approve-for-me` with the default `workspace-write` sandbox, which codex-cli 0.162.1 rejects,
+exactly as `bin/codex-exec.mjs` does), each byte-identical to its `bin/*.mjs` script when both read
+the same registry (`ORCH_HOME`, `ORCH_REGISTRY`), apart from the documented exceptions. `orch
+doctor` runs the `doctor.mjs` checks with the same rows, plus its own binary and self-test rows, and
+runs the Go tests instead of `node --test` (PE-18). `orch watch [--cwd DIR] [--follow] [--interval
+20]` draws the `watch.mjs` dashboard line for line (mirroring its crash on a `flip.json` that holds
+only a human gate). `kickoff.mjs` is not ported yet, and the plugin still calls the JS scripts.
+[go/README.md](go/README.md) covers build steps, exact command behaviour and the parity harness that
+diffs every implemented command against the JS.
 
 ## Design notes
 

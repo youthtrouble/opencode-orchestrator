@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+- Go port: `orch watch [--cwd DIR] [--follow] [--interval 20]` mirrors `bin/watch.mjs` line for
+  line, including its two latent defects (a `flip.json` holding only a human gate crashes the
+  render; `## Next action (exact)` prints `next: (exact)`), both recorded as incidents. New
+  `watch` parity group (single renders and `--follow`), run in CI. The Node timer clamp moves to
+  `procs.TimerDelay`, shared by the bridges and watch.
 - Go port: `orch doctor` mirrors `bin/doctor.mjs` row for row (binaries, logins, usage feeds and
   routing, opencode config, plugin, agents, plugin log) and exit code; PE-18 adds `orch binary`
   and `orch self-test` rows and runs `go test ./...` for the `unit tests` row. The parity fakes
-  gain a canned-answer mode; new `doctor` parity group, run in CI.
+  gain a canned-answer mode; new `doctor` parity group, run in CI. Registry read failures are
+  now worded as Node's (`ENOENT: no such file or directory, open '<file>'`) in every `orch`
+  command, and a role tier without a string model fails doctor's `usage/routing` row with the JS
+  TypeError; new `doctor/registry-missing` parity case.
 - Go port: `orch supervisor start|serve` replace `bin/supervisor.mjs start|serve`: `start` launches
   a detached, kept-awake `orch supervisor serve`; `serve` claims the same `supervisor.lock`, ticks
   every 5 s (lanes, events, wake channels, redispatch, conductor flip evaluation, all self-exec'd

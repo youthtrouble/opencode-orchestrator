@@ -66,7 +66,10 @@ func checkRouting(registryFile string) error {
 	if err != nil {
 		return err
 	}
-	usage, _ := value.(*jsjson.Object)
+	usage, ok := value.(*jsjson.Object)
+	if !ok {
+		return fmt.Errorf("embedded green usage is not an object")
+	}
 	bothNative := map[string]bool{routing.Anthropic: true, routing.OpenAI: true}
 	resolved := routing.ResolveRoles(usage, reg, time.Now(), bothNative)
 	for _, a := range resolved.Roles {

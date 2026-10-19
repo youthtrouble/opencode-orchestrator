@@ -44,7 +44,9 @@ func TestLoadErrors(t *testing.T) {
 	if _, err := Load(write("broken.json", `{"roles":`)); err == nil || !strings.Contains(err.Error(), "broken.json") {
 		t.Errorf("broken registry: error = %v, want a parse error naming the file", err)
 	}
-	if _, err := Load(filepath.Join(dir, "absent.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("missing registry: error = %v, want not-exist", err)
+	absent := filepath.Join(dir, "absent.json")
+	_, err := Load(absent)
+	if !errors.Is(err, os.ErrNotExist) || err.Error() != "ENOENT: no such file or directory, open '"+absent+"'" {
+		t.Errorf("missing registry: error = %v, want Node's ENOENT text", err)
 	}
 }

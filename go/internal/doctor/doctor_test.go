@@ -83,12 +83,19 @@ func greenRouting(t *testing.T) *usage.Routing {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry, err := jsjson.Unmarshal([]byte(`{"vendors":{
+		"anthropic":{"tiers":{"frontier":{"opencode":"anthropic/fable-5.1"}}},
+		"openai":{"tiers":{"mini":{"opencode":"noslash"}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return &usage.Routing{
-		Usage: value.(*jsjson.Object),
+		Usage:    value.(*jsjson.Object),
+		Registry: registry.(*jsjson.Object),
 		Resolved: routing.Resolved{Roles: []routing.Assignment{
-			{Role: "planner", Entry: &routing.RoleEntry{Model: "anthropic/fable-5.1", Via: "claude-code"}},
+			{Role: "planner", Entry: &routing.RoleEntry{Vendor: "anthropic", Tier: "frontier", Model: "anthropic/fable-5.1", Via: "claude-code"}},
 			{Role: "coder", Entry: nil},
-			{Role: "utility", Entry: &routing.RoleEntry{Model: "noslash", Via: "opencode"}},
+			{Role: "utility", Entry: &routing.RoleEntry{Vendor: "openai", Tier: "mini", Model: "noslash", Via: "opencode"}},
 		}},
 	}
 }
@@ -138,7 +145,7 @@ OK   no plugin errors in recent log
 }
 
 func TestNothingInstalledFailsEveryProbe(t *testing.T) {
-	m := &machine{routeErr: errors.New("registry: models.json: ENOENT")}
+	m := &machine{routeErr: errors.New("ENOENT: no such file or directory, open '/h/models.json'")}
 	rows := Check(m.deps())
 	want := `FAIL opencode missing  —  install it
 FAIL codex missing  —  install it
@@ -149,7 +156,7 @@ WARN codex not logged in  —  run: codex login
 WARN claude auth status unclear
 WARN opencode: OpenAI not connected  —  run: opencode auth login openai --method chatgpt-token-sharing
 OK   opencode: anthropic not native (expected; Claude runs via claude-exec bridge)
-FAIL usage/routing  —  registry: models.json: ENOENT
+FAIL usage/routing  —  ENOENT: no such file or directory, open '/h/models.json'
 FAIL opencode.jsonc missing
 FAIL plugin not listed  —  check ~/.config/opencode/plugins/orchestrator.ts and the log
 FAIL opencode debug agents
@@ -203,6 +210,35 @@ func TestUsageRowsBeforeAThrowAreKept(t *testing.T) {
 		"FAIL usage/routing  —  Cannot read properties of undefined (reading 'pct')\n"
 	if got != want {
 		t.Errorf("rows:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A role whose tier declares no string model makes the JS `v.model.split` throw.
+func TestRoutingRowThrowsForAModelThatIsNotAString(t *testing.T) {
+	for _, c := range []struct {
+		name, tier, want string
+	}{
+		{"missing", `{}`, "Cannot read properties of undefined (reading 'split')"},
+		{"null", `{"opencode":null}`, "Cannot read properties of null (reading 'split')"},
+		{"number", `{"opencode":5}`, "v.model.split is not a function"},
+		{"empty", `{"opencode":""}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := healthy(t)
+			tier, err := jsjson.Unmarshal([]byte(c.tier))
+			if err != nil {
+				t.Fatal(err)
+			}
+			jsjson.Path(m.routing.Registry, "vendors", "openai", "tiers").(*jsjson.Object).Set("mini", tier)
+			got := lines(Check(m.deps())[11:12])
+			want := "FAIL usage/routing  —  " + c.want + "\n"
+			if c.want == "" {
+				want = "OK   routing  —  planner=fable-5.1@claude-code coder=PAUSED utility=undefined@opencode\n"
+			}
+			if got != want {
+				t.Errorf("row %q, want %q", got, want)
+			}
+		})
 	}
 }
 

@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"regexp"
@@ -73,22 +72,14 @@ func resolvePath(v any) (string, error) {
 	return abs, nil
 }
 
-// maxTimerMs is Node's TIMEOUT_MAX: setTimeout runs a delay above it, below 1 or NaN after 1 ms.
-const maxTimerMs = math.MaxInt32
-
 // timeoutDelay is the delay Node gives setTimeout for
-// `Number(opts["timeout-min"] || defaultMinutes) * 60000` milliseconds: 1 ms when that is NaN,
-// below 1 or above maxTimerMs. Node also prints a warning for the clamp; orch does not (PE-9).
+// `Number(opts["timeout-min"] || defaultMinutes) * 60000` milliseconds (procs.TimerDelay).
 func timeoutDelay(timeoutMin any, defaultMinutes float64) time.Duration {
 	minutes := defaultMinutes
 	if jsjson.Truthy(timeoutMin) {
 		minutes = jsjson.ToNumber(timeoutMin)
 	}
-	ms := minutes * 60000
-	if !(ms >= 1 && ms <= maxTimerMs) {
-		ms = 1
-	}
-	return time.Duration(ms * float64(time.Millisecond))
+	return procs.TimerDelay(minutes * 60000)
 }
 
 // refuse is the budget-red refusal every bridge makes the same way: an incident naming the
