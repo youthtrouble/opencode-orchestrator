@@ -5,6 +5,10 @@
 - worker: a signal that arrives while `worker start` is still starting its bridge is passed to
   the bridge once it runs (Go; Sol S2/R7). Both runtimes read the brief before claiming the lane, so
   an unreadable brief no longer leaves a permanent lock (Sol S2/R11).
+- plugin: delegated and orch calls are never started once cancelled. A child that ignores SIGTERM
+  is killed 15 s later, the plugin stops waiting 10 s after a child exits even if a descendant holds
+  its output, output is decoded as a UTF-8 stream, and `orch routing`/`budget gate` get 90 s
+  (Sol S4/R1, S4/R2, S4/R6).
 - docs: the root README now tells the story (why, benefits and costs, daily commands, how it works,
   using it on a project, the mailbox in plain words, away mode) with `orch` commands throughout.
   The technical reference moves to `orchestrator/README.md` (scripts, routing, budgets, flips,

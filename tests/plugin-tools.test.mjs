@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { calls, checkoutRegistry, createSandbox, loadPlugin, poisonHits, routingDocument, setAnswers, SPAWNED_SCRIPTS, typescriptSupported, usageFixture, writeFakeOrch } from "./plugin-harness.mjs";
+import { calls, checkoutRegistry, createSandbox, loadPlugin, poisonHits, routingDocument, setAnswers, SPAWNED_SCRIPTS, typescriptSupported, usageFixture, waitFor, writeFakeOrch } from "./plugin-harness.mjs";
 
 const skip = typescriptSupported ? false : "Node cannot strip TypeScript types here (needs >= 22.18)";
 
@@ -376,4 +376,106 @@ describe("runtime configuration details", { skip }, () => {
     assert.deepEqual(e.decision, { retry: false });
     assert.deepEqual(warn.mock.calls.map((c) => c.arguments[0]), ['[orchestrator] usage-limit flip skipped: unknown orchestrator runtime "rust" (expected "js" or "go")']);
   });
+});
+
+// run(), the plugin's one process runner, under cancellation and misbehaving children. The graces
+// and the orch deadlines are shortened through the test-only ORCH_PLUGIN_* variables.
+describe("process runner", { skip }, () => {
+  const KILL_GRACE_MS = 500;
+  const PIPE_GRACE_MS = 500;
+  // Fake start-up under a loaded full-suite run has taken over 2 s (see the harness).
+  const SLACK_MS = 5000;
+  const graces = { ORCH_PLUGIN_KILL_GRACE_MS: String(KILL_GRACE_MS), ORCH_PLUGIN_PIPE_GRACE_MS: String(PIPE_GRACE_MS) };
+  const delegateInput = { role: "coder", prompt: "build it", harness: "claude" };
+
+  async function loadGoWith(t, answers, env) {
+    // Registered before the sandbox's own cleanup (hooks run in order), so the call log still exists.
+    let sandbox;
+    t.after(() => sandbox && reapLoggedProcesses(sandbox));
+    sandbox = createSandbox(t, { runtime: "go" });
+    const doc = await routingDocument(usageFixture("green"));
+    setAnswers(sandbox, { "routing --json": { stdout: doc }, "routing --json --refresh": { stdout: doc }, "routing --cached --json": { stdout: doc }, ...answers });
+    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ...env } });
+    return { sandbox, plugin };
+  }
+
+  const isAlive = (pid) => {
+    try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; }
+  };
+  /** Kill every logged fake process (and `sleep` holder) of a test that is still running when it ends. */
+  const reapLoggedProcesses = (sandbox) => {
+    if (!fs.existsSync(sandbox.log)) return;
+    for (const { pid } of calls(sandbox)) if (isAlive(pid)) process.kill(pid, "SIGKILL");
+  };
+  // Without the fixes these cases wait forever (or for the 30 s sleep): fail them instead.
+  const bounded = { timeout: 20000 };
+
+  test("a call cancelled before it starts spawns nothing", bounded, async (t) => {
+    const { sandbox, plugin } = await loadGoWith(t, { effort: { stdout: "null\n" }, "claude-exec": { hang: true } }, graces);
+    const started = Date.now();
+    const r = await plugin.callTool("delegate", delegateInput, { signal: AbortSignal.abort() });
+    assert.ok(Date.now() - started < SLACK_MS);
+    assert.match(r.content, /\|FAILED \|[\s\S]*\n\naborted before start$/);
+    assert.deepEqual(orchCalls(sandbox, "claude-exec"), []);
+  });
+
+  test("a child that ignores SIGTERM is killed after the kill grace", bounded, async (t) => {
+    const { sandbox, plugin } = await loadGoWith(t, { effort: { stdout: "null\n" }, "claude-exec": { hang: true, ignoreTerm: true } }, graces);
+    const abort = new AbortController();
+    const result = plugin.callTool("delegate", delegateInput, { signal: abort.signal });
+    assert.ok(await waitFor(() => orchCalls(sandbox, "claude-exec").length === 1, 15000));
+    const { pid } = orchCalls(sandbox, "claude-exec")[0];
+    const aborted = Date.now();
+    abort.abort();
+    const r = await result;
+    const elapsed = Date.now() - aborted;
+    // Timers may fire a few ms early against Date.now deltas; the lower bound proves SIGKILL waited.
+    assert.ok(elapsed >= KILL_GRACE_MS - 50 && elapsed < KILL_GRACE_MS + SLACK_MS, `returned ${elapsed} ms after the abort`);
+    assert.match(r.content, /\|FAILED \|/);
+    assert.equal(isAlive(pid), false);
+  });
+
+  test("a descendant holding stdout delays the result by the pipe grace only", bounded, async (t) => {
+    const { sandbox, plugin } = await loadGoWith(t, { "mailbox list": { stdout: [], holdStdout: true } }, graces);
+    const started = Date.now();
+    const r = await plugin.callTool("mailbox_list");
+    const elapsed = Date.now() - started;
+    const holder = calls(sandbox).find((c) => c.self === "holder");
+    assert.deepEqual(r, { content: "(mailbox empty)" });
+    assert.ok(elapsed < PIPE_GRACE_MS + SLACK_MS, `returned after ${elapsed} ms`);
+    assert.equal(isAlive(holder.pid), true, "the holder outlived the call, so the pipe grace ended the wait");
+  });
+
+  test("a child that exited before its deadline is not timed out while a descendant holds stdout", bounded, async (t) => {
+    // The 30 s mailbox deadline scaled to 3 s falls inside the 6 s pipe grace that follows the exit.
+    const env = { ORCH_PLUGIN_PIPE_GRACE_MS: "6000", ORCH_PLUGIN_ORCH_TIMEOUT_SCALE: "0.1" };
+    const { sandbox, plugin } = await loadGoWith(t, { "mailbox list": { stdout: [], holdStdout: true } }, env);
+    assert.deepEqual(await plugin.callTool("mailbox_list"), { content: "(mailbox empty)" });
+    const holder = calls(sandbox).find((c) => c.self === "holder");
+    assert.equal(isAlive(holder.pid), true, "the call returned through the pipe grace, past the deadline");
+  });
+
+  test("a character split across two writes decodes intact", async (t) => {
+    const message = { id: "m-1", at: "2026-10-19T00:00:00.000Z", from: "coder", to: "*", kind: "note", subject: "€", body: "", refs: [], thread: null };
+    const bytes = Buffer.from(JSON.stringify([message]));
+    const cut = bytes.indexOf(Buffer.from("€")) + 2; // between E2 82 and AC
+    const { plugin } = await loadGoWith(t, { "mailbox list": { stdoutHex: [bytes.subarray(0, cut).toString("hex"), bytes.subarray(cut).toString("hex")] } });
+    assert.equal((await plugin.callTool("mailbox_list")).content, `${message.at} [note] coder -> *: € (id m-1)`);
+  });
+
+  // The deadlines are scaled down 20 times; the messages carry the configured values.
+  const deadlines = [
+    ["orch routing", "routing --json --refresh", (p) => p.callTool("usage_status", { refresh: true }), 90],
+    ["orch budget gate", "budget gate --vendor openai", (p) => p.callTool("codex_review", {}), 90],
+    ["other orch calls", "mailbox list", (p) => p.callTool("mailbox_list"), 30],
+  ];
+  for (const [name, key, drive, seconds] of deadlines) {
+    test(`${name} times out after ${seconds}s`, async (t) => {
+      const { sandbox, plugin } = await loadGoWith(t, { [key]: { hang: true } }, { ORCH_PLUGIN_ORCH_TIMEOUT_SCALE: "0.05" });
+      const subcommand = key.split(" --")[0];
+      await assert.rejects(drive(plugin), { name: "OrchCommandError", message: `orch ${subcommand} timed out after ${seconds}s` });
+      const hung = calls(sandbox).find((c) => c.argv.join(" ").startsWith(key));
+      assert.equal(isAlive(hung.pid), false);
+    });
+  }
 });

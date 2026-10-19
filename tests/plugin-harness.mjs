@@ -15,7 +15,7 @@ const CHECKOUT_LIBS = fs.readdirSync(path.join(REPO, "orchestrator", "lib")).fil
 const CHECKOUT_SCRIPTS = fs.readdirSync(path.join(REPO, "orchestrator", "bin")).filter((f) => f.endsWith(".mjs"));
 /** The orchestrator scripts the plugin spawns; JS sandboxes get logging fakes of these. */
 export const SPAWNED_SCRIPTS = ["claude-exec", "codex-exec", "worker", "supervisor", "flip"];
-const ENV_KEYS = ["HOME", "PATH", "ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY", "PLUGIN_TEST_LOG", "PLUGIN_TEST_ANSWERS", "PLUGIN_TEST_POISON"];
+const ENV_KEYS = ["HOME", "PATH", "ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY", "PLUGIN_TEST_LOG", "PLUGIN_TEST_ANSWERS", "PLUGIN_TEST_POISON", "ORCH_PLUGIN_KILL_GRACE_MS", "ORCH_PLUGIN_PIPE_GRACE_MS", "ORCH_PLUGIN_ORCH_TIMEOUT_SCALE"];
 
 export const typescriptSupported = Boolean(process.features.typescript);
 
@@ -49,6 +49,9 @@ export function checkoutRegistry() {
  * replaces the lookup (the fake `codex`). A `keyPrefix` is put in front of the argv for the lookup
  * only (the fake JS scripts answer to "<script> <argv>", as orch answers to "<script> <argv>").
  * It runs as CommonJS (orch) or as an ES module (bin/<script>.mjs), so it uses getBuiltinModule.
+ * Besides {stdout, stderr, code}, an answer can misbehave for the process-runner tests:
+ * `ignoreTerm` traps SIGTERM, `hang` never answers, `holdStdout` leaves a logged `sleep 30` holding
+ * stdout after the exit, and `stdoutHex` writes its hex chunks 100 ms apart instead of `stdout`.
  */
 export function writeFakeOrch(file, self, fixedAnswer = null, keyPrefix = null) {
   const lookup = fixedAnswer ? JSON.stringify(fixedAnswer) : "answers[full] ?? answers[prefix]";
@@ -56,19 +59,35 @@ export function writeFakeOrch(file, self, fixedAnswer = null, keyPrefix = null) 
   fs.writeFileSync(file, `#!${process.execPath}
 const fs = process.getBuiltinModule("node:fs");
 const argv = process.argv.slice(2);
+const log = (entry) => fs.appendFileSync(process.env.PLUGIN_TEST_LOG, JSON.stringify(entry) + "\\n");
 let stdin = "";
 try { stdin = fs.readFileSync(0, "utf8"); } catch { /* no stdin */ }
-fs.appendFileSync(process.env.PLUGIN_TEST_LOG, JSON.stringify({ self: ${JSON.stringify(self)}, argv, cwd: process.cwd(), stdin }) + "\\n");
 const answers = JSON.parse(fs.readFileSync(process.env.PLUGIN_TEST_ANSWERS, "utf8"));
 const keyArgv = ${keyPrefix ? `[${JSON.stringify(keyPrefix)}, ...argv]` : "argv"};
 const firstFlag = keyArgv.findIndex((a) => a.startsWith("--"));
 const full = keyArgv.join(" ");
 const prefix = (firstFlag === -1 ? keyArgv : keyArgv.slice(0, firstFlag)).join(" ");
 const answer = ${lookup};
+// Trapped before the call is logged, so a test that signals a logged call always meets the trap.
+if (answer?.ignoreTerm) process.on("SIGTERM", () => {});
+log({ self: ${JSON.stringify(self)}, argv, cwd: process.cwd(), stdin, pid: process.pid });
 if (!answer) { process.stderr.write("fake orch: unscripted " + full + "\\n"); process.exit(97); }
-process.stdout.write(answer.stdout ?? "");
-process.stderr.write(answer.stderr ?? "");
-process.exit(answer.code ?? 0);
+if (answer.hang) setInterval(() => {}, 60000);
+else if (answer.stdoutHex) writeSlowly(answer.stdoutHex.map((hex) => Buffer.from(hex, "hex")));
+else {
+  if (answer.holdStdout) {
+    const holder = process.getBuiltinModule("node:child_process").spawn("/bin/sleep", ["30"], { stdio: ["ignore", "inherit", "ignore"] });
+    log({ self: "holder", argv: ["sleep", "30"], cwd: process.cwd(), stdin: "", pid: holder.pid });
+  }
+  process.stdout.write(answer.stdout ?? "");
+  process.stderr.write(answer.stderr ?? "");
+  process.exit(answer.code ?? 0);
+}
+function writeSlowly(chunks) {
+  if (!chunks.length) process.exit(answer.code ?? 0);
+  fs.writeSync(1, chunks[0]);
+  setTimeout(() => writeSlowly(chunks.slice(1)), 100);
+}
 `, { mode: 0o755 });
 }
 
@@ -211,11 +230,11 @@ function fakeContext(sandbox, options) {
     session: { hook: async (name, fn) => { sessionHooks[name] = fn; } },
     agent: { transform: async (fn) => { agentTransforms.push(fn); } },
   };
-  const callContext = () => ({ directory: sandbox.project, signal: new AbortController().signal, progress: async () => {}, agent: "conductor", sessionID: "ses_test" });
+  const callContext = (signal = new AbortController().signal) => ({ directory: sandbox.project, signal, progress: async () => {}, agent: "conductor", sessionID: "ses_test" });
   return {
     api,
     tools,
-    callTool: (name, input = {}) => tools[name].execute(input, callContext()),
+    callTool: (name, input = {}, { signal } = {}) => tools[name].execute(input, callContext(signal)),
     /** Run a tool the way opencode does: a throw becomes an error result. */
     async toolResult(name, input = {}) {
       try { return { status: "ok", ...(await tools[name].execute(input, callContext())) }; } catch (error) { return { status: "error", error }; }

@@ -24,23 +24,55 @@ async function lib(name: string) {
   return import(pathToFileURL(path.join(ORCH, "lib", name)).href);
 }
 
+// Bridges (orch claude-exec/codex-exec) bound their own CLI within 10 s of a signal and then write
+// their run record, so a child that ignores SIGTERM is SIGKILLed only after KILL_GRACE_MS. Once the
+// child has exited, a descendant may still hold its pipes: stop waiting for them after PIPE_GRACE_MS.
+// Only the tests set these variables, to shorten the graces.
+const KILL_GRACE_MS = Number(process.env.ORCH_PLUGIN_KILL_GRACE_MS) || 15 * 1000;
+const PIPE_GRACE_MS = Number(process.env.ORCH_PLUGIN_PIPE_GRACE_MS) || 10 * 1000;
+
 // A spawn failure (e.g. ENOENT) resolves with code -1 and the error text in stderr instead of
-// raising an uncaught "error" event in the opencode host.
+// raising an uncaught "error" event in the opencode host. A call cancelled before it starts spawns nothing.
 type RunResult = { code: number; stdout: string; stderr: string; timedOut: boolean };
 function run(cmd: string, args: string[], { cwd, input, signal, timeoutMs = 2 * 60 * 60 * 1000 }: { cwd: string; input?: string; signal?: AbortSignal; timeoutMs?: number }) {
+  if (signal?.aborted) return Promise.resolve<RunResult>({ code: -1, stdout: "", stderr: "aborted before start", timedOut: false });
   return new Promise<RunResult>((resolve) => {
     const child = spawn(cmd, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CLAUDECODE: undefined } });
-    let stdout = "", stderr = "", settled = false, timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
-    const onAbort = () => { try { child.kill("SIGTERM"); } catch { /* gone */ } };
+    // Decoding as a stream keeps a multi-byte character split across chunks intact.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stdout = "", stderr = "", settled = false, timedOut = false, exited = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined, pipeTimer: ReturnType<typeof setTimeout> | undefined;
+    const sendSignal = (sig: NodeJS.Signals) => {
+      // Bun may throw when the child has just exited; the process is gone, so there is nothing to do.
+      try { child.kill(sig); } catch { /* gone */ }
+    };
+    const terminate = () => {
+      if (exited || killTimer) return;
+      sendSignal("SIGTERM");
+      killTimer = setTimeout(() => sendSignal("SIGKILL"), KILL_GRACE_MS);
+    };
+    const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
     const finish = (result: RunResult) => {
       if (settled) return;
-      settled = true; clearTimeout(timer); signal?.removeEventListener("abort", onAbort); resolve(result);
+      settled = true;
+      clearTimeout(killTimer); clearTimeout(pipeTimer);
+      signal?.removeEventListener("abort", terminate);
+      resolve(result);
     };
-    child.stdout.on("data", (c) => (stdout += c));
-    child.stderr.on("data", (c) => (stderr += c));
-    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout.on("data", (c: string) => (stdout += c));
+    child.stderr.on("data", (c: string) => (stderr += c));
+    signal?.addEventListener("abort", terminate, { once: true });
     child.on("error", (err) => finish({ code: -1, stdout, stderr: err.message, timedOut }));
+    child.on("exit", (code) => {
+      exited = true;
+      // The child finished on its own: a deadline passing while we drain its pipes is not a timeout.
+      clearTimeout(timer); clearTimeout(killTimer);
+      pipeTimer = setTimeout(() => {
+        child.stdout.destroy(); child.stderr.destroy();
+        finish({ code: code ?? 1, stdout, stderr, timedOut });
+      }, PIPE_GRACE_MS);
+    });
     child.on("close", (code) => finish({ code: code ?? 1, stdout, stderr, timedOut }));
     child.stdin.on("error", () => { /* the child exited or never started; "error"/"close" report it */ });
     if (input !== undefined) child.stdin.end(input); else child.stdin.end();
@@ -196,10 +228,16 @@ function refuseFlagLike(subcommand: string, fields: Record<string, unknown>) {
   }
 }
 
+// orch's routing and budget gate may collect usage: the Claude feed (Keychain 30 s + HTTP 15 s) runs
+// alongside Codex (20 s), then channel detection takes up to 20 s, about 65 s in the worst case.
+const ORCH_COLLECTING_TIMEOUT_MS = 90 * 1000;
+// Only the tests set this, to reach the deadlines quickly; error messages keep the nominal value.
+const ORCH_TIMEOUT_SCALE = Number(process.env.ORCH_PLUGIN_ORCH_TIMEOUT_SCALE) || 1;
+
 function createGoRuntime(bin: string): OrchRuntime {
   // `subcommand` names the call in errors; pass it when a positional argument precedes the flags.
   async function callOrch(args: string[], { input, okCodes = [0], timeoutMs = 30 * 1000, subcommand = subcommandOf(args) }: { input?: string; okCodes?: number[]; timeoutMs?: number; subcommand?: string } = {}) {
-    const res = await run(bin, args, { cwd: process.cwd(), input, timeoutMs });
+    const res = await run(bin, args, { cwd: process.cwd(), input, timeoutMs: timeoutMs * ORCH_TIMEOUT_SCALE });
     if (res.timedOut) throw new OrchCommandError(subcommand, res.code, res.stderr, `orch ${subcommand} timed out after ${timeoutMs / 1000}s`);
     if (!okCodes.includes(res.code)) throw new OrchCommandError(subcommand, res.code, res.stderr);
     return res;
@@ -208,7 +246,7 @@ function createGoRuntime(bin: string): OrchRuntime {
     name: "go",
     binary: bin,
     async routing(refresh) {
-      const res = await callOrch(["routing", "--json", ...(refresh ? ["--refresh"] : [])], { timeoutMs: 60 * 1000 });
+      const res = await callOrch(["routing", "--json", ...(refresh ? ["--refresh"] : [])], { timeoutMs: ORCH_COLLECTING_TIMEOUT_MS });
       return JSON.parse(res.stdout);
     },
     async cachedRouting() {
@@ -222,7 +260,7 @@ function createGoRuntime(bin: string): OrchRuntime {
       return effort === "null" ? null : effort;
     },
     async budgetGate(vendor, force) {
-      return JSON.parse((await callOrch(["budget", "gate", "--vendor", vendor, ...(force ? ["--force"] : [])])).stdout);
+      return JSON.parse((await callOrch(["budget", "gate", "--vendor", vendor, ...(force ? ["--force"] : [])], { timeoutMs: ORCH_COLLECTING_TIMEOUT_MS })).stdout);
     },
     // The registry orch itself reads (orch makes ORCH_HOME and ORCH_REGISTRY absolute); no subcommand needed for a file read.
     registry: () => JSON.parse(fs.readFileSync(process.env.ORCH_REGISTRY ? path.resolve(process.env.ORCH_REGISTRY) : path.resolve(process.env.ORCH_HOME || ORCH, "models.json"), "utf8")),
