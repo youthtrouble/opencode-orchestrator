@@ -78,9 +78,11 @@ if [ "$1" = exec ] && [ -f "$script/case" ]; then
   if [ -f "$script/$case.exit" ]; then IFS= read -r code < "$script/$case.exit"; fi
   exit "$code"
 fi
-# An unscripted app-server still reads the first request before it fails, as a real one would:
-# exiting first races the parent's write into a closed pipe (EPIPE), which macOS rarely and
-# Linux often loses.
+# An unscripted app-server still reads the first request, and an unscripted exec its whole
+# prompt, before it fails, as a real one would: exiting first races the parent's write into a
+# closed pipe (EPIPE), which macOS rarely and Linux often loses. Both return at EOF, so a
+# parent that closes stdin is not held. (A scripted exec's .nostdin skips the read on purpose.)
 if [ "$1" = app-server ]; then IFS= read -r request || :; fi
+if [ "$1" = exec ]; then while IFS= read -r request; do :; done; fi
 echo "parity fake ${0##*/}: not scripted for this case (argv: $*)" >&2
 exit 97

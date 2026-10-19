@@ -176,11 +176,12 @@ func (h *harness) compareWatchFollow(t *testing.T, seed seed, errorFrames bool) 
 		select {
 		case frame = <-first:
 		case <-time.After(5 * time.Second):
-			t.Errorf("%s: no second frame within 5 s", argv[0])
 			// Every read from the pipe must end before Wait: the reader meets EOF once the
 			// process is gone.
 			_ = cmd.Process.Kill()
 			<-first
+			_ = cmd.Wait()
+			t.Fatalf("%s: no second frame within 5 s", argv[0])
 		}
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = cmd.Wait()

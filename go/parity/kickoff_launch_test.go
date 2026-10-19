@@ -3,10 +3,12 @@
 package parity
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -106,18 +108,34 @@ func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase,
 // codexAppServerLog is the scripted codex app-server's log of the requests it was sent.
 const codexAppServerLog = "fakelog/codex-app-server.jsonl"
 
+// codexSessionStart is the first request of every codex app-server session, as the fake logs it.
+const codexSessionStart = `{"jsonrpc":"2.0","id":1,"method":"initialize",`
+
 // withoutPostRunSession drops the codex app-server log once the JS log is orch's (the
-// kickoff's routing refresh) followed by nothing but the start of the session the JS claude
-// bridge's unawaited post-run refresh opens before it exits (PE-12; orch's is off).
+// kickoff's routing refresh, one session) followed by nothing but the start of one more such
+// session: the one the JS claude bridge's unawaited post-run refresh opens before it exits
+// (PE-12; orch's is off).
 func withoutPostRunSession(t *testing.T, js, orch outcome) (outcome, outcome) {
 	t.Helper()
-	rest, found := strings.CutPrefix(js.files[codexAppServerLog], orch.files[codexAppServerLog])
-	if !found || orch.files[codexAppServerLog] == "" || rest != "" && !strings.HasPrefix(rest, `{"jsonrpc":"2.0","id":1,"method":"initialize",`) {
+	session := orch.files[codexAppServerLog]
+	rest, found := strings.CutPrefix(js.files[codexAppServerLog], session)
+	if !found || !isOneSession(session) || !isSessionStart(rest, session) {
 		t.Errorf("codex app-server log: js %q, orch %q; want orch's refresh, then at most the JS post-run session", js.files[codexAppServerLog], orch.files[codexAppServerLog])
 	}
 	delete(js.files, codexAppServerLog)
 	delete(orch.files, codexAppServerLog)
 	return js, orch
+}
+
+// isOneSession reports whether log holds exactly one app-server session.
+func isOneSession(log string) bool {
+	return strings.HasPrefix(log, codexSessionStart) && strings.Count(log, `"method":"initialize"`) == 1
+}
+
+// isSessionStart reports whether rest is empty or the first whole lines of session, a log of
+// one session: a second session with the same requests, cut wherever its process exited.
+func isSessionStart(rest, session string) bool {
+	return rest == "" || strings.HasPrefix(rest, codexSessionStart) && strings.HasSuffix(rest, "\n") && strings.HasPrefix(session, rest)
 }
 
 // kickoffLauncherLine is the `worker start --detach` answer a headless kickoff prints.
@@ -170,12 +188,13 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, argv []strin
 	s(t, sb)
 	o := h.run(t, sb, argv, nil, []string{noPostRunRefresh})
 	started := kickoffSupervisorStarted.FindStringSubmatch(o.stdout)
-	if started == nil {
-		t.Fatalf("%s: no started supervisor in %q (stderr %q)", argv[0], o.stdout, o.stderr)
+	pid := 0
+	if started != nil {
+		pid, _ = strconv.Atoi(started[2])
 	}
-	pid, err := strconv.Atoi(started[2])
-	if err != nil || pid < 2 {
-		t.Fatalf("%s: supervisor pid %q", argv[0], started[2])
+	if pid < 2 {
+		stopUnreadServe(t, sb)
+		t.Fatalf("%s: no started supervisor with a pid in %q (stderr %q)", argv[0], o.stdout, o.stderr)
 	}
 	h.stopLaunched(t, sb, pid)
 	o.stdout = kickoffSupervisorStarted.ReplaceAllString(o.stdout, "${1}<pid>${3}<log>")
@@ -187,4 +206,33 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, argv []strin
 	return o.withProjectPlaceholder(t, sb).normalized(func(s string) string {
 		return normalizeFlip(since)(normalizeGeneratedAt(normalizeServe(since)(s)))
 	})
+}
+
+// stopUnreadServe stops a serve the kickoff may have started in sb when its pid could not be
+// read from the output. A serve starting after the stop file exists stops at its first tick;
+// one already running is named by sb's lock, which only that serve writes, and is waited for
+// and killed after serveExitWait.
+func stopUnreadServe(t *testing.T, sb sandbox) {
+	t.Helper()
+	dir := filepath.Join(sb.project, ".orchestrator")
+	if err := os.WriteFile(filepath.Join(dir, "supervisor.stop"), nil, 0o644); err != nil {
+		t.Error(err)
+	}
+	lock, err := os.ReadFile(filepath.Join(dir, "supervisor.lock"))
+	if err != nil {
+		return
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(lock)))
+	if pid < 2 {
+		return
+	}
+	deadline := time.Now().Add(serveExitWait)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Errorf("serve %d did not stop; killed", pid)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }

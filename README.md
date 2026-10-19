@@ -478,12 +478,12 @@ node --test tests/*.test.mjs
 
 ## Go runtime (in progress)
 
-`go/` holds `orch`, a static Go binary that replaces `orchestrator/bin/*.mjs` one script for one.
-Every script is now ported; what remains is switching the plugin to `orch` (S10), installing it
-(S11) and removing the JS runtime (S12). Until then the JS runtime stays the default: the plugin,
-the commands and the bridges do not call `orch` yet. Both runtimes share the same state, including
-the usage cache, so the two can run on the same machine. Implemented: `orch version`, `orch usage [--refresh] [--json]` (output
-byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
+`go/` holds `orch`, a static Go binary that replaces `orchestrator/bin/*.mjs` one for one. Every
+script is now ported; what remains is switching the plugin to `orch` (S10), installing it (S11)
+and removing the JS runtime (S12). Until then the JS runtime stays the default: the plugin, the
+commands and the bridges do not call `orch` yet. Both runtimes share the same state, including the
+usage cache, so the two can run on the same machine. Implemented: `orch version`, `orch usage
+[--refresh] [--json]` (output byte-identical to `bin/usage.mjs`, including the rolling 30-minute last good reading), the
 plugin-facing `orch routing`, `orch budget gate` and `orch effort`, `orch mailbox
 post|list|ack|reply|inbox` (appending to the same `.orchestrator/mailbox/` files), `orch manifest
 create|verify|diff`, `orch incident record|list|report|share` (appending to the same incident log),

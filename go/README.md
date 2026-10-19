@@ -415,13 +415,15 @@ Groups:
   settled by the `runner_pid` its kickoff printed and everything it wrote compared
   (`conductor-kickoff.md`, the lane state and log, the mailbox, the run record, the fake's argv);
   the JS claude bridge's post-run refresh opens a codex app-server session orch's does not
-  (PE-12), so the app-server log must be orch's followed by at most that session's start, and
-  is then dropped. Interactive claude and opencode (the opencode fake's `--prompt` mode, scripted by
-  `$HOME/fake-opencode-tui/`; the fake's argv log, exit 3 and 4 passed through; a fake that kills itself with SIGTERM or SIGINT, exit 0). A dry run without the
-  lock, where each `supervisor start` really starts a serve in its sandbox: the serve's tick is
-  checked by the pid the kickoff printed, the serve stopped through its stop file and waited for
-  (killed by that pid after 20 s, failing the case); normalised: that pid, the cut log path and
-  the serve's fresh values.
+  (PE-12), so the app-server log must be orch's one session followed by at most the first whole
+  lines of one more like it, and is then dropped. Interactive claude and opencode (the opencode
+  fake's `--prompt` mode, scripted by `$HOME/fake-opencode-tui/`; the fake's argv log, exit 3
+  and 4 passed through; a fake that kills itself with SIGTERM or SIGINT, exit 0). A dry run
+  without the lock, where each `supervisor start` really starts a serve in its sandbox: the
+  serve's tick is checked by the pid the kickoff printed, the serve stopped through its stop file
+  and waited for (killed by that pid after 20 s, failing the case; a pid the output does not
+  show is read from the sandbox's lock, after the stop file is written); normalised: that pid,
+  the cut log path and the serve's fresh values.
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and
