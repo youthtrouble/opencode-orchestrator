@@ -10,8 +10,18 @@
   go through a runtime adapter; `orch_usage_status` metadata gains `runtime` and `orch`; a spawn
   failure now resolves with code -1 instead of an uncaught error. `js` (the default) is
   unchanged. New `tests/plugin-routing.test.mjs` drives the plugin through a fake opencode
-  context. go mode not yet complete (S10b): mailbox, manifests, incidents and the bridge, worker,
-  supervisor and flip spawns still use the JS libs and scripts.
+  context.
+- plugin: go mode now runs on `orch` alone (no `lib/*.mjs` import, no `bin/*.mjs` run).
+  mailbox_post/list, manifest_create/verify, the incident tool and the `execute.after` incident
+  hook call `orch mailbox|manifest|incident` (bodies and details on stdin, the project root always
+  by flag), and delegate, worker_start, worker_status, supervisor and the conductor flip spawn
+  `orch <script>` with the argv the JS script gets. In go mode, free text beginning with `--`
+  that would travel as an argument (including mailbox_list filters and the incident kind) is
+  refused before spawning (D-S10-4), and `manifest_create` with no paths is
+  orch's usage error (D-S10-1). Also: the runtime value is trimmed and case-insensitive, option
+  `binary` expands a leading `~`, `ORCH_HOME`/`ORCH_REGISTRY` are resolved to absolute paths, an
+  `orch` timeout says it timed out, and model sync and the usage-limit flip log a misconfigured
+  runtime instead of swallowing it. New `tests/plugin-tools.test.mjs`. `js` (the default) is unchanged.
 - Go port: the `kickoff` parity group gains the launching cases: headless conductor lanes on
   claude and opencode (runners settled and everything they wrote compared), the interactive
   `claude` and `opencode` launches (exit code passed through; a signal exits 0) and a dry run that

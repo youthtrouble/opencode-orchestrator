@@ -26,24 +26,29 @@ async function lib(name: string) {
 
 // A spawn failure (e.g. ENOENT) resolves with code -1 and the error text in stderr instead of
 // raising an uncaught "error" event in the opencode host.
+type RunResult = { code: number; stdout: string; stderr: string; timedOut: boolean };
 function run(cmd: string, args: string[], { cwd, input, signal, timeoutMs = 2 * 60 * 60 * 1000 }: { cwd: string; input?: string; signal?: AbortSignal; timeoutMs?: number }) {
-  return new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
+  return new Promise<RunResult>((resolve) => {
     const child = spawn(cmd, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CLAUDECODE: undefined } });
-    let stdout = "", stderr = "", settled = false;
-    const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+    let stdout = "", stderr = "", settled = false, timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, timeoutMs);
     const onAbort = () => { try { child.kill("SIGTERM"); } catch { /* gone */ } };
-    const finish = (result: { code: number; stdout: string; stderr: string }) => {
+    const finish = (result: RunResult) => {
       if (settled) return;
       settled = true; clearTimeout(timer); signal?.removeEventListener("abort", onAbort); resolve(result);
     };
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
     signal?.addEventListener("abort", onAbort, { once: true });
-    child.on("error", (err) => finish({ code: -1, stdout, stderr: err.message }));
-    child.on("close", (code) => finish({ code: code ?? 1, stdout, stderr }));
+    child.on("error", (err) => finish({ code: -1, stdout, stderr: err.message, timedOut }));
+    child.on("close", (code) => finish({ code: code ?? 1, stdout, stderr, timedOut }));
     child.stdin.on("error", () => { /* the child exited or never started; "error"/"close" report it */ });
     if (input !== undefined) child.stdin.end(input); else child.stdin.end();
   });
+}
+
+function parseJsonOrNull(text: string): any {
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 function lastJson(text: string): Json | null {
@@ -55,14 +60,28 @@ function lastJson(text: string): Json | null {
 // ---- Runtime adapter: the JS libs or the Go `orch` binary behind one interface ------------
 type RuntimeName = "js" | "go";
 type CachedRouting = { usage: Json; stale: boolean; prompt: () => Promise<string> };
+type MailboxMessage = { from: string; to: string; kind: string; subject: string; body: string; refs: string[]; thread: string | null };
+type MailboxQuery = { to: string | null; unackedBy: string | null; kind: string | null; limit: number };
+type ManifestRequest = { task: string; author: string; paths: string[]; baseline: string | null };
+type ManifestCreated = { path: string; manifest_sha256: string; file_count: number };
+type IncidentRequest = { component: string; kind: string; summary: string; detail: string; context: Record<string, unknown>; project: string | null | undefined };
+/** How to launch an orchestrator script (claude-exec, worker, flip, ...): `cmd` plus the argv prefix. */
+type ScriptCommand = { cmd: string; args: string[] };
 interface OrchRuntime {
-  name: RuntimeName;
+  /** null only for a runtime whose selection failed. */
+  name: RuntimeName | null;
   binary: string | null;
   routing(refresh: boolean): Promise<any>;
   cachedRouting(): Promise<CachedRouting | null>;
   effortFor(registry: Json, role: string, size: string): Promise<string | null>;
   budgetGate(vendor: "openai" | "anthropic", force: boolean): Promise<any>;
   registry(): any;
+  mailboxPost(root: string, msg: MailboxMessage): Promise<Json>;
+  mailboxList(root: string, query: MailboxQuery): Promise<any[]>;
+  manifestCreate(root: string, request: ManifestRequest): Promise<ManifestCreated>;
+  manifestVerify(root: string, file: string): Promise<any>;
+  recordIncident(request: IncidentRequest): Promise<{ fp: string }>;
+  command(script: string): ScriptCommand;
 }
 
 /** The plugin's runtime configuration (runtime name or orch binary) is unusable. */
@@ -70,19 +89,19 @@ class OrchConfigError extends Error {
   constructor(message: string) { super(message); this.name = "OrchConfigError"; }
 }
 
-/** An `orch` subcommand exited with a code the caller does not accept. */
+/** An `orch` subcommand failed (exit code not accepted, timeout) or was refused before spawning (code null). */
 class OrchCommandError extends Error {
-  subcommand: string; code: number; stderr: string;
-  constructor(subcommand: string, code: number, stderr: string) {
+  subcommand: string; code: number | null; stderr: string;
+  constructor(subcommand: string, code: number | null, stderr: string, message?: string) {
     const last = stderr.split("\n").map((l) => l.trim()).filter(Boolean).pop() || "(no stderr)";
-    super(`orch ${subcommand} exited ${code}: ${last}`);
+    super(message ?? `orch ${subcommand} exited ${code}: ${last}`);
     this.name = "OrchCommandError"; this.subcommand = subcommand; this.code = code; this.stderr = stderr;
   }
 }
 
 function selectRuntime(options: any, env: NodeJS.ProcessEnv): RuntimeName {
   const isSet = (value: unknown) => value !== undefined && value !== "";
-  const chosen = isSet(options.runtime) ? options.runtime : isSet(env.ORCH_RUNTIME) ? env.ORCH_RUNTIME : "js";
+  const chosen = String(isSet(options.runtime) ? options.runtime : isSet(env.ORCH_RUNTIME) ? env.ORCH_RUNTIME : "js").trim().toLowerCase();
   if (chosen === "js" || chosen === "go") return chosen;
   throw new OrchConfigError(`unknown orchestrator runtime "${chosen}" (expected "js" or "go")`);
 }
@@ -97,9 +116,15 @@ function isExecutableFile(file: string) {
   }
 }
 
+// The plugin options come from a config file, where no shell expands a leading "~".
+function expandHome(file: string) {
+  return file === "~" || file.startsWith("~/") ? path.join(os.homedir(), file.slice(1)) : file;
+}
+
 // Explicit configuration (option `binary`, ORCH_BIN) that does not apply is an error, never a skip.
+// A relative option `binary` resolves against the plugin's working directory.
 function resolveOrchBinary(options: any, env: NodeJS.ProcessEnv): string {
-  const explicit: [string, string | undefined][] = [["option binary", options.binary ? path.resolve(options.binary) : undefined], ["ORCH_BIN", env.ORCH_BIN || undefined]];
+  const explicit: [string, string | undefined][] = [["option binary", options.binary ? path.resolve(expandHome(String(options.binary))) : undefined], ["ORCH_BIN", env.ORCH_BIN || undefined]];
   for (const [source, file] of explicit) {
     if (file === undefined) continue;
     if (isExecutableFile(file)) return file;
@@ -133,7 +158,26 @@ async function createJsRuntime(): Promise<OrchRuntime> {
     effortFor: async (registry, role, size) => (await lib("routing.mjs")).effortFor(registry, role, size),
     budgetGate: async (vendor, force) => (await lib("budget.mjs")).budgetGate(vendor, { force }),
     registry: () => usageLib.loadRegistry(),
+    mailboxPost: async (root, msg) => (await lib("mailbox.mjs")).post(root, msg),
+    mailboxList: async (root, query) => (await lib("mailbox.mjs")).list(root, query),
+    async manifestCreate(root, { task, author, paths, baseline }) {
+      const m = (await lib("manifest.mjs")).buildManifest({ root, paths, task, author, baseline });
+      const out = manifestPath(root, task);
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, JSON.stringify(m, null, 2) + "\n");
+      return { path: out, manifest_sha256: m.manifest_sha256, file_count: m.file_count };
+    },
+    async manifestVerify(root, file) {
+      const m = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8"));
+      return (await lib("manifest.mjs")).verifyManifest({ root, manifest: m });
+    },
+    recordIncident: async (request) => (await lib("incident.mjs")).record(request),
+    command: (script) => ({ cmd: NODE, args: [path.join(BIN, `${script}.mjs`)] }),
   };
+}
+
+function manifestPath(root: string, task: string) {
+  return path.join(root, ".orchestrator", "manifests", `${task}.json`);
 }
 
 // "budget gate --vendor openai" -> "budget gate": the tokens before the first flag.
@@ -142,10 +186,22 @@ function subcommandOf(args: string[]) {
   return (firstFlag === -1 ? args : args.slice(0, firstFlag)).join(" ");
 }
 
+// orch's argv loops (like the JS CLIs they mirror) read a value starting with "--" as a flag, so
+// such free text cannot pass through argv exactly (D-S10-4). Bodies and details go on stdin instead.
+function refuseFlagLike(subcommand: string, fields: Record<string, unknown>) {
+  for (const [field, value] of Object.entries(fields)) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (typeof item === "string" && item.startsWith("--")) throw new OrchCommandError(subcommand, null, "", `${field} may not begin with "--" in the go runtime`);
+    }
+  }
+}
+
 function createGoRuntime(bin: string): OrchRuntime {
-  async function callOrch(args: string[], { input, okCodes = [0], timeoutMs = 30 * 1000 }: { input?: string; okCodes?: number[]; timeoutMs?: number } = {}) {
+  // `subcommand` names the call in errors; pass it when a positional argument precedes the flags.
+  async function callOrch(args: string[], { input, okCodes = [0], timeoutMs = 30 * 1000, subcommand = subcommandOf(args) }: { input?: string; okCodes?: number[]; timeoutMs?: number; subcommand?: string } = {}) {
     const res = await run(bin, args, { cwd: process.cwd(), input, timeoutMs });
-    if (!okCodes.includes(res.code)) throw new OrchCommandError(subcommandOf(args), res.code, res.stderr);
+    if (res.timedOut) throw new OrchCommandError(subcommand, res.code, res.stderr, `orch ${subcommand} timed out after ${timeoutMs / 1000}s`);
+    if (!okCodes.includes(res.code)) throw new OrchCommandError(subcommand, res.code, res.stderr);
     return res;
   }
   return {
@@ -168,16 +224,62 @@ function createGoRuntime(bin: string): OrchRuntime {
     async budgetGate(vendor, force) {
       return JSON.parse((await callOrch(["budget", "gate", "--vendor", vendor, ...(force ? ["--force"] : [])])).stdout);
     },
-    // The registry orch itself reads; no subcommand needed for a file read.
-    registry: () => JSON.parse(fs.readFileSync(process.env.ORCH_REGISTRY || path.join(process.env.ORCH_HOME || ORCH, "models.json"), "utf8")),
+    // The registry orch itself reads (orch makes ORCH_HOME and ORCH_REGISTRY absolute); no subcommand needed for a file read.
+    registry: () => JSON.parse(fs.readFileSync(process.env.ORCH_REGISTRY ? path.resolve(process.env.ORCH_REGISTRY) : path.resolve(process.env.ORCH_HOME || ORCH, "models.json"), "utf8")),
+    async mailboxPost(root, { from, to, kind, subject, body, refs, thread }) {
+      refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs });
+      // A missing from/subject is left out so orch reports it ("post needs from and subject").
+      const args = ["mailbox", "post", "--root", root, ...(from === undefined ? [] : ["--from", from]), "--to", to, "--kind", kind, ...(subject === undefined ? [] : ["--subject", subject])];
+      if (thread !== null) args.push("--thread", thread);
+      for (const ref of refs) args.push("--ref", ref);
+      args.push("--body", "-", "--json"); // PE-3: only a bare, final --json counts
+      return JSON.parse((await callOrch(args, { input: body })).stdout);
+    },
+    async mailboxList(root, { to, unackedBy, kind, limit }) {
+      refuseFlagLike("mailbox list", { to, unacked_by: unackedBy, kind }); // orch would drop such a filter and list everything
+      const args = ["mailbox", "list", "--root", root];
+      if (to) args.push("--to", to);
+      if (unackedBy) args.push("--unacked-by", unackedBy);
+      if (kind) args.push("--kind", kind);
+      args.push("--limit", String(limit), "--json");
+      return JSON.parse((await callOrch(args)).stdout);
+    },
+    async manifestCreate(root, { task, author, paths, baseline }) {
+      refuseFlagLike("manifest create", { task, author, baseline, paths });
+      const out = manifestPath(root, task);
+      const args = ["manifest", "create", "--root", root, "--task", task, "--author", author, "--out", out, ...(baseline ? ["--baseline", baseline] : []), ...paths];
+      const created = JSON.parse((await callOrch(args)).stdout);
+      return { path: out, manifest_sha256: created.manifest_sha256, file_count: created.file_count };
+    },
+    async manifestVerify(root, file) {
+      const subcommand = "manifest verify";
+      const res = await callOrch(["manifest", "verify", path.resolve(root, file), "--root", root], { okCodes: [0, 1], subcommand });
+      const result = parseJsonOrNull(res.stdout);
+      // Exit 1 is a mismatch report on stdout, or an unreadable/unparsable manifest with none.
+      if (res.code === 1 && result === null) throw new OrchCommandError(subcommand, res.code, res.stderr);
+      return result ?? JSON.parse(res.stdout);
+    },
+    async recordIncident({ component, kind, summary, detail, context, project }) {
+      const ctxEntries = Object.entries(context).filter(([, value]) => value !== undefined);
+      refuseFlagLike("incident record", { component, kind, summary, ...Object.fromEntries(ctxEntries.map(([key, value]) => [`context.${key}`, value])) });
+      const args = ["incident", "record", "--component", component, "--kind", kind, "--summary", summary, "--detail", "-"];
+      if (project) args.push("--cwd", project);
+      for (const [key, value] of ctxEntries) args.push("--ctx", `${key}=${value}`);
+      return { fp: JSON.parse((await callOrch(args, { input: detail })).stdout).recorded };
+    },
+    command: (script) => ({ cmd: bin, args: [script] }),
   };
 }
 
-// Selection or resolution failed: every method throws, so tools error and hooks degrade. `name`
-// is the selected runtime, or "js" when selection failed (never surfaced: no method returns).
+// Selection or resolution failed: every method throws, so tools error and hooks degrade.
 function createBrokenRuntime(name: RuntimeName | null, error: OrchConfigError): OrchRuntime {
   const fail = (): never => { throw error; };
-  return { name: name ?? "js", binary: null, routing: async () => fail(), cachedRouting: async () => fail(), effortFor: async () => fail(), budgetGate: async () => fail(), registry: fail };
+  const failAsync = async (): Promise<never> => fail();
+  return {
+    name, binary: null, registry: fail, command: fail,
+    routing: failAsync, cachedRouting: failAsync, effortFor: failAsync, budgetGate: failAsync,
+    mailboxPost: failAsync, mailboxList: failAsync, manifestCreate: failAsync, manifestVerify: failAsync, recordIncident: failAsync,
+  };
 }
 
 async function createRuntime(options: any): Promise<OrchRuntime> {
@@ -291,14 +393,15 @@ export default {
           }
           const model = input.model || role.cli_model;
           const effort = input.effort || policyEffort || role.effort || role.variant || "medium";
-          const args = [path.join(BIN, harness === "claude" ? "claude-exec.mjs" : "codex-exec.mjs"), "--cwd", cwd, "--model", model, "--effort", effort, "--timeout-min", String(input.timeout_min || 90), "--quiet"];
+          const bridge = rt.command(harness === "claude" ? "claude-exec" : "codex-exec");
+          const args = [...bridge.args, "--cwd", cwd, "--model", model, "--effort", effort, "--timeout-min", String(input.timeout_min || 90), "--quiet"];
           if (input.resume) args.push("--resume", input.resume);
           if (input.force) args.push("--force");
           if (harness === "claude") { args.push("--permission-mode", write ? "auto" : "plan"); if (input.max_turns) args.push("--max-turns", String(input.max_turns)); }
           else args.push("--sandbox", write ? "workspace-write" : "read-only");
           const preface = `You are acting as the ${input.role.toUpperCase()} for an orchestrated project at ${cwd}. Work only within this brief, report precisely, mark anything not done or not verified. ${write ? "You may edit files in scope." : "Do NOT modify files; produce your output as text (or write only to .orchestrator/ if the brief says so)."}\n\n`;
           await c.progress?.({ title: `${input.role} -> ${harness} ${model}` });
-          const res = await run(NODE, args, { cwd, input: preface + input.prompt, signal: c.signal, timeoutMs: (Number(input.timeout_min || 90) + 2) * 60 * 1000 });
+          const res = await run(bridge.cmd, args, { cwd, input: preface + input.prompt, signal: c.signal, timeoutMs: (Number(input.timeout_min || 90) + 2) * 60 * 1000 });
           const out = lastJson(res.stdout) || {};
           refreshSoon();
           if (res.code === 75) return { content: `Refused: ${(out as any).note || "vendor budget is red"}. Resets ${(out as any).resets_at || "unknown"}. Try another role/harness or force=true.`, metadata: out };
@@ -333,7 +436,7 @@ export default {
         description: "Post a durable message to the project mailbox (.orchestrator/mailbox). Use kinds: brief, release, review, closure, question, handoff, blocked, note.",
         input: { type: "object", required: ["from", "subject"], properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" }, kind: { type: "string" }, subject: { type: "string" }, body: { type: "string" }, refs: { type: "array", items: { type: "string" } }, thread: { type: "string" } } },
         async execute(input: any, c: any) {
-          const m = (await lib("mailbox.mjs")).post(cwdOf(input, c), { from: input.from, to: input.to || "*", kind: input.kind || "note", subject: input.subject, body: input.body || "", refs: input.refs || [], thread: input.thread || null });
+          const m = await rt.mailboxPost(cwdOf(input, c), { from: input.from, to: input.to || "*", kind: input.kind || "note", subject: input.subject, body: input.body || "", refs: input.refs || [], thread: input.thread || null });
           return { content: `posted ${m.id}`, metadata: m };
         },
       });
@@ -343,7 +446,7 @@ export default {
         description: "Read the project mailbox. Check this at the start of a turn and after delegating work.",
         input: { type: "object", properties: { cwd: { type: "string" }, to: { type: "string" }, unacked_by: { type: "string" }, kind: { type: "string" }, limit: { type: "integer" } } },
         async execute(input: any, c: any) {
-          const msgs = (await lib("mailbox.mjs")).list(cwdOf(input, c), { to: input.to || null, unackedBy: input.unacked_by || null, kind: input.kind || null, limit: input.limit || 30 });
+          const msgs = await rt.mailboxList(cwdOf(input, c), { to: input.to || null, unackedBy: input.unacked_by || null, kind: input.kind || null, limit: input.limit || 30 });
           if (!msgs.length) return { content: "(mailbox empty)" };
           return { content: msgs.map((m: any) => `${m.at} [${m.kind}] ${m.from} -> ${m.to}: ${m.subject} (id ${m.id})${m.refs?.length ? "\n  refs: " + m.refs.join(", ") : ""}${m.body ? "\n  " + String(m.body).slice(0, 800) : ""}`).join("\n\n"), metadata: { count: msgs.length } };
         },
@@ -355,12 +458,8 @@ export default {
         input: { type: "object", required: ["task", "author", "paths"], properties: { cwd: { type: "string" }, task: { type: "string" }, author: { type: "string" }, paths: { type: "array", items: { type: "string" } }, baseline: { type: "string" } } },
         async execute(input: any, c: any) {
           const root = cwdOf(input, c);
-          const { buildManifest } = await lib("manifest.mjs");
-          const m = buildManifest({ root, paths: input.paths, task: input.task, author: input.author, baseline: input.baseline || null });
-          const out = path.join(root, ".orchestrator", "manifests", `${input.task}.json`);
-          fs.mkdirSync(path.dirname(out), { recursive: true });
-          fs.writeFileSync(out, JSON.stringify(m, null, 2) + "\n");
-          return { content: `manifest ${path.relative(root, out)}: ${m.file_count} files, sha256 ${m.manifest_sha256}`, metadata: { path: out, manifest_sha256: m.manifest_sha256 } };
+          const m = await rt.manifestCreate(root, { task: input.task, author: input.author, paths: input.paths, baseline: input.baseline || null });
+          return { content: `manifest ${path.relative(root, m.path)}: ${m.file_count} files, sha256 ${m.manifest_sha256}`, metadata: { path: m.path, manifest_sha256: m.manifest_sha256 } };
         },
       });
 
@@ -370,9 +469,7 @@ export default {
         input: { type: "object", required: ["manifest"], properties: { cwd: { type: "string" }, manifest: { type: "string" } } },
         async execute(input: any, c: any) {
           const root = cwdOf(input, c);
-          const { verifyManifest } = await lib("manifest.mjs");
-          const m = JSON.parse(fs.readFileSync(path.resolve(root, input.manifest), "utf8"));
-          const r = verifyManifest({ root, manifest: m });
+          const r = await rt.manifestVerify(root, input.manifest);
           return { content: r.ok ? `OK: all ${r.checked} files match` : `MISMATCH: changed ${r.mismatched.join(", ") || "-"}; missing ${r.missing.join(", ") || "-"}`, metadata: r };
         },
       });
@@ -383,9 +480,10 @@ export default {
         input: { type: "object", required: ["brief", "harness"], properties: { cwd: { type: "string" }, brief: { type: "string" }, harness: { type: "string", enum: ["claude", "codex"] }, lane: { type: "string" }, model: { type: "string" }, effort: { type: "string" }, resume: { type: "string" }, breadth: { type: "string", enum: ["focused", "standard", "broad"] } } },
         async execute(input: any, c: any) {
           const cwd = cwdOf(input, c);
-          const args = [path.join(BIN, "worker.mjs"), "start", "--brief", input.brief, "--harness", input.harness, "--cwd", cwd, "--detach"];
+          const worker = rt.command("worker");
+          const args = [...worker.args, "start", "--brief", input.brief, "--harness", input.harness, "--cwd", cwd, "--detach"];
           for (const k of ["lane", "model", "effort", "resume", "breadth"]) if (input[k]) args.push(`--${k}`, String(input[k]));
-          const res = await run(NODE, args, { cwd, timeoutMs: 60000 });
+          const res = await run(worker.cmd, args, { cwd, timeoutMs: 60000 });
           return { content: (res.stdout || res.stderr).trim() };
         },
       });
@@ -396,8 +494,9 @@ export default {
         input: { type: "object", properties: { cwd: { type: "string" }, lane: { type: "string" } } },
         async execute(input: any, c: any) {
           const cwd = cwdOf(input, c);
-          const args = [path.join(BIN, "worker.mjs"), "status", "--cwd", cwd]; if (input.lane) args.push("--lane", input.lane);
-          const res = await run(NODE, args, { cwd, timeoutMs: 30000 });
+          const worker = rt.command("worker");
+          const args = [...worker.args, "status", "--cwd", cwd]; if (input.lane) args.push("--lane", input.lane);
+          const res = await run(worker.cmd, args, { cwd, timeoutMs: 30000 });
           return { content: (res.stdout || res.stderr).trim() || "(no workers)" };
         },
       });
@@ -407,8 +506,7 @@ export default {
         description: "Record an orchestrator incident for the next audit: a tool/contract mismatch, a misroute, a budget surprise, a crash, or a correction the human gave you about how the orchestrator should behave. Local, redacted, append-only. Use whenever the orchestrator (not the product code) misbehaved or the user corrected the workflow.",
         input: { type: "object", required: ["kind", "summary"], properties: { kind: { type: "string", enum: ["bug", "limit", "misroute", "permission", "crash", "timeout", "contract", "human-correction", "flip", "note"] }, component: { type: "string", description: "plugin|bridge|worker|supervisor|flip|usage|contract|agent (default agent)" }, summary: { type: "string" }, detail: { type: "string" }, cwd: { type: "string" } } },
         async execute(input: any, c: any) {
-          const { record } = await lib("incident.mjs");
-          const e = record({ component: input.component || "agent", kind: input.kind, summary: input.summary, detail: input.detail || "", context: { agent: c.agent, session: c.sessionID }, project: cwdOf(input, c) });
+          const e = await rt.recordIncident({ component: input.component || "agent", kind: input.kind, summary: input.summary, detail: input.detail || "", context: { agent: c.agent, session: c.sessionID }, project: cwdOf(input, c) });
           return { content: `recorded incident ${e.fp}` };
         },
       });
@@ -419,8 +517,9 @@ export default {
         input: { type: "object", required: ["action"], properties: { cwd: { type: "string" }, action: { type: "string", enum: ["start", "status", "stop", "ack"] }, event: { type: "string" } } },
         async execute(input: any, c: any) {
           const cwd = cwdOf(input, c);
-          const args = [path.join(BIN, "supervisor.mjs"), input.action, "--cwd", cwd]; if (input.event) args.push("--event", input.event);
-          const res = await run(NODE, args, { cwd, timeoutMs: 30000 });
+          const supervisor = rt.command("supervisor");
+          const args = [...supervisor.args, input.action, "--cwd", cwd]; if (input.event) args.push("--event", input.event);
+          const res = await run(supervisor.cmd, args, { cwd, timeoutMs: 30000 });
           return { content: (res.stdout || res.stderr).trim() };
         },
       });
@@ -464,10 +563,14 @@ export default {
       if (Date.now() - lastFlipAttempt < 10 * 60 * 1000) return;
       lastFlipAttempt = Date.now();
       try {
-        const d = await run(NODE, [path.join(BIN, "flip.mjs"), "decide", "--active", "opencode", "--cwd", cwd], { cwd, timeoutMs: 60000 });
+        const flip = rt.command("flip");
+        const d = await run(flip.cmd, [...flip.args, "decide", "--active", "opencode", "--cwd", cwd], { cwd, timeoutMs: 60000 });
         const decision = lastJson(d.stdout) as any;
-        if (decision?.action === "flip") await run(NODE, [path.join(BIN, "flip.mjs"), "run", "--to", "claude", "--from", "opencode", "--reason", reason, "--cwd", cwd], { cwd, timeoutMs: 60000 });
-      } catch { /* best effort */ }
+        if (decision?.action === "flip") await run(flip.cmd, [...flip.args, "run", "--to", "claude", "--from", "opencode", "--reason", reason, "--cwd", cwd], { cwd, timeoutMs: 60000 });
+      } catch (err) {
+        // A failed flip stays best effort, but a misconfigured runtime must not disable it silently.
+        if (err instanceof OrchConfigError) console.warn(`[orchestrator] usage-limit flip skipped: ${err.message}`);
+      }
     }
     await ctx.session.hook("retry", async (e: any) => {
       const msg = String(e.error?.message || e.error?.name || "");
@@ -481,7 +584,7 @@ export default {
     await ctx.tool.hook("execute.after", async (e: any) => {
       // Our own tools failing is an orchestrator defect by definition: log it for the audit.
       if (e.status === "error" && String(e.tool).startsWith("orch")) {
-        try { const { record } = await lib("incident.mjs"); record({ component: "plugin", kind: "bug", summary: `tool ${e.tool} errored: ${String(e.error?.message || e.error).slice(0, 160)}`, detail: JSON.stringify(e.input).slice(0, 800), context: { agent: e.agent }, project: ctx.location?.directory }); } catch { /* never block */ }
+        try { await rt.recordIncident({ component: "plugin", kind: "bug", summary: `tool ${e.tool} errored: ${String(e.error?.message || e.error).slice(0, 160)}`, detail: JSON.stringify(e.input).slice(0, 800), context: { agent: e.agent }, project: ctx.location?.directory }); } catch { /* never block */ }
       }
       if (e.status === "error" && LIMIT_RE.test(String(e.error?.message || e.error || ""))) {
         refreshSoon();
@@ -501,7 +604,10 @@ export default {
             e.update(id, (a: any) => { a.model = { providerID, id: modelID, ...(t.effort ? { variant: t.effort } : {}) }; });
           }
         });
-      } catch { /* registry optional */ }
+      } catch (err) {
+        // The registry is optional; a misconfigured runtime is worth a line in the opencode log.
+        if (err instanceof OrchConfigError) console.warn(`[orchestrator] model sync skipped: ${err.message}`);
+      }
     }
 
     return async () => { /* nothing to clean up */ };
