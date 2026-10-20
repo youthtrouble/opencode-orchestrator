@@ -190,8 +190,8 @@ func (h *harness) compareKickoffInteractive(t *testing.T, door string, tui seed,
 func (h *harness) testKickoffSupervisorStarted(t *testing.T) {
 	args := append(append([]string{}, kickoffLaunchArgs...), "--door", "gemini")
 	s := kickoffRoutedGreen(t)
-	js := h.runKickoffSupervisorStarted(t, s, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, args...))
-	orch := h.runKickoffSupervisorStarted(t, s, append([]string{h.orchBin, "kickoff"}, args...))
+	js := h.runKickoffSupervisorStarted(t, s, false, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, args...))
+	orch := h.runKickoffSupervisorStarted(t, s, false, append([]string{h.orchBin, "kickoff"}, args...))
 	if err := crashError(crashC2, "", js, orch); err != nil {
 		t.Error(err)
 	}
@@ -202,25 +202,75 @@ func (h *harness) testKickoffSupervisorStarted(t *testing.T) {
 // testKickoffBothRedStartsTheSupervisor runs a real both-red kickoff in a fresh project with
 // no supervisor lock (Sol R10): each runtime starts a serve to relaunch at the reset, saves
 // the prompt as the conductor's brief, pauses naming it and exits 75. Each serve is stopped
-// as in testKickoffSupervisorStarted.
+// as in testKickoffSupervisorStarted, but only once it has evaluated the pause.
+//
+// Kickoff starts the serve before `flip pause` writes flip.json, and a serve ticks at once, so
+// whether its first tick sees flip.json (and stamps last_flip_check) is a process-start race,
+// the same in both runtimes. Waiting for the stamp makes its presence deterministic, and
+// requireFlipEvaluated then asserts what exit 75 promises: the serve evaluates the pause.
+// Only the stamp's position still shows the race; withFlipCheckAfterLanes settles it.
 func (h *harness) testKickoffBothRedStartsTheSupervisor(t *testing.T) {
 	s := seeds(kickoffBrief(), newFlipCaches(t).bothRed, kickoffFeedsFail())
-	js := h.runKickoffSupervisorStarted(t, s, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, kickoffLaunchArgs...))
-	orch := h.runKickoffSupervisorStarted(t, s, append([]string{h.orchBin, "kickoff"}, kickoffLaunchArgs...))
+	js := h.runKickoffSupervisorStarted(t, s, true, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, kickoffLaunchArgs...))
+	orch := h.runKickoffSupervisorStarted(t, s, true, append([]string{h.orchBin, "kickoff"}, kickoffLaunchArgs...))
 	paused := `"brief": ".orchestrator/briefs/conductor-kickoff.md"`
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
 		if o.exitCode != 75 || o.files["project/briefs/conductor-kickoff.md"] != cmdref.KickoffPrompt("a.md", nil)+"\n" || !strings.Contains(o.files["project/flip.json"], paused) {
 			t.Errorf("%s: exit %d, stdout %q, flip.json %q; want 75, the kickoff brief and a pause naming it", side, o.exitCode, o.stdout, o.files["project/flip.json"])
 		}
+		requireFlipEvaluated(t, side, o)
 	}
+	js, orch = withFlipCheckAfterLanes(t, "js", js), withFlipCheckAfterLanes(t, "orch", orch)
 	compareOutcomes(t, js, orch)
 }
+
+// The supervisor state lines that place last_flip_check. Both runtimes keep the state's keys
+// in insertion order, so the stamp's position names the tick that wrote it:
+//   - the first tick, seeing flip.json, stamps it before its own keys:
+//     events, lanes, last_flip_check, checked_at, pid, status, stopped_at
+//   - a later tick appends it after the first tick's keys (status is rewritten in place on stop):
+//     events, lanes, checked_at, pid, status, last_flip_check, stopped_at
+const (
+	flipCheckLine    = `  "last_flip_check": <now+0>,` + "\n"
+	firstTickBefore  = `  "lanes": {},` + "\n"
+	secondTickBefore = `  "status": "stopped",` + "\n"
+)
+
+// withFlipCheckAfterLanes moves the state's last_flip_check line from where a second tick
+// writes it to where a first tick does, so which tick won the race does not show in the
+// compare. Every line is kept, and nothing else moves. A state in neither shape is reported
+// and left as it is, so the compare shows it too.
+func withFlipCheckAfterLanes(t *testing.T, side string, o outcome) outcome {
+	t.Helper()
+	const file = "project/supervisor-state.json"
+	state := o.files[file]
+	firstTick, secondTick := firstTickBefore+flipCheckLine, secondTickBefore+flipCheckLine
+	switch {
+	case strings.Count(state, flipCheckLine) != 1:
+		t.Errorf("%s: want exactly one last_flip_check line in the state %q", side, state)
+	case strings.Contains(state, firstTick):
+	case strings.Contains(state, secondTick) && strings.Count(state, firstTickBefore) == 1:
+		state = strings.Replace(state, secondTick, secondTickBefore, 1)
+		o.files[file] = strings.Replace(state, firstTickBefore, firstTick, 1)
+	default:
+		t.Errorf("%s: last_flip_check is where neither a first nor a later tick writes it: %q", side, state)
+	}
+	return o
+}
+
+// flipCheckWait bounds the wait for a serve to stamp last_flip_check: a serve whose first
+// tick missed flip.json stamps it on its second, one 5s serve interval later, so two
+// intervals leave room for a slow runner.
+const flipCheckWait = 12 * time.Second
 
 // runKickoffSupervisorStarted runs the kickoff argv in a fresh sandbox seeded by s, requires its
 // supervisor line to report a started serve, then stops that serve through its stop file
 // and waits for the pid read from the line, killing it and failing on timeout (stopLaunched).
+// With awaitFlipCheck, the stop waits first for the serve to evaluate the pause the kickoff
+// recorded after starting it (see testKickoffBothRedStartsTheSupervisor); a kickoff that
+// records no pause must not wait, as its serve never stamps last_flip_check.
 // The pid, the cut log path and the serve's fresh values are normalised.
-func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, argv []string) outcome {
+func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, awaitFlipCheck bool, argv []string) outcome {
 	t.Helper()
 	since := time.Now()
 	sb := h.newSandbox(t)
@@ -235,6 +285,9 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, argv []strin
 		stopUnreadServe(t, sb)
 		t.Fatalf("%s: no started supervisor with a pid in %q (stderr %q)", argv[0], o.stdout, o.stderr)
 	}
+	if awaitFlipCheck {
+		waitForFlipCheck(t, sb, argv[0])
+	}
 	h.stopLaunched(t, sb, pid)
 	o.stdout = kickoffSupervisorStarted.ReplaceAllString(o.stdout, "${1}<pid>${3}<log>")
 	o.files = sb.files(t)
@@ -245,6 +298,26 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, argv []strin
 	return o.withProjectPlaceholder(t, sb).normalized(func(s string) string {
 		return normalizeFlip(since)(normalizeGeneratedAt(normalizeServe(since)(s)))
 	})
+}
+
+// waitForFlipCheck polls sb's supervisor state until a tick has stamped last_flip_check, and
+// fails naming side and the state seen after flipCheckWait. It never stops the serve: the
+// caller still does, whether or not the stamp came.
+func waitForFlipCheck(t *testing.T, sb sandbox, side string) {
+	t.Helper()
+	path := filepath.Join(sb.project, ".orchestrator", "supervisor-state.json")
+	deadline := time.Now().Add(flipCheckWait)
+	for {
+		state, _ := os.ReadFile(path) // absent until the first tick; a timeout reports it
+		if strings.Contains(string(state), `"last_flip_check":`) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("%s: no serve tick stamped last_flip_check within %s; state %q", side, flipCheckWait, state)
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // stopUnreadServe stops a serve the kickoff may have started in sb when its pid could not be
