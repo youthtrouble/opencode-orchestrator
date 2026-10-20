@@ -229,8 +229,69 @@ func (h *harness) testManifest(t *testing.T) {
 	t.Run("create/tree-contents", func(t *testing.T) {
 		h.testManifestTreeContents(t, create(treeOut, "tree", "__proto__", "2", "10", "42"), withTree)
 	})
+	t.Run("create/out-is-symlink", func(t *testing.T) { h.testManifestOutIsSymlink(t, create(treeOut, "tree/top.txt"), withTree) })
+	t.Run("create/out-is-dir", func(t *testing.T) { h.testManifestOutIsDir(t, create(treeOut, "tree/top.txt"), withTree) })
 	t.Run("verify/unparsable-json", func(t *testing.T) { h.testManifestSyntaxError(t, manifests) })
 	t.Run("harness/created-at-normalization", testCreatedAtNormalization)
+	t.Run("harness/temp-suffix-normalization", testTempSuffixNormalization)
+}
+
+// testManifestOutIsSymlink proves a symlink at --out is replaced, never followed (R15): each
+// runtime leaves the manifest as a regular file and the file the link pointed at unchanged.
+func (h *harness) testManifestOutIsSymlink(t *testing.T, args []string, s seed) {
+	const victim = "victim bytes\n"
+	plantLink := func(t *testing.T, sb sandbox) {
+		mustSymlink(t, "../../victim.txt", filepath.Join(sb.project, ".orchestrator", "manifests", "m.json"))
+	}
+	inv := h.manifestInvocation(manifestCase{args: args, seed: seeds(s, seedProjectFile("victim.txt", victim), plantLink), extraFiles: []string{"victim.txt"}})
+	js, orch := h.runPair(t, inv)
+	compareOutcomes(t, js, orch)
+	if js.exitCode != 0 || !strings.Contains(js.files["project/manifests/m.json"], `"tree/top.txt"`) {
+		t.Errorf("js: exit %d, manifests/m.json %q: want a regular file holding the manifest", js.exitCode, js.files["project/manifests/m.json"])
+	}
+	if js.files["extra/victim.txt"] != victim {
+		t.Errorf("js victim.txt %q, want it unchanged", js.files["extra/victim.txt"])
+	}
+}
+
+// tempSuffix is the random part of the temp a create renames over --out; each runtime draws its
+// own, so it is the one fresh value in a failed rename's error line.
+var tempSuffix = regexp.MustCompile(`\.tmp-[0-9]+'`)
+
+func normalizeTempSuffix(s string) string {
+	return tempSuffix.ReplaceAllString(s, ".tmp-<random>'")
+}
+
+// testManifestOutIsDir proves a directory at --out fails the same way in both runtimes, at the
+// rename, once the random temp suffix is normalized, and that neither leaves its temp behind.
+func (h *harness) testManifestOutIsDir(t *testing.T, args []string, s seed) {
+	plantDir := func(t *testing.T, sb sandbox) {
+		mustMkdir(t, filepath.Join(sb.project, ".orchestrator", "manifests", "m.json"))
+	}
+	inv := h.manifestInvocation(manifestCase{args: args, seed: seeds(s, plantDir), crash: crashC1,
+		errorLine: "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/manifests/m.json.tmp-<random>' -> '$PROJECT/.orchestrator/manifests/m.json'"})
+	inv.normalize = func(s string) string { return normalizeTempSuffix(normalizeCreatedAt(s)) }
+	js, orch := h.runPair(t, inv)
+	for runtime, o := range map[string]outcome{"js": js, "orch": orch} {
+		for name := range o.files {
+			if strings.Contains(name, ".tmp-") {
+				t.Errorf("%s left its temp behind: %s", runtime, name)
+			}
+		}
+	}
+	if err := crashError(inv.crash, inv.errorLine, js, orch); err != nil {
+		t.Error(err)
+	}
+	js.stderr, orch.stderr = "", ""
+	compareOutcomes(t, js, orch)
+}
+
+func testTempSuffixNormalization(t *testing.T) {
+	in := "rename '/p/m.json.tmp-3141592653' -> '/p/m.json'; '/p/x.tmp-12' '/p/y.tmp-1a'"
+	want := "rename '/p/m.json.tmp-<random>' -> '/p/m.json'; '/p/x.tmp-<random>' '/p/y.tmp-1a'"
+	if got := normalizeTempSuffix(in); got != want {
+		t.Errorf("normalized %q, want %q", got, want)
+	}
 }
 
 // testManifestTreeContents proves the tree case is not vacuous: the JS manifest holds exactly

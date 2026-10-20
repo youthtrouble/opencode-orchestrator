@@ -8,6 +8,7 @@
 //   3. Syncs native agents' models from orchestrator/models.json so the audit skill can retarget
 //      everything by editing one file.
 import { spawn } from "node:child_process";
+import { randomInt } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -66,7 +67,7 @@ function run(cmd: string, args: string[], { cwd, input, signal, timeoutMs = 2 * 
     const finish = (result: RunResult) => {
       if (settled) return;
       settled = true;
-      clearTimeout(killTimer); clearTimeout(pipeTimer);
+      clearTimeout(timer); clearTimeout(killTimer); clearTimeout(pipeTimer);
       signal?.removeEventListener("abort", terminate);
       resolve(result);
     };
@@ -204,10 +205,9 @@ async function createJsRuntime(): Promise<OrchRuntime> {
     mailboxPost: async (root, msg) => (await lib("mailbox.mjs")).post(root, msg),
     mailboxList: async (root, query) => (await lib("mailbox.mjs")).list(root, query),
     async manifestCreate(root, { task, author, paths, baseline }) {
-      const out = manifestPath(root, task);
+      const out = prepareManifestPath(root, task);
       const m = (await lib("manifest.mjs")).buildManifest({ root, paths, task, author, baseline });
-      fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(out, JSON.stringify(m, null, 2) + "\n");
+      replaceFile(out, JSON.stringify(m, null, 2) + "\n");
       return { path: out, manifest_sha256: m.manifest_sha256, file_count: m.file_count };
     },
     async manifestVerify(root, file) {
@@ -219,11 +219,54 @@ async function createJsRuntime(): Promise<OrchRuntime> {
   };
 }
 
-// The task names the manifest file, so it must not climb out of (or nest under) manifests/ (S4/R7).
-function manifestPath(root: string, task: string) {
+// The manifest file for task under root's manifests/, whose directory exists on return. The task
+// names the file, so it must not climb out of (or nest under) manifests/ (S4/R7), and manifests/
+// must not resolve outside the project, through a symlink or otherwise (R15).
+function prepareManifestPath(root: string, task: string) {
   const isFileName = typeof task === "string" && task !== "" && task !== "." && task !== ".." && !/[/\\\0]/.test(task);
   if (!isFileName) throw new Error(`manifest task must be a single file name: ${JSON.stringify(task)}`);
-  return path.join(root, ".orchestrator", "manifests", `${task}.json`);
+  const dir = path.join(root, ".orchestrator", "manifests");
+  refuseOutsideProject(root, dir);
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${task}.json`);
+}
+
+// Throws unless dir's nearest existing ancestor (dir itself when present) really lies inside root,
+// checked before any directory is created so a symlinked ancestor cannot make mkdir write outside.
+function refuseOutsideProject(root: string, dir: string) {
+  let existing = dir;
+  while (!fs.existsSync(existing)) existing = path.dirname(existing);
+  const fromRoot = path.relative(fs.realpathSync(root), fs.realpathSync(existing));
+  if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) throw new Error(`manifest directory is outside the project: ${dir}`);
+}
+
+// Random names to try before giving up on an exclusive temp: a collision means another writer's
+// temp, which is never touched, so each one costs only a fresh name.
+const TEMP_NAME_ATTEMPTS = 8;
+
+// Replaces file with text through an exclusive owner-only sibling temp and a rename, so a symlink
+// at file is replaced, never followed, and a reader never sees a partial file (R15). Only the temp
+// this call created is ever removed.
+function replaceFile(file: string, text: string) {
+  const { tmp, fd } = openFreshTemp(file);
+  try {
+    try { fs.writeFileSync(fd, text); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+function openFreshTemp(file: string) {
+  for (let attempt = 1; ; attempt++) {
+    const tmp = `${file}.tmp-${randomInt(2 ** 32)}`;
+    try {
+      return { tmp, fd: fs.openSync(tmp, "wx", 0o600) };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST" || attempt === TEMP_NAME_ATTEMPTS) throw err;
+    }
+  }
 }
 
 // "budget gate --vendor openai" -> "budget gate": the tokens before the first flag.
@@ -298,7 +341,7 @@ function createGoRuntime(bin: string): OrchRuntime {
     },
     async manifestCreate(root, { task, author, paths, baseline }) {
       refuseFlagLike("manifest create", { task, author, baseline, paths });
-      const out = manifestPath(root, task);
+      const out = prepareManifestPath(root, task);
       const args = ["manifest", "create", "--root", root, "--task", task, "--author", author, "--out", out, ...(baseline ? ["--baseline", baseline] : []), ...paths];
       const created = JSON.parse((await callOrch(args)).stdout);
       return { path: out, manifest_sha256: created.manifest_sha256, file_count: created.file_count };

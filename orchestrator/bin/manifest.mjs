@@ -2,9 +2,39 @@
 // manifest.mjs create --task T --author A [--baseline file.json] --out file.json <paths...>
 // manifest.mjs verify file.json          (exit 1 on any mismatch)
 // manifest.mjs diff before.json after.json
+import { randomInt } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { buildManifest, verifyManifest, diffManifests } from "../lib/manifest.mjs";
+
+// Random names to try before giving up on an exclusive temp: a collision means another writer's
+// temp, which is never touched, so each one costs only a fresh name.
+const TEMP_NAME_ATTEMPTS = 8;
+
+// Replaces file with text through an exclusive owner-only sibling temp and a rename, so a symlink
+// at file is replaced, never followed, and a reader never sees a partial file. Only the temp this
+// call created is ever removed.
+function replaceFile(file, text) {
+  const { tmp, fd } = openFreshTemp(file);
+  try {
+    try { fs.writeFileSync(fd, text); } finally { fs.closeSync(fd); }
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+function openFreshTemp(file) {
+  for (let attempt = 1; ; attempt++) {
+    const tmp = `${file}.tmp-${randomInt(2 ** 32)}`;
+    try {
+      return { tmp, fd: fs.openSync(tmp, "wx", 0o600) };
+    } catch (err) {
+      if (err.code !== "EEXIST" || attempt === TEMP_NAME_ATTEMPTS) throw err;
+    }
+  }
+}
 
 const [cmd, ...rest] = process.argv.slice(2);
 const opts = {}; const positional = [];
@@ -16,7 +46,7 @@ if (cmd === "create") {
   if (!opts.task || !opts.author || !opts.out || positional.length === 0) { console.error("usage: manifest.mjs create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>"); process.exit(2); }
   const m = buildManifest({ root, paths: positional, task: opts.task, author: opts.author, baseline: opts.baseline || null });
   fs.mkdirSync(path.dirname(path.resolve(opts.out)), { recursive: true });
-  fs.writeFileSync(path.resolve(opts.out), JSON.stringify(m, null, 2) + "\n");
+  replaceFile(path.resolve(opts.out), JSON.stringify(m, null, 2) + "\n");
   console.log(JSON.stringify({ out: opts.out, file_count: m.file_count, manifest_sha256: m.manifest_sha256 }));
 } else if (cmd === "verify") {
   const m = JSON.parse(fs.readFileSync(path.resolve(positional[0]), "utf8"));

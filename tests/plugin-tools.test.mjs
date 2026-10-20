@@ -4,7 +4,10 @@
 // JS script gets. Go sandboxes poison every lib/*.mjs and bin/*.mjs, so any JS use is visible.
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { calls, checkoutRegistry, createSandbox, loadPlugin, poisonHits, routingDocument, setAnswers, SPAWNED_SCRIPTS, typescriptSupported, usageFixture, waitFor, writeFakeOrch } from "./plugin-harness.mjs";
@@ -32,6 +35,14 @@ async function loadJs(t, answers = {}) {
 
 /** The calls made to `orch <first>...` (go) since the log was `from` entries long. */
 const orchCalls = (sandbox, first, from = 0) => calls(sandbox).slice(from).filter((c) => c.self === "path" && c.argv[0] === first);
+
+/** Makes crypto.randomInt return `draws` in order (the plugin imports it by name) until the test ends. */
+function stubRandomInt(t, draws) {
+  const original = crypto.randomInt;
+  crypto.randomInt = () => draws.shift();
+  syncBuiltinESMExports();
+  t.after(() => { crypto.randomInt = original; syncBuiltinESMExports(); });
+}
 
 describe("mailbox_post", { skip }, () => {
   test("js: a real message line lands in messages.jsonl", async (t) => {
@@ -160,6 +171,68 @@ describe("manifest_create and manifest_verify", { skip }, () => {
     assert.equal(r.error.message, 'paths may not begin with "--" in the go runtime');
     assert.deepEqual(orchCalls(sandbox, "manifest"), []);
   });
+
+  test("js: a symlink at the manifest path is replaced, never followed (R15)", async (t) => {
+    const { sandbox, plugin } = await loadJs(t);
+    fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
+    const victim = path.join(sandbox.root, "victim.txt");
+    fs.writeFileSync(victim, "victim bytes\n");
+    const out = path.join(sandbox.project, ".orchestrator", "manifests", "t1.json");
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.symlinkSync(victim, out);
+    const created = await plugin.callTool("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+    assert.equal(fs.readFileSync(victim, "utf8"), "victim bytes\n");
+    assert.equal(fs.lstatSync(out).isFile(), true);
+    assert.equal(JSON.parse(fs.readFileSync(out, "utf8")).manifest_sha256, created.metadata.manifest_sha256);
+    assert.deepEqual(fs.readdirSync(path.dirname(out)), ["t1.json"]);
+  });
+
+  test("js: a temp-name collision keeps the other writer's temp and still writes (C2-F1)", async (t) => {
+    const { sandbox, plugin } = await loadJs(t);
+    fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
+    const out = path.join(sandbox.project, ".orchestrator", "manifests", "t1.json");
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(`${out}.tmp-7`, "another writer's temp\n");
+    stubRandomInt(t, [7, 8]);
+    const created = await plugin.callTool("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+    assert.equal(fs.readFileSync(`${out}.tmp-7`, "utf8"), "another writer's temp\n");
+    assert.equal(JSON.parse(fs.readFileSync(out, "utf8")).manifest_sha256, created.metadata.manifest_sha256);
+    assert.deepEqual(fs.readdirSync(path.dirname(out)).sort(), ["t1.json", "t1.json.tmp-7"]);
+  });
+
+  for (const runtime of ["js", "go"]) {
+    test(`${runtime}: an .orchestrator outside the project is refused before manifests/ is created (C2-F2)`, async (t) => {
+      const { sandbox, plugin } = runtime === "js" ? await loadJs(t) : await loadGo(t);
+      fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
+      const outside = path.join(sandbox.root, "outside");
+      fs.mkdirSync(outside);
+      const state = path.join(sandbox.project, ".orchestrator");
+      fs.rmSync(state, { recursive: true, force: true });
+      fs.symlinkSync(outside, state);
+      const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+      assert.equal(r.status, "error");
+      assert.equal(r.error.message, `manifest directory is outside the project: ${path.join(state, "manifests")}`);
+      assert.deepEqual(fs.readdirSync(outside), []);
+      assert.deepEqual(orchCalls(sandbox, "manifest"), []);
+    });
+  }
+
+  for (const runtime of ["js", "go"]) {
+    test(`${runtime}: a manifests directory outside the project is refused (R15)`, async (t) => {
+      const { sandbox, plugin } = runtime === "js" ? await loadJs(t) : await loadGo(t);
+      fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
+      const outside = path.join(sandbox.root, "outside");
+      fs.mkdirSync(outside);
+      const dir = path.join(sandbox.project, ".orchestrator", "manifests");
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      fs.symlinkSync(outside, dir);
+      const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+      assert.equal(r.status, "error");
+      assert.equal(r.error.message, `manifest directory is outside the project: ${dir}`);
+      assert.deepEqual(fs.readdirSync(outside), []);
+      assert.deepEqual(orchCalls(sandbox, "manifest"), []);
+    });
+  }
 
   for (const runtime of ["js", "go"]) {
     // The harness skips opencode's schema check, so a non-string task reaches the runtime as-is.
@@ -397,49 +470,21 @@ describe("process runner", { skip }, () => {
   const graces = { ORCH_PLUGIN_KILL_GRACE_MS: String(KILL_GRACE_MS), ORCH_PLUGIN_PIPE_GRACE_MS: String(PIPE_GRACE_MS) };
   const delegateInput = { role: "coder", prompt: "build it", harness: "claude" };
 
+  // Every fake ends by itself (see writeFakeOrch), so a test leaves no process to clean up.
   async function loadGoWith(t, answers, env) {
-    // Registered before the sandbox's own cleanup (hooks run in order), so the call log still exists.
-    let sandbox;
-    t.after(() => sandbox && reapLoggedProcesses(sandbox));
-    sandbox = createSandbox(t, { runtime: "go" });
+    const sandbox = createSandbox(t, { runtime: "go" });
     const doc = await routingDocument(usageFixture("green"));
     setAnswers(sandbox, { "routing --json": { stdout: doc }, "routing --json --refresh": { stdout: doc }, "routing --cached --json": { stdout: doc }, ...answers });
     const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ...env } });
     return { sandbox, plugin };
   }
 
+  // A read-only probe: a pid reused since the log was written can only make it answer wrongly,
+  // never harm anything.
   const isAlive = (pid) => {
     try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; }
   };
-  /**
-   * Kill every logged fake process (and `sleep` holder) of a test that is still running when it ends.
-   * ESRCH means it is already gone. EPERM means the pid was reused by another user's process: it is
-   * not ours, so it is reported, never counted as reaped. A pid below 2 would signal init or our
-   * whole process group, so it is refused. Refusals and EPERMs are collected so the remaining
-   * pids are still reaped, then reported together.
-   */
-  const reapLoggedProcesses = (sandbox) => {
-    if (!fs.existsSync(sandbox.log)) return;
-    const refused = [];
-    const notOurs = [];
-    for (const { pid } of calls(sandbox)) {
-      if (!Number.isInteger(pid) || pid < 2) {
-        refused.push(pid);
-        continue;
-      }
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (error) {
-        if (error.code === "EPERM") notOurs.push(pid);
-        else if (error.code !== "ESRCH") throw error;
-      }
-    }
-    const problems = [];
-    if (refused.length > 0) problems.push(`refused to kill logged pids ${refused.join(", ")}`);
-    if (notOurs.length > 0) problems.push(`logged pids now belong to another user, left alone: ${notOurs.join(", ")}`);
-    if (problems.length > 0) throw new Error(problems.join("; "));
-  };
-  // Without the fixes these cases wait forever (or for the 30 s sleep): fail them instead.
+  // Without the fixes these cases wait for the hang ceiling (or the 30 s sleep): fail them sooner.
   const bounded = { timeout: 20000 };
 
   test("a call cancelled before it starts spawns nothing", bounded, async (t) => {
@@ -493,6 +538,44 @@ describe("process runner", { skip }, () => {
     const cut = bytes.indexOf(Buffer.from("€")) + 2; // between E2 82 and AC
     const { plugin } = await loadGoWith(t, { "mailbox list": { stdoutHex: [bytes.subarray(0, cut).toString("hex"), bytes.subarray(cut).toString("hex")] } });
     assert.equal((await plugin.callTool("mailbox_list")).content, `${message.at} [note] coder -> *: € (id m-1)`);
+  });
+
+  test("a spawn failure clears the call's deadline (R8)", bounded, async (t) => {
+    // The 30 s mailbox deadline scaled to 1.5 s; with the binary gone, spawn emits "error" and "close", never "exit".
+    const deadlineMs = 1500;
+    const { sandbox, plugin } = await loadGoWith(t, {}, { ORCH_PLUGIN_ORCH_TIMEOUT_SCALE: "0.05" });
+    fs.rmSync(path.join(sandbox.fakebin, "orch"));
+    const deadlines = [];
+    const cleared = new Set();
+    const { setTimeout: realSetTimeout, clearTimeout: realClearTimeout } = globalThis;
+    t.mock.method(globalThis, "setTimeout", (fn, ms, ...args) => {
+      const handle = realSetTimeout(fn, ms, ...args);
+      if (ms === deadlineMs) deadlines.push(handle);
+      return handle;
+    });
+    t.mock.method(globalThis, "clearTimeout", (handle) => {
+      cleared.add(handle);
+      return realClearTimeout(handle);
+    });
+    await assert.rejects(plugin.callTool("mailbox_list"));
+    assert.equal(deadlines.length, 1);
+    assert.ok(deadlines.every((handle) => cleared.has(handle)), "the deadline timer outlived the failed spawn");
+  });
+
+  test("a hung fake ends by itself at the hang ceiling (R16)", bounded, async (t) => {
+    const sandbox = createSandbox(t, { runtime: "go" });
+    setAnswers(sandbox, { "mailbox list": { hang: true } });
+    const env = { ...process.env, PLUGIN_TEST_LOG: sandbox.log, PLUGIN_TEST_ANSWERS: sandbox.answersFile, PLUGIN_TEST_HANG_CEILING_MS: "300" };
+    const child = spawn(path.join(sandbox.fakebin, "orch"), ["mailbox", "list"], { env, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
+    // The child is this test's own: stop it if it outlives the check.
+    const ended = new Promise((resolve) => child.on("close", (code) => resolve(code)));
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 5000);
+    const code = await ended;
+    clearTimeout(watchdog);
+    assert.equal(code, 98);
+    assert.equal(stderr, "fake orch: hang ceiling reached\n");
   });
 
   // The deadlines are scaled down 20 times; the messages carry the configured values.

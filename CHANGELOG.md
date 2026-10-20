@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- plugin: a failed spawn no longer leaves a two-hour deadline timer behind (Sol R8).
+- manifest (JS, Go, plugin): a manifest is written through a private temp file and a rename, so a symlink at the
+  destination is replaced, never followed. A temp-name collision draws a new name and never removes another writer's
+  temp. The plugin refuses a manifests directory outside the project, checked before any directory is created
+  (Sol R15).
+- tests: the plugin test fakes end by themselves; the cleanup that killed logged pids is gone (Sol R16).
 - go: Ctrl-C (or SIGTERM/SIGHUP) during a captured child (doctor probes, kickoff self-execs, flip's
   launcher, supervisor channels, usage feeds) now stops the child's process group and then ends
   orch by the same signal; a signal orch ignores (nohup) stays ignored. Leftover cleanup of a

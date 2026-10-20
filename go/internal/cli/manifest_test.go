@@ -35,6 +35,33 @@ func TestManifestCreateVerifyDiff(t *testing.T) {
 	}
 }
 
+// A symlink at --out is replaced by a private regular file; the file it pointed at is untouched (R15).
+func TestManifestCreateReplacesSymlinkAtOut(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeTestFile(t, "src/a.txt", "a")
+	writeTestFile(t, "victim.txt", "keep me")
+	if err := os.Symlink("victim.txt", "m.json"); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, _, stderr := run(t, Manifest, []string{"create", "--task", "t", "--author", "me", "--out", "m.json", "src"}, ""); code != 0 || stderr != "" {
+		t.Fatalf("create: code %d stderr %q", code, stderr)
+	}
+	info, err := os.Lstat("m.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Errorf("m.json mode %v, want a regular 0600 file", info.Mode())
+	}
+	if victim, err := os.ReadFile("victim.txt"); err != nil || string(victim) != "keep me" {
+		t.Errorf("victim: %q, %v", victim, err)
+	}
+	if code, stdout, _ := run(t, Manifest, []string{"verify", "m.json"}, ""); code != 0 {
+		t.Errorf("verify: code %d stdout %q", code, stdout)
+	}
+}
+
 func TestManifestUsageErrors(t *testing.T) {
 	t.Chdir(t.TempDir())
 	const createUsage = "usage: manifest.mjs create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>\n"

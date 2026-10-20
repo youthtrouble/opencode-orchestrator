@@ -68,6 +68,9 @@ func manifestCreate(root string, parsed cliargs.ManifestArgs, stdio Stdio) int {
 	return printLine(stdio, receipt)
 }
 
+// writeManifest writes m as indented JSON to out, creating its directory. The file is replaced
+// through a private temp and a rename (WritePrivateFile), so a symlink at out is replaced, never
+// followed, and the result is owner-only, as the JS CLI does (R15).
 func writeManifest(out string, m *jsjson.Object) error {
 	file, err := nodefs.Resolve(out)
 	if err != nil {
@@ -80,7 +83,7 @@ func writeManifest(out string, m *jsjson.Object) error {
 	if err != nil {
 		return err
 	}
-	return nodefs.WriteFile(file, append(data, '\n'))
+	return nodefs.WritePrivateFile(file, append(data, '\n'))
 }
 
 // manifestVerify prints {ok, mismatched, missing, checked} and exits 1 unless ok.

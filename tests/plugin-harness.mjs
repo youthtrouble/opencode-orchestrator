@@ -15,7 +15,7 @@ const CHECKOUT_LIBS = fs.readdirSync(path.join(REPO, "orchestrator", "lib")).fil
 const CHECKOUT_SCRIPTS = fs.readdirSync(path.join(REPO, "orchestrator", "bin")).filter((f) => f.endsWith(".mjs"));
 /** The orchestrator scripts the plugin spawns; JS sandboxes get logging fakes of these. */
 export const SPAWNED_SCRIPTS = ["claude-exec", "codex-exec", "worker", "supervisor", "flip"];
-const ENV_KEYS = ["HOME", "PATH", "ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY", "PLUGIN_TEST_LOG", "PLUGIN_TEST_ANSWERS", "PLUGIN_TEST_POISON", "ORCH_PLUGIN_KILL_GRACE_MS", "ORCH_PLUGIN_PIPE_GRACE_MS", "ORCH_PLUGIN_ORCH_TIMEOUT_SCALE"];
+const ENV_KEYS = ["HOME", "PATH", "ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY", "PLUGIN_TEST_LOG", "PLUGIN_TEST_ANSWERS", "PLUGIN_TEST_POISON", "ORCH_PLUGIN_KILL_GRACE_MS", "ORCH_PLUGIN_PIPE_GRACE_MS", "ORCH_PLUGIN_ORCH_TIMEOUT_SCALE", "PLUGIN_TEST_HANG_CEILING_MS"];
 
 export const typescriptSupported = Boolean(process.features.typescript);
 
@@ -52,6 +52,8 @@ export function checkoutRegistry() {
  * Besides {stdout, stderr, code}, an answer can misbehave for the process-runner tests:
  * `ignoreTerm` traps SIGTERM, `hang` never answers, `holdStdout` leaves a logged `sleep 30` holding
  * stdout after the exit, and `stdoutHex` writes its hex chunks 100 ms apart instead of `stdout`.
+ * Every fake process ends by itself, so a test never has to signal a pid from the log: the holder
+ * after 30 s, and a hung call after $PLUGIN_TEST_HANG_CEILING_MS (default 60 s), with exit code 98.
  * Each logged call also carries the ORCH_HOME and ORCH_REGISTRY it saw (orchHome, orchRegistry).
  */
 export function writeFakeOrch(file, self, fixedAnswer = null, keyPrefix = null) {
@@ -73,7 +75,7 @@ const answer = ${lookup};
 if (answer?.ignoreTerm) process.on("SIGTERM", () => {});
 log({ self: ${JSON.stringify(self)}, argv, cwd: process.cwd(), stdin, pid: process.pid, orchHome: process.env.ORCH_HOME, orchRegistry: process.env.ORCH_REGISTRY });
 if (!answer) { process.stderr.write("fake orch: unscripted " + full + "\\n"); process.exit(97); }
-if (answer.hang) setInterval(() => {}, 60000);
+if (answer.hang) setTimeout(() => { process.stderr.write("fake orch: hang ceiling reached\\n"); process.exit(98); }, Number(process.env.PLUGIN_TEST_HANG_CEILING_MS) || 60000);
 else if (answer.stdoutHex) writeSlowly(answer.stdoutHex.map((hex) => Buffer.from(hex, "hex")));
 else {
   if (answer.holdStdout) {
