@@ -132,13 +132,46 @@ func TestSignalledChildClosesWithNull(t *testing.T) {
 }
 
 func TestChildThatHandlesTermKeepsItsExitCode(t *testing.T) {
-	child := startReady(t, `trap 'kill $!; exit 5' TERM; echo ready; sleep 30 >/dev/null 2>&1 & wait $!`, testGrace)
+	sleepPidFile := filepath.Join(t.TempDir(), "sleep.pid")
+	child := startReady(t, `trap 'kill $!; exit 5' TERM; sleep 30 >/dev/null 2>&1 & echo $! >'`+sleepPidFile+`'; echo ready; wait $!`, testGrace)
+	killSleepOnCleanup(t, sleepPidFile)
 	child.Signal(syscall.SIGTERM)
 	code, err := child.Wait()
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantCode(t, code, intp(5))
+}
+
+// killSleepOnCleanup kills the background sleep whose pid the child wrote to pidFile, should
+// the child's trap not have killed it. Only that pid, which this test started, is signalled.
+func killSleepOnCleanup(t *testing.T, pidFile string) {
+	t.Helper()
+	content, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	if err != nil {
+		t.Fatalf("sleep pid %q: %v", content, err)
+	}
+	if pid < 2 {
+		// 0 or -1 would signal our process group or every process we may signal.
+		t.Fatalf("sleep pid %d is not a single process", pid)
+	}
+	t.Cleanup(func() {
+		// The trap has usually reaped the sleep already; probing first narrows the window in
+		// which its pid could have been reused before the SIGKILL.
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		} else if err != nil {
+			t.Errorf("probe the test's sleep %d: %v", pid, err)
+			return
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			t.Errorf("kill the test's sleep %d: %v", pid, err)
+		}
+	})
 }
 
 func TestSignalEscalatesToKillAfterGrace(t *testing.T) {

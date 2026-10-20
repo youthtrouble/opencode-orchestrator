@@ -53,7 +53,9 @@ func startError(name string, err error) *StartError {
 
 // resolve finds the file execvp would run for name, as an absolute path. A name containing
 // "/" is used as is, relative to dir; failures to execute it surface from exec as errnos.
-// Otherwise each PATH entry is tried in order (an empty entry is dir). A directory or a file
+// Otherwise each PATH entry is tried in order as <entry>/<name> (an empty entry is dir). Paths
+// are never cleaned lexically: in "link/../bin" the kernel resolves ".." after following the
+// symlink, so cleaning it to "bin" would check and run a different file. A directory or a file
 // that may not be executed records EACCES and the search goes on; when nothing runs, the error
 // is EACCES if one was recorded, else ENOENT.
 func resolve(name, dir string, env []string) (string, error) {
@@ -70,7 +72,7 @@ func resolve(name, dir string, env []string) (string, error) {
 	}
 	failure := syscall.ENOENT
 	for _, entry := range strings.Split(searchPath, ":") {
-		candidate, err := absoluteIn(filepath.Join(entry, name), dir)
+		candidate, err := absoluteIn(candidateIn(entry, name), dir)
 		if err != nil {
 			return "", startError(name, err)
 		}
@@ -85,13 +87,31 @@ func resolve(name, dir string, env []string) (string, error) {
 	return "", startError(name, failure)
 }
 
-// absoluteIn makes path absolute against dir, the directory the child will run in, so the
-// same file is checked here and executed after the child's chdir.
-func absoluteIn(path, dir string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(dir, path)
+// candidateIn is the file execvp tries for name in one PATH entry; an empty entry is the
+// child's directory.
+func candidateIn(entry, name string) string {
+	if entry == "" {
+		return name
 	}
-	return filepath.Abs(path)
+	return entry + "/" + name
+}
+
+// absoluteIn makes path absolute against dir, the directory the child will run in, so the
+// same file is checked here and executed after the child's chdir. A relative dir, or none,
+// is taken from the physical working directory as libuv's uv_cwd reports it (syscall.Getwd);
+// os.Getwd would prefer $PWD, which may name it through a symlink.
+func absoluteIn(path, dir string) (string, error) {
+	if !filepath.IsAbs(path) && dir != "" {
+		path = dir + "/" + path
+	}
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	cwd, err := syscall.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return cwd + "/" + path, nil
 }
 
 // checkExecutable is the test execve applies: a directory, or a file without execute

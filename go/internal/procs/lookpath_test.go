@@ -81,6 +81,26 @@ func TestStartResolvesEmptyPathEntryInDir(t *testing.T) {
 	}
 }
 
+func TestStartKeepsPathEntryUncleaned(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"real/sub", "real/bin", "bin"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join("real", "sub"), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	install(t, filepath.Join(root, "real", "bin"), "tool", "real", 0o755)
+	install(t, filepath.Join(root, "bin"), "tool", "lexical", 0o755)
+	for _, entry := range []string{root + "/link/../bin", "link/../bin"} {
+		got, err := run(t, "tool", root, entry)
+		if err != nil || got != "real" {
+			t.Errorf("PATH=%q ran %q (%v), want the tool the kernel finds through the symlink", entry, got, err)
+		}
+	}
+}
+
 func TestStartUsesNameWithSlashDirectly(t *testing.T) {
 	dir := t.TempDir()
 	install(t, dir, "z", "direct", 0o755)

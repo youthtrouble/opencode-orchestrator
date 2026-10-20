@@ -10,6 +10,8 @@
   scripted installs).
 - install: release downloads give up after 20 s without a connection, 60 s below 1 KiB/s or 15 min
   in total, instead of holding the operation lock forever (Sol S4/R8).
+- go: PATH lookup keeps each entry as written (`link/../bin` is resolved by the kernel), as Node
+  does (Sol S1/R6).
 - worker: a lane name containing `/` is refused, and a detached runner gets the absolute project
   root as `--cwd` (both runtimes; Sol S2/R8, S2/R6).
 - worker (Go): `stop` signals only a worker whose lane lock holds the state's pid; a lock left by
