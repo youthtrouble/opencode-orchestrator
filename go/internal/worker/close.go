@@ -99,7 +99,12 @@ func (r *run) finished(code, result any) error {
 }
 
 // failed publishes the failure, records an incident (whose failure is ignored) and posts a
-// blocked message.
+// blocked message. The errors and the message body may echo a credential (an auth error
+// quoting its key) into shared project records, so their token-shaped text becomes <token>
+// (PE-24). result_summary stays verbatim: it is the model's answer, and the state file is
+// owner-only. The run record file also keeps the errors and the model's text verbatim, for the
+// same reason: it is owner-only (0600, PE-21). The incident keeps the raw errors, as its log
+// redacts them itself.
 func (r *run) failed(code, result any) error {
 	summary, err := cutSummary(jsjson.Path(result, "final_message"), "(intermediate value)")
 	if err != nil {
@@ -109,7 +114,7 @@ func (r *run) failed(code, result any) error {
 	record := jsjson.Path(result, "record")
 	extra := jsjson.NewObject()
 	extra.Set("exit_code", code)
-	extra.Set("errors", or(errs, []any{"bridge produced no result"}))
+	extra.Set("errors", or(scrubErrors(errs), []any{"bridge produced no result"}))
 	extra.Set("record", or(record, nil))
 	extra.Set("result_summary", summary)
 	r.finish("failed", extra)
@@ -128,7 +133,31 @@ func (r *run) failed(code, result any) error {
 		refs = append(refs, ref)
 	}
 	lane := jsjson.TemplateString(r.launch.lane)
-	return r.post(mailbox.Draft{Kind: "blocked", Subject: lane + " failed on " + r.launch.harness, Body: jsstr.Slice(body, 0, maxBlockedBody), Refs: refs})
+	return r.post(mailbox.Draft{Kind: "blocked", Subject: lane + " failed on " + r.launch.harness, Body: jsstr.Slice(incident.ScrubTokens(body), 0, maxBlockedBody), Refs: refs})
+}
+
+// scrubErrors is the bridge's errors with token-shaped text replaced in every string at any
+// depth: claude's bridge may push a whole result array, so a credential can sit inside an
+// object inside an array. Other values are kept as they are (PE-24).
+func scrubErrors(errs any) any {
+	switch errs := errs.(type) {
+	case string:
+		return incident.ScrubTokens(errs)
+	case []any:
+		scrubbed := make([]any, len(errs))
+		for i, e := range errs {
+			scrubbed[i] = scrubErrors(e)
+		}
+		return scrubbed
+	case *jsjson.Object:
+		scrubbed := jsjson.NewObject()
+		for _, key := range errs.Keys() {
+			value, _ := errs.Get(key)
+			scrubbed.Set(key, scrubErrors(value))
+		}
+		return scrubbed
+	}
+	return errs
 }
 
 // recordFailure is the failed run's incident: kind limit when String(result?.errors) mentions

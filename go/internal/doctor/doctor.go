@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
@@ -363,7 +364,8 @@ var (
 	pluginLogTail = 400
 )
 
-// pluginLog scans the last 400 lines of opencode's log; an unreadable log adds no row.
+// pluginLog scans the last 400 lines of opencode's log and shows the last three plugin errors,
+// redacted; an unreadable log adds no row.
 func (c *checks) pluginLog() {
 	data, err := c.deps.ReadFile(filepath.Join(c.deps.Home, ".local", "share", "opencode", "log", "opencode.log"))
 	if err != nil {
@@ -386,7 +388,9 @@ func (c *checks) pluginLog() {
 	if len(errors) > 3 {
 		errors = errors[len(errors)-3:]
 	}
-	c.pushDetail(Warn, "plugin errors in log", jsstr.Slice(strings.Join(errors, " | "), 0, 300))
+	// A log line may quote a path, an email or a credential; the row is redacted as an incident
+	// is, with the home Node's os.homedir() gives, before it is cut.
+	c.pushDetail(Warn, "plugin errors in log", jsstr.Slice(incident.Redact(c.deps.Home, strings.Join(errors, " | ")), 0, 300))
 }
 
 func exitedZero(r Output) bool { return r.Code != nil && *r.Code == 0 }

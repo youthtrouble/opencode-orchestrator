@@ -95,6 +95,33 @@ func (h *harness) testDoctor(t *testing.T) {
 		t.Parallel()
 		h.testDoctorNoBinary(t, healthy, pathEnv)
 	})
+	t.Run("log-errors-redacted", func(t *testing.T) {
+		t.Parallel()
+		h.testDoctorLogRedacted(t, healthyWithoutLog, pathEnv, orchBinEnv)
+	})
+}
+
+// testDoctorLogRedacted seeds a plugin error quoting a credential, the sandbox home and an
+// email: both runtimes print the row redacted as an incident is (S3/R10), and identically.
+func (h *harness) testDoctorLogRedacted(t *testing.T, healthyWithoutLog seed, pathEnv, orchBinEnv string) {
+	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
+	inv := invocation{
+		js:   []string{h.node, filepath.Join(h.orchJS, "bin", "doctor.mjs")},
+		orch: []string{h.orchBin, "doctor"},
+		seed: seeds(healthyWithoutLog, func(t *testing.T, sb sandbox) {
+			doctorLog("ERROR orchestrator auth "+apiKey+" in "+sb.home+"/p for me@example.com\n")(t, sb)
+		}),
+		env:       []string{pathEnv, orchBinEnv},
+		normalize: normalizeGeneratedAt,
+	}
+	js, orch := h.runPair(t, inv)
+	js.stdout = maskJSUnitTests(t, js.stdout)
+	orch.stdout = maskOrchRows(t, orch.stdout, filepath.Dir(h.orchJS), orchSelfTestRow)
+	const row = "WARN plugin errors in log  —  ERROR orchestrator auth <token> in ~/p for <email>\n"
+	if !strings.Contains(js.stdout, row) {
+		t.Errorf("js stdout lacks %q:\n%s", row, js.stdout)
+	}
+	compareOutcomes(t, js, orch)
 }
 
 const jsNoBinaryRow = `WARN orch binary  —  not found (runtime js only; see README "Go runtime")` + "\n"

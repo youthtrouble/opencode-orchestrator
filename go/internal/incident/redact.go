@@ -11,6 +11,11 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
+// tokenPattern is redact()'s rule for API keys, refresh/access tokens and JWTs.
+var tokenPattern = regexp.MustCompile(`\b(?:sk|rt|at|eyJ)[A-Za-z0-9._-]{20,}`)
+
+const tokenPlaceholder = "<token>"
+
 // The patterns of redact() in lib/incident.mjs, applied in this order. `\w`, `\d` and `\b` are
 // ASCII in both JS and RE2, but RE2's `\s` is not the JS set, so it is spelled out.
 var redactions = []struct {
@@ -20,7 +25,7 @@ var redactions = []struct {
 	{regexp.MustCompile(`/Users/[^/` + jsstr.WhiteSpaceClass + `]+`), "~"},
 	{regexp.MustCompile(`/home/[^/` + jsstr.WhiteSpaceClass + `]+`), "~"},
 	{regexp.MustCompile(`[\w.+-]+@[\w-]+\.[\w.-]+`), "<email>"},
-	{regexp.MustCompile(`\b(?:sk|rt|at|eyJ)[A-Za-z0-9._-]{20,}`), "<token>"},
+	{tokenPattern, tokenPlaceholder},
 	{regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`), "<uuid>"},
 	{regexp.MustCompile(`\bses_[A-Za-z0-9]+`), "<session>"},
 }
@@ -47,6 +52,13 @@ func Redact(home, text string) string {
 		text = r.pattern.ReplaceAllLiteralString(text, r.replacement)
 	}
 	return jsstr.Slice(text, 0, maxRedacted)
+}
+
+// ScrubTokens replaces token-shaped text with "<token>" and leaves everything else, paths and
+// emails included, as it is: for text that must stay readable to the user but may echo a
+// credential (a failed worker's errors, PE-24). It does not cut the text.
+func ScrubTokens(text string) string {
+	return tokenPattern.ReplaceAllLiteralString(text, tokenPlaceholder)
 }
 
 // tildeAtEveryPosition is what the JS home replacement does for an empty home: the pattern

@@ -229,9 +229,29 @@ func (h *harness) testWorkerStart(t *testing.T) {
 			}
 		}
 	})
+	t.Run("PE-24/failed-run-scrubs-tokens", h.testWorkerFailedRunScrubsTokens)
 	t.Run("cross-runtime", h.testWorkerCrossRuntime)
 	t.Run("PE-13/unread-prompt", h.testWorkerUnreadPrompt)
 	t.Run("node-crash-block-reduction", testNodeCrashBlockReduction)
+}
+
+// testWorkerFailedRunScrubsTokens asserts PE-24: the bridge fails with a credential on stderr.
+// The JS copies it into the state's errors and the blocked message; orch writes <token> there.
+// With the JS's marker replaced, everything else (run record and incident included) is equal.
+func (h *harness) testWorkerFailedRunScrubsTokens(t *testing.T) {
+	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
+	run := bridgeCase{script: map[string]string{"stderr": "401 invalid x-api-key " + apiKey + "\n", "exit": "1\n"}}
+	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: []string{"--brief", "b.md", "--harness", "claude"}, run: run}))
+	for _, file := range []string{"project/workers/b.json", "project/mailbox/messages.jsonl"} {
+		if !strings.Contains(js.files[file], apiKey) {
+			t.Errorf("js %s lacks the marker (PE-24 expects it verbatim):\n%s", file, js.files[file])
+		}
+		if strings.Contains(orch.files[file], apiKey) || !strings.Contains(orch.files[file], "x-api-key <token>") {
+			t.Errorf("orch %s is not scrubbed (PE-24):\n%s", file, orch.files[file])
+		}
+		js.files[file] = strings.ReplaceAll(js.files[file], apiKey, "<token>")
+	}
+	compareOutcomes(t, js, orch)
 }
 
 // testWorkerCrossRuntime has one runtime's start write a lane and both runtimes' status read

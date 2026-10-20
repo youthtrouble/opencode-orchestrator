@@ -333,6 +333,17 @@ func TestPluginLogScan(t *testing.T) {
 	}
 }
 
+func TestPluginLogRowIsRedactedBeforeItIsCut(t *testing.T) {
+	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
+	m := healthy(t)
+	m.files[pluginLogPath] = "ERROR orchestrator auth " + apiKey + " in /h/p for me@example.com " + strings.Repeat("a", 300)
+	row := Check(m.deps())[17]
+	want := "ERROR orchestrator auth <token> in ~/p for <email> " + strings.Repeat("a", 249)
+	if row.Status != Warn || row.Detail != want {
+		t.Errorf("row %q, want detail %q", row, want)
+	}
+}
+
 func TestUnreadablePluginLogAddsNoRow(t *testing.T) {
 	m := healthy(t)
 	delete(m.files, pluginLogPath)

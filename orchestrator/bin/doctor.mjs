@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { redact } from "../lib/incident.mjs";
 import { getRouting } from "../lib/usage.mjs";
 
 const rows = [];
@@ -42,7 +43,7 @@ try { const ids = JSON.parse(agents.out).map((a) => a.id); ["conductor", "archit
 const tests = sh("node", ["--test", ...fs.readdirSync(path.join(path.dirname(new URL(import.meta.url).pathname), "..", "tests")).map((f) => path.join(path.dirname(new URL(import.meta.url).pathname), "..", "tests", f))]);
 /fail (\d+)/.test(tests.out) && RegExp.$1 === "0" ? ok("unit tests", (tests.out.match(/pass (\d+)/) || [])[0]) : fail("unit tests", (tests.out.match(/fail \d+/) || ["?"])[0]);
 const log = path.join(os.homedir(), ".local", "share", "opencode", "log", "opencode.log");
-try { const tail = fs.readFileSync(log, "utf8").split("\n").slice(-400).filter((l) => /orchestrator/.test(l) && /ERROR/.test(l)); tail.length ? warn("plugin errors in log", tail.slice(-3).join(" | ").slice(0, 300)) : ok("no plugin errors in recent log"); } catch { /* no log */ }
+try { const tail = fs.readFileSync(log, "utf8").split("\n").slice(-400).filter((l) => /orchestrator/.test(l) && /ERROR/.test(l)); tail.length ? warn("plugin errors in log", redact(tail.slice(-3).join(" | ")).slice(0, 300)) : ok("no plugin errors in recent log"); } catch { /* no log */ }
 
 for (const [s, n, d] of rows) console.log(`${s} ${n}${d ? "  —  " + d : ""}`);
 process.exit(rows.some((r) => r[0] === "FAIL") ? 1 : 0);

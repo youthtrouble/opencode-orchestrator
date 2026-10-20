@@ -192,6 +192,60 @@ func (h *harness) testIncident(t *testing.T) {
 	t.Run("share/short-incomparable-at-PE-5", h.testIncidentShortIncomparableAt)
 	t.Run("jssort-reference-PE-5", h.testJSSortReference)
 	t.Run("share/no-project-key", func(t *testing.T) { h.testIncidentShareHasNoProject(t, seeded) })
+	t.Run("record/request-PE-25", h.testIncidentRequest)
+	t.Run("record/request-equals-flags-PE-25", h.testIncidentRequestEqualsFlags)
+}
+
+// testIncidentRequest runs `record --request -` on orch alone: bin/incident.mjs has no such
+// option (PE-25).
+func (h *harness) testIncidentRequest(t *testing.T) {
+	const usage = "orch incident record: "
+	cases := []struct {
+		name, stdin string
+		args        []string
+		exit        int
+		entry       string // what the log's one line holds, after normalizeIncident
+		stderr      string
+	}{
+		{name: "full", stdin: `{"component":"bridge","kind":"crash","summary":"exit 2 for me@example.com","detail":"d","context":{"thread":"/home/alice/t","n":1},"project":"/work/repo"}`,
+			entry: `"component":"bridge","kind":"crash","summary":"exit 2 for <email>","detail":"d","context":{"thread":"~/t","n":1},"project":"repo","version":"<version>"`},
+		{name: "defaults", stdin: `{"summary":"s"}`,
+			entry: `"component":"agent","kind":"note","summary":"s","detail":"","context":{},"project":"<tmp>","version":"<version>"`},
+		{name: "missing-summary", stdin: `{"component":"c"}`, exit: 1, stderr: "Error: incident needs component and summary\n"},
+		{name: "invalid-json", stdin: `{"summary":`, exit: 2},
+		{name: "conflicting-flag", stdin: `{"summary":"s"}`, args: []string{"--kind", "bug"}, exit: 2, stderr: usage + "--request cannot be combined with --kind\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sb := h.newSandbox(t)
+			argv := append([]string{h.orchBin, "incident", "record", "--request", "-"}, c.args...)
+			o := h.run(t, sb, argv, []byte(c.stdin), nil)
+			entry := normalizeIncident(o.files["state/incidents.jsonl"])
+			switch {
+			case o.exitCode != c.exit:
+				t.Errorf("exit %d, want %d; stderr %q", o.exitCode, c.exit, o.stderr)
+			case c.exit != 0 && (o.stdout != "" || entry != "" || strings.Count(o.stderr, "\n") != 1 || (c.stderr != "" && o.stderr != c.stderr)):
+				t.Errorf("stdout %q, stderr %q, log %q; want one error line %q and no entry", o.stdout, o.stderr, entry, c.stderr)
+			case c.exit == 0 && (!freshReceiptAt.MatchString(o.stdout) || !strings.Contains(entry, c.entry) || o.stderr != ""):
+				t.Errorf("stdout %q, stderr %q, log %q; want a receipt and %s", o.stdout, o.stderr, entry, c.entry)
+			}
+		})
+	}
+}
+
+// testIncidentRequestEqualsFlags checks that orch's `--request -` writes the line, and prints the
+// receipt, that bin/incident.mjs writes for the same fields given as flags.
+func (h *harness) testIncidentRequestEqualsFlags(t *testing.T) {
+	apiKey := "sk-" + "ant-" + strings.Repeat("k", 20)
+	flags := h.incidentInvocation(incidentCase{args: []string{"record", "--component", "plugin", "--kind", "timeout", "--summary", "slow in /Users/bob " + apiKey, "--detail", "ses_abc123", "--ctx", "k=v", "--cwd", "/work/repo"}})
+	request := `{"component":"plugin","kind":"timeout","summary":"slow in /Users/bob ` + apiKey + `","detail":"ses_abc123","context":{"k":"v"},"project":"/work/repo"}`
+	inv := invocation{
+		js:        flags.js,
+		orch:      []string{h.orchBin, "incident", "record", "--request", "-"},
+		stdin:     []byte(request),
+		normalize: normalizeIncident,
+	}
+	h.comparePair(t, inv)
 }
 
 // testIncidentShareHasNoProject checks the privacy promise of share on top of parity: the

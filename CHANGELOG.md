@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- worker (Go): a failed run's errors and its blocked message no longer carry token-shaped text
+  (PE-24; Sol S2/R10).
+- doctor: plugin error lines are redacted before they are printed (both runtimes; Sol S3/R10).
+- incident: `orch incident record --request -` reads the whole incident as JSON from stdin, so
+  callers keep summaries and context out of argv (PE-25; Sol S4/R5).
 - bridges and worker: child output is decoded as a UTF-8 stream in both runtimes, so a character
   split between two reads is no longer turned into U+FFFD by the JS (Sol S1/R7, S2/R15). The
   worker relays and counts as progress only stderr chunks that decode to text, as Node does.

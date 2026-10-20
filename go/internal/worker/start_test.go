@@ -513,6 +513,60 @@ func TestBlockedMessageNamesTheRecordRelativeToTheProject(t *testing.T) {
 	}
 }
 
+// PE-24: a failed run's errors and blocked message carry <token>, never the credential; the
+// model's answer and the incident (redacted by its own log) are not this rule's business.
+func TestFailedRunScrubsTokensFromErrorsAndTheBlockedMessage(t *testing.T) {
+	r, p := closingRun(t)
+	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
+	result := parseResult(`{"ok":false,"errors":["401 invalid x-api-key ` + apiKey + `",7],"final_message":"answer"}`)
+	if err := r.closeWith(1.0, result); err != nil {
+		t.Fatal(err)
+	}
+	state := stateFile(t, p, "b")
+	if got := stateErrors(t, p, "b"); got != `["401 invalid x-api-key <token>",7]` || !strings.Contains(state, `"result_summary": "answer"`) {
+		t.Errorf("errors %s, state %s", got, state)
+	}
+	if mail := readMailbox(t, p); !strings.Contains(mail, `"body":"401 invalid x-api-key <token>; 7"`) {
+		t.Errorf("mailbox %q", mail)
+	}
+	for name, text := range map[string]string{"state": state, "mailbox": readMailbox(t, p), "incidents": incidents(t)} {
+		if strings.Contains(text, apiKey) {
+			t.Errorf("%s holds the credential: %s", name, text)
+		}
+	}
+}
+
+// PE-24: claude's bridge may push a whole result array into errors, so the scrub reaches
+// strings inside nested arrays and objects.
+func TestFailedRunScrubsTokensNestedInsideErrors(t *testing.T) {
+	r, p := closingRun(t)
+	apiKey := "sk-" + "ant-" + strings.Repeat("y", 24)
+	result := parseResult(`{"ok":false,"errors":[[{"type":"text","text":"denied ` + apiKey + `","n":1}]]}`)
+	if err := r.closeWith(1.0, result); err != nil {
+		t.Fatal(err)
+	}
+	if got := stateErrors(t, p, "b"); got != `[[{"type":"text","text":"denied <token>","n":1}]]` {
+		t.Errorf("errors %s", got)
+	}
+	if state := stateFile(t, p, "b"); strings.Contains(state, apiKey) {
+		t.Errorf("state holds the credential: %s", state)
+	}
+}
+
+// stateErrors is the lane state's errors re-encoded compactly, independent of the file's layout.
+func stateErrors(t *testing.T, p Project, lane string) string {
+	t.Helper()
+	state, err := jsjson.Unmarshal([]byte(readText(t, p.StatePath(lane))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := jsjson.Marshal(jsjson.Path(state, "errors"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
 func TestLengthOrZeroIsOptionalLength(t *testing.T) {
 	for _, tc := range []struct {
 		value string

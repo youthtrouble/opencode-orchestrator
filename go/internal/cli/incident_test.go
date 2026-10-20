@@ -114,3 +114,70 @@ func TestIncidentWithEmptyHomeUsesTheWorkingDirectory(t *testing.T) {
 		t.Errorf("log %q, %v: want it under the working directory, redacted as Node does for an empty home", data, err)
 	}
 }
+
+// PE-25: record --request - takes the incident from stdin and writes the entry the flags write.
+func TestIncidentRecordRequestMatchesTheFlags(t *testing.T) {
+	log := incidentSandbox(t)
+	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
+	request := `{"component":"plugin","kind":"crash","summary":"exit 2 ` + apiKey + `","detail":"d","context":{"k":"v"},"project":"/w/repo"}`
+	if code, stdout, stderr := run(t, Incident, []string{"record", "--request", "-"}, request); code != 0 || !strings.HasPrefix(stdout, `{"recorded":"`) || stderr != "" {
+		t.Fatalf("request: code %d stdout %q stderr %q", code, stdout, stderr)
+	}
+	if code, _, stderr := run(t, Incident, []string{"record", "--component", "plugin", "--kind", "crash", "--summary", "exit 2 " + apiKey, "--detail", "d", "--ctx", "k=v", "--cwd", "/w/repo"}, ""); code != 0 || stderr != "" {
+		t.Fatalf("flags: code %d stderr %q", code, stderr)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutAt := regexp.MustCompile(`(?m)^\{"at":"[^"]*",`).ReplaceAllString(string(data), "")
+	entries := strings.Split(strings.TrimSuffix(withoutAt, "\n"), "\n")
+	if len(entries) != 2 || entries[0] != entries[1] || strings.Contains(string(data), apiKey) {
+		t.Errorf("want two equal redacted entries:\n%s", data)
+	}
+}
+
+func TestIncidentRecordRequestDefaultsAndContextValues(t *testing.T) {
+	log := incidentSandbox(t)
+	request := `{"summary":"s","kind":null,"component":"","context":{"n":3,"b":true,"z":null,"p":"/Users/bob/x"}}`
+	if code, _, stderr := run(t, Incident, []string{"record", "--request", "-"}, request); code != 0 || stderr != "" {
+		t.Fatalf("code %d stderr %q", code, stderr)
+	}
+	data, err := os.ReadFile(log)
+	if err != nil || !strings.Contains(string(data), `"component":"agent","kind":"note","summary":"s","detail":"","context":{"n":3,"b":true,"z":null,"p":"~/x"},"project":"`) {
+		t.Errorf("log %q, %v", data, err)
+	}
+}
+
+func TestIncidentRecordRequestRefusals(t *testing.T) {
+	log := incidentSandbox(t)
+	usage := func(message string) string { return "orch incident record: " + message + "\n" }
+	cases := []struct {
+		args   []string
+		stdin  string
+		code   int
+		stderr string
+	}{
+		{[]string{"record", "--request", "-"}, `{"component":"c"}`, 1, "Error: incident needs component and summary\n"},
+		{[]string{"record", "--request", "-"}, `{"summary":`, 2, ""},
+		{[]string{"record", "--request", "-"}, `["s"]`, 2, usage("--request: stdin must be a JSON object")},
+		{[]string{"record", "--request", "-"}, `{"summary":"s","ctx":{}}`, 2, usage(`--request: unknown key "ctx"`)},
+		{[]string{"record", "--request", "-"}, `{"summary":5}`, 2, usage("--request: summary must be a string")},
+		{[]string{"record", "--request", "-"}, `{"summary":"s","context":{"a":{}}}`, 2, usage("--request: context.a must be a string, number, boolean or null")},
+		{[]string{"record", "--request", "-"}, `{"summary":"s","context":[]}`, 2, usage("--request: context must be an object")},
+		{[]string{"record", "--request", "r.json"}, `{"summary":"s"}`, 2, usage("--request takes - (the incident as one JSON object on stdin)")},
+		{[]string{"record", "--request"}, `{"summary":"s"}`, 2, usage("--request takes - (the incident as one JSON object on stdin)")},
+		{[]string{"record", "--request", "-", "--summary", "s"}, `{"summary":"s"}`, 2, usage("--request cannot be combined with --summary")},
+		{[]string{"record", "--ctx", "a=b", "--request", "-"}, `{"summary":"s"}`, 2, usage("--request cannot be combined with --ctx")},
+		{[]string{"record", "--request", "-", "--cwd"}, `{"summary":"s"}`, 2, usage("--request cannot be combined with --cwd")},
+	}
+	for _, c := range cases {
+		code, stdout, stderr := run(t, Incident, c.args, c.stdin)
+		if code != c.code || stdout != "" || (c.stderr != "" && stderr != c.stderr) || strings.Count(stderr, "\n") != 1 {
+			t.Errorf("%q < %s: code %d stdout %q stderr %q, want %d %q", c.args, c.stdin, code, stdout, stderr, c.code, c.stderr)
+		}
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Errorf("a refused request wrote the log (stat error %v)", err)
+	}
+}

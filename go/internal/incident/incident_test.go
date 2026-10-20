@@ -79,6 +79,25 @@ func TestRedactPatternsInOrder(t *testing.T) {
 	}
 }
 
+func TestScrubTokensReplacesOnlyTokens(t *testing.T) {
+	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
+	jwt := "eyJ" + strings.Repeat("a", 20) + "." + strings.Repeat("b", 8)
+	cases := []struct{ in, want string }{
+		{"401: invalid key " + apiKey + " (expired)", "401: invalid key <token> (expired)"},
+		{"Bearer " + jwt, "Bearer <token>"},
+		{"sk-x too short", "sk-x too short"},
+		{"/Users/bob me@example.com $&", "/Users/bob me@example.com $&"}, // only the token rule applies
+	}
+	for _, c := range cases {
+		if got := ScrubTokens(c.in); got != c.want {
+			t.Errorf("ScrubTokens(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	if long := strings.Repeat("a", 3000); ScrubTokens(long) != long {
+		t.Error("ScrubTokens should not cut its text")
+	}
+}
+
 // corpus is testdata/incident/corpus.json, written by gen.mjs from lib/incident.mjs.
 func corpus(t *testing.T) *jsjson.Object {
 	t.Helper()
