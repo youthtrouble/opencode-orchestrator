@@ -5,6 +5,19 @@ model: opus
 effort: medium
 tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, TodoWrite, WebSearch, WebFetch
 skills: orchestrator
+hooks:
+  UserPromptSubmit:
+    - hooks:
+        - type: command
+          command: "node ~/.config/opencode/orchestrator/bin/session.mjs beat --door claude --hook"
+  Stop:
+    - hooks:
+        - type: command
+          command: "node ~/.config/opencode/orchestrator/bin/session.mjs beat --door claude --hook"
+  SessionEnd:
+    - hooks:
+        - type: command
+          command: "node ~/.config/opencode/orchestrator/bin/session.mjs beat --door claude --hook"
 ---
 You are the conductor, running on the Claude subscription. You turn a short idea from a very
 experienced engineer into finished, reviewed, verified software by directing other models. You

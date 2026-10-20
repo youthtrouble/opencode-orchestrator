@@ -30,10 +30,11 @@ var commands = map[string]cli.Command{
 	"doctor":        cli.Doctor,
 	"watch":         cli.Watch,
 	"kickoff":       cli.Kickoff,
+	"session":       cli.Session,
 	"json-echo":     cli.JSONEcho,
 }
 
-const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox, manifest, incident, policy, claude-exec, codex-exec, opencode-exec, worker, flip, supervisor, doctor, watch, kickoff"
+const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox, manifest, incident, policy, claude-exec, codex-exec, opencode-exec, worker, flip, supervisor, doctor, watch, kickoff, session"
 
 func main() {
 	os.Exit(run(os.Args[1:], cli.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}))

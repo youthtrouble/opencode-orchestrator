@@ -32,15 +32,16 @@ Commands (every `bin/*.mjs` script):
 | `orch doctor` | `bin/doctor.mjs` | The same rows in the same order with the same texts (`OK  `/`WARN`/`FAIL`, name, `  —  detail` when the detail is truthy) and exit code (1 if any row is FAIL). Each probe (`opencode`/`codex`/`claude`/`node --version`, `codex login status`, `claude auth status`, `opencode auth list\|plugin list\|debug agents`) runs with a 20 s timeout and reads stdout then stderr; the usage feeds and routing come from a refreshed `orch usage`, rows pushed before a failure are kept and the failure adds `FAIL usage/routing`; the last 400 lines of `~/.local/share/opencode/log/opencode.log` are scanned for orchestrator `ERROR`s, the last three joined, redacted as an incident is (home, emails, tokens, uuids, `ses_` ids) and cut at 300 (cuts in UTF-16 units). Both print `orch binary` after `node present`. Differences: PE-18 (`orch self-test` row; `unit tests` runs the Go tests; the JS warns when it finds no binary); each probe stops at 1 MiB of output (PE-20) and runs in a process group of its own (PE-22). |
 | `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command (`orch mailbox reply` when `orch` is on `PATH`, PE-26), the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
 | `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b> (looked in <root>; cd into the project or pass --cwd <project dir>)` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else the preflight below, the prompt written to `.orchestrator/briefs/conductor-kickoff.md`, `orch flip pause --active <home> --brief .orchestrator/briefs/conductor-kickoff.md` with its answer, and the message, exit 75, so the supervisor's relaunch at the reset starts from that brief; when `orch supervisor start` exits non-zero (before the brief) or the pause does, `Both vendors are red, but the supervisor did not start\|the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.` on stderr, exit 1), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear --no-relaunch`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir); `--dry-run` skips it and prints `supervisor: not started (dry-run)` instead, so it changes nothing in the project, though its routing read still refreshes the shared usage cache), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (the brief is written atomically, 0600, PE-21; the lane's trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). Differences: the captured self-execs stop at 1 MiB of output (PE-20) and run in a process group of their own (PE-22). |
+| `orch session beat --door opencode\|claude [--state working\|waiting\|done\|ended] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | `bin/session.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/sessions/<door>.json` (indent 2; the directory 0700, an existing one this user owns tightened to 0700, the file 0600, written through a private temp file and a rename in both runtimes). `beat` keeps each field not given, clears `--now`, `--slice` or `--session` given as `""` (`--progress` must always be `N/M`), defaults the state to `working` and refreshes `updated_at`; `--now` is cut to 200 UTF-16 units and `--slice` to 40 (a split surrogate pair becomes U+FFFD in both). Bad options exit 2. `--hook` reads a Claude Code hook's JSON on stdin (`session_id`, `cwd`, `hook_event_name` only; never the prompt): `UserPromptSubmit` and `SessionStart` record `working`, `Stop` `waiting`, `SessionEnd` `ended`, any other event writes nothing; it never exits 2 (every failure is one `session beat: ...` line and exit 1; a `cwd` with a NUL character is refused before any filesystem call) and never creates `.orchestrator/`. `show` prints `{door: record}` (indent 2) and refuses to run outside a project. |
 
 Outside a project: `mailbox list|ack|reply|inbox`, `watch` (with or without `--follow`), `flip
-status`, `flip gate --clear`, `worker status|stop` and `supervisor status|stop|ack`, run where
+status`, `flip gate --clear`, `worker status|stop`, `supervisor status|stop|ack` and `session show`, run where
 the project root (`--root`/`ORCHESTRATOR_PROJECT`/the working directory for mailbox, `--cwd` or
 the working directory elsewhere) has no `.orchestrator/` directory, print `not an orchestrator
 project: <root> has no .orchestrator/ directory; cd into the project or pass <--root|--cwd>
 <project dir>` on stderr, exit 2 and write nothing, as the JS does. The commands that create a
 project (`mailbox post`, `flip run|pause|gate`, `worker start`, `supervisor start|serve`,
-`policy`, `kickoff`) are unchanged. In a project, `mailbox ack|reply` with an id that matches no
+`policy`, `kickoff`, `session beat` without `--hook`) are unchanged. In a project, `mailbox ack|reply` with an id that matches no
 message print `no message with id <id> in <root>/.orchestrator/mailbox; if it belongs to another
 project, cd there or pass --root <project dir>` and exit 1 (an ambiguous prefix is still a C1
 crash).
@@ -197,11 +198,11 @@ go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
 # chosen groups; ./parity/run.sh runs them all
 ./parity/run.sh --only \
-  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff
+  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session
 ```
 
 `.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`,
-`incident`, `policy`, `bridges`, `worker`, `flip`, `supervisor`, `doctor`, `watch` and `kickoff`
+`incident`, `policy`, `bridges`, `worker`, `flip`, `supervisor`, `doctor`, `watch`, `kickoff` and `session`
 parity groups
 on macOS and Linux with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare
 against Node when it is available; fixed byte expectations run even without Node.
@@ -591,6 +592,20 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   and waited for (killed by that pid after 20 s, failing the case; a pid the output does not
   show is read from the sandbox's lock, after the stop file is written); normalised: that pid,
   the cut log path and the serve's fresh values.
+
+- `session`: `orch session` against `bin/session.mjs`: usage errors (no or unknown command, door,
+  state, progress forms, a missing value, unknown options and positionals); beats that create the
+  project, set every field, cut `--now`/`--slice` (a split surrogate pair, malformed UTF-8 argv,
+  JSON-special text), take huge and infinite progress numbers, merge over and clear a seeded record
+  (a lone surrogate escape in it, odd field types, unparsable, an array, null, a BOM), and fail on a
+  directory record, a `sessions` file or an `.orchestrator` file; hook mode for every followed event,
+  unfollowed and non-string events, the session id from the hook or the flag, relative and
+  `--cwd`-overridden roots, outside a project, bad, empty and non-object input, no cwd, and usage
+  errors that exit 1, plus one case asserting the prompt and transcript path reach no output or
+  file; `show` empty, with both doors, any JSON, an unparsable or directory record, `--cwd`, an
+  unknown option and outside a project. Only `updated_at` is normalised, where it has its exact
+  ISO-ms format; `show` prints stored records as parsed, so a hand-edited lone surrogate escape is
+  the `jsjson` divergence in [JSON compatibility](#json-compatibility).
 
 A case can add environment entries (`env`), compare files outside `.orchestrator/`
 (`extraFiles`), replace the sandbox project path with `$PROJECT` everywhere (`projectPaths`) and

@@ -2,39 +2,10 @@
 // manifest.mjs create --task T --author A [--baseline file.json] --out file.json <paths...>
 // manifest.mjs verify file.json          (exit 1 on any mismatch)
 // manifest.mjs diff before.json after.json
-import { randomInt } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { buildManifest, verifyManifest, diffManifests } from "../lib/manifest.mjs";
-
-// Random names to try before giving up on an exclusive temp: a collision means another writer's
-// temp, which is never touched, so each one costs only a fresh name.
-const TEMP_NAME_ATTEMPTS = 8;
-
-// Replaces file with text through an exclusive owner-only sibling temp and a rename, so a symlink
-// at file is replaced, never followed, and a reader never sees a partial file. Only the temp this
-// call created is ever removed.
-function replaceFile(file, text) {
-  const { tmp, fd } = openFreshTemp(file);
-  try {
-    try { fs.writeFileSync(fd, text); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-function openFreshTemp(file) {
-  for (let attempt = 1; ; attempt++) {
-    const tmp = `${file}.tmp-${randomInt(2 ** 32)}`;
-    try {
-      return { tmp, fd: fs.openSync(tmp, "wx", 0o600) };
-    } catch (err) {
-      if (err.code !== "EEXIST" || attempt === TEMP_NAME_ATTEMPTS) throw err;
-    }
-  }
-}
+import { replaceFile } from "../lib/replace-file.mjs";
 
 const [cmd, ...rest] = process.argv.slice(2);
 const opts = {}; const positional = [];

@@ -1,6 +1,6 @@
 // The commands that read or stop a project's existing state refuse to run where there is no project:
 // an empty answer (or a stray .orchestrator/ created by a stop) in the wrong directory looks like success.
-// Commands that create state (mailbox post, flip run|pause|gate, worker start, supervisor start) do not
+// Commands that create state (mailbox post, flip run|pause|gate, worker start, supervisor start, session beat) do not
 // use this: they are how a project is born.
 import fs from "node:fs";
 import path from "node:path";

@@ -74,6 +74,7 @@ Every script is dependency-free Node and has a Go twin, `orch <script>` (see
 | `codex-exec.mjs` | `[--model M] [--effort E] [--sandbox S] ... [--resume THREAD] [--timeout-min 60] [--force]` | Bounded task on Codex (`codex exec --json`) -> JSON result + thread id. |
 | `opencode-exec.mjs` | `[--agent conductor] [--cwd DIR] [--resume SESSION] [--timeout-min 120]` | Bounded task on `opencode run`; used for the headless opencode conductor. |
 | `manifest.mjs` | `create --task T --author A [--baseline F] --out F <paths...> \| verify F \| diff A B` | sha256 fingerprints of released files; `verify` exits 1 on any mismatch. |
+| `session.mjs` | `beat --door opencode\|claude [--state S] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | Conductor session heartbeat in `.orchestrator/sessions/<door>.json`; `--hook` is the Claude conductor's frontmatter hook mode (see [Project state files](#project-state-files)). |
 | `incident.mjs` | `record ... \| list \| report \| share --out F` | Local, redacted orchestrator defect log. |
 | `doctor.mjs` | (no arguments) | Health check: binaries, logins, usage feeds, routing, config, plugin, agents, unit tests, recent plugin errors, `orch binary`. |
 | `setup.sh` | | Legacy auth/setup helper; not the reversible installer. |
@@ -348,6 +349,16 @@ repository's `info/exclude`):
 | `policy.json` | Autonomy overrides |
 | `supervisor.json` | Wake channels (optional) |
 | `supervisor-state.json`, `supervisor-acks.json`, `supervisor.lock`, `supervisor.stop` | Supervisor state |
+| `sessions/<door>.json` | Conductor heartbeat: `door`, `session_id`, `state` (`working`/`waiting`/`done`/`ended`), `now`, `slice`, `progress` (`{done, total}`), `updated_at` |
+
+The Claude conductor writes its heartbeat itself: `claude/agents/conductor.md` runs `session.mjs beat
+--door claude --hook` from frontmatter hooks on `UserPromptSubmit` (working), `Stop` (waiting) and
+`SessionEnd` (ended). Hook mode reads only `session_id`, `cwd` and `hook_event_name` from the hook's
+JSON, never stores the prompt, writes nothing where the hook's `cwd` has no `.orchestrator/`, and
+never exits 2 (which Claude Code reads as "block"). Both runtimes write `sessions/` 0700 (tightening
+an existing one this user owns) and its files 0600 through a private temp file and a rename.
+Conductors set `--now`, `--slice` and `--progress` themselves; `--now`, `--slice` or `--session`
+given as `""` is cleared, while `--progress` must always be `N/M`.
 
 The JS scripts create these with the default modes less your umask, except the worker's lane
 lock and detached log, which are 0600. `orch` writes run records, lane state, `flip.json`, the

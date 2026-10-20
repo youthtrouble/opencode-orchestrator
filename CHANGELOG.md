@@ -9,6 +9,17 @@
 - remote: the Work Trains wire protocol (`remote/protocol/`) is versioned as a v1 JSON Schema with a
   dependency-free validator that rejects schema keywords it does not support, valid and invalid
   examples for every payload, and contract tests (`node --test 'remote/protocol/test/*.test.ts'`).
+- session (JS, Go): new `session.mjs beat|show` (`orch session`) keeps a conductor heartbeat in
+  `.orchestrator/sessions/<door>.json` (`door`, `session_id`, `state`, `now`, `slice`, `progress`,
+  `updated_at`), written owner-only through a temp file and a rename in both runtimes. `beat` clears
+  `--now`, `--slice` or `--session` given as `""`; `--progress` must always be `N/M`. `beat --hook`
+  reads a Claude Code hook's JSON, maps its event to a state, never stores the prompt, never creates
+  `.orchestrator/` and never exits 2. New parity group `session`.
+- claude conductor: frontmatter hooks run `session.mjs beat --door claude --hook` on
+  `UserPromptSubmit`, `Stop` and `SessionEnd`, so an interactive Claude conductor session leaves a
+  heartbeat automatically.
+- manifest (JS): the private temp-file write moved to `lib/replace-file.mjs`, shared with the
+  session heartbeat; behaviour unchanged.
 - flip/kickoff: `.orchestrator/` is excluded in linked worktrees (the common dir's `info/exclude`)
   and submodules (the git dir's) instead of failing with ENOTDIR; a `.git` file that is malformed or
   names a missing git dir, or whose `commondir` names a missing directory, counts as no repository
