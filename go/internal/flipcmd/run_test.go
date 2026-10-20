@@ -127,6 +127,19 @@ func TestRunWritesExcludeBriefRecordAndHandoff(t *testing.T) {
 	}
 }
 
+// In a linked worktree, whose .git is a file, the exclude goes to the common dir (Sol R13).
+func TestRunExcludesInALinkedWorktree(t *testing.T) {
+	p := newTestProject(t)
+	writeFile(t, filepath.Join(p.Root, ".git"), "gitdir: .gitmeta/worktrees/w\n")
+	writeFile(t, filepath.Join(p.Root, ".gitmeta", "worktrees", "w", "commondir"), "../..\n")
+	if answer, code, err := p.Run(opts("run", "--to", "claude"), launched().launch); err != nil || code != 0 {
+		t.Fatalf("Run = %v, %d, %v", answer, code, err)
+	}
+	if got := readFile(t, filepath.Join(p.Root, ".gitmeta", "info", "exclude")); got != ".orchestrator/\n" {
+		t.Errorf("exclude = %q", got)
+	}
+}
+
 // kickoffBrief is the brief a both-red kickoff saves and names in its pause.
 const kickoffBrief = ".orchestrator/briefs/conductor-kickoff.md"
 
@@ -356,12 +369,6 @@ func TestRunStopsAtTheFirstFailingStep(t *testing.T) {
 		want    string // the error, with $ROOT for the project
 		written []string
 	}{
-		{".git is a file", func(t *testing.T, p Project) {
-			if err := os.Remove(filepath.Join(p.Root, ".git")); err != nil {
-				t.Fatal(err)
-			}
-			writeFile(t, filepath.Join(p.Root, ".git"), "gitdir: x\n")
-		}, "ENOTDIR: not a directory, mkdir '$ROOT/.git/info'", nil},
 		{"exclude is a directory", func(t *testing.T, p Project) { mkdir(t, filepath.Join(p.Root, ".git", "info", "exclude")) },
 			"EISDIR: illegal operation on a directory, read", nil},
 		{".orchestrator is a file", func(t *testing.T, p Project) { writeFile(t, filepath.Join(p.Root, ".orchestrator"), "") },

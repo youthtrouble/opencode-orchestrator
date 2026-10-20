@@ -92,7 +92,7 @@ say "I'm away" or "keep going without me" (it then asks you to confirm once). Th
 briefs, runs the kickoff above (door picked by budget), confirms the background `conductor` lane is
 running, tells you how to check in, and then stops, so only one conductor drives. `/away
 <brief>` names the brief to continue with; `/away --dry-run` only shows the door and prompt
-kickoff would use, changes nothing, and keeps the session going.
+kickoff would use, changes nothing in the project, and keeps the session going.
 
 **...check in, answer, or unblock it?**
 
@@ -213,12 +213,14 @@ orch kickoff --brief .orchestrator/briefs/<name>.md                          # i
 orch kickoff --brief .orchestrator/briefs/<name>.md --headless --unattended  # background, you leave
 ```
 
-Kickoff refreshes budgets, starts the supervisor, adds `.orchestrator/` to `.git/info/exclude`,
-picks the door whose vendor has headroom (home first) and launches the conductor. Extra `--brief`
-files run as side work when budget allows. `--door claude|opencode` forces a door; `--dry-run`
-shows the door and prompt and changes nothing (no policy, gate, supervisor or exclude change). If
-both vendors are red it starts the supervisor, records the pause with this brief, exits 75, and the
-supervisor starts the run from this brief at the first reset. If the supervisor does not start or the
+Kickoff refreshes budgets, starts the supervisor, adds `.orchestrator/` to the repository's
+`info/exclude` (in a linked worktree, the common dir's; in a submodule, its git dir's), picks the
+door whose vendor has headroom (home first) and launches the conductor. Extra `--brief` files run
+as side work when budget allows. `--door claude|opencode` forces a door; `--dry-run` shows the door
+and prompt and changes nothing in the project (no policy, gate, supervisor or exclude change; like
+every routing read, it still refreshes the shared usage cache). If both vendors are red it starts
+the supervisor, records the pause with this brief, exits 75, and the supervisor starts the run from
+this brief at the first reset. If the supervisor does not start or the
 pause is not recorded, it exits 1 instead, since nothing would relaunch.
 
 ### 3. While it runs
@@ -273,9 +275,9 @@ beside yours.
 | `policy.json` | This project's autonomy overrides (`orch policy set release=auto`) |
 | `supervisor.json` | Optional wake channels for the supervisor |
 
-`.orchestrator/` is private: kickoff keeps it out of Git through `.git/info/exclude`. With the Go
-runtime, run records, lane and supervisor state, `flip.json`, generated briefs and new logs are
-also owner-only on disk (the JS scripts use your umask's default modes). Your budgets cache and
+`.orchestrator/` is private: kickoff keeps it out of Git through the repository's `info/exclude`.
+With the Go runtime, run records, lane and supervisor state, `flip.json`, generated briefs and new
+logs are also owner-only on disk (the JS scripts use your umask's default modes). Your budgets cache and
 the incident log live in `~/.local/state/opencode/orchestrator/`.
 
 ### 5. Switch to the Go runtime (optional)

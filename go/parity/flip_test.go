@@ -60,7 +60,7 @@ func (h *harness) flipInvocation(c flipCase) invocation {
 		crash:        c.crash,
 		errorLine:    c.errorLine,
 		projectPaths: true,
-		extraFiles:   []string{".git/info/exclude"},
+		extraFiles:   []string{".git/info/exclude", worktreeExclude},
 		normalize:    normalizeFlip(time.Now()),
 	}
 }

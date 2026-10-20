@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -120,29 +121,161 @@ func TestEnsureGitExcludeWithoutGitWritesNothing(t *testing.T) {
 	}
 }
 
-// The JS assumes .git is a directory; a worktree's or submodule's .git file and an exclude
-// that is a directory fail with Node's errors.
-func TestEnsureGitExcludeFailsWithNodesErrors(t *testing.T) {
-	t.Run(".git is a file", func(t *testing.T) {
-		root := t.TempDir()
-		writeFile(t, filepath.Join(root, ".git"), "gitdir: elsewhere\n")
-		_, err := EnsureGitExclude(root)
-		want := "ENOTDIR: not a directory, mkdir '" + filepath.Join(root, ".git", "info") + "'"
-		if err == nil || err.Error() != want {
-			t.Errorf("err = %v, want %q", err, want)
-		}
-		if got := readFile(t, filepath.Join(root, ".git")); got != "gitdir: elsewhere\n" {
-			t.Errorf(".git = %q", got)
-		}
-	})
-	t.Run("exclude is a directory", func(t *testing.T) {
-		root := t.TempDir()
-		mkdir(t, filepath.Join(root, ".git", "info", "exclude"))
-		_, err := EnsureGitExclude(root)
-		if err == nil || err.Error() != "EISDIR: illegal operation on a directory, read" {
-			t.Errorf("err = %v", err)
-		}
-	})
+// An exclude that is a directory fails with Node's error.
+func TestEnsureGitExcludeFailsWhenTheExcludeIsADirectory(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".git", "info", "exclude"))
+	_, err := EnsureGitExclude(root)
+	if err == nil || err.Error() != "EISDIR: illegal operation on a directory, read" {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// A .git file points at the git dir; a linked worktree's git dir names the common dir, whose
+// info/exclude git reads (gitrepository-layout).
+func TestEnsureGitExcludeFollowsAGitFile(t *testing.T) {
+	for _, c := range []struct {
+		name, gitFile, commonDir, exclude string // exclude is relative to the temp dir
+	}{
+		{"worktree with a relative commondir", "gitdir: {abs}/main/.git/worktrees/w\n", "../..\n", "main/.git/info/exclude"},
+		{"worktree with an absolute commondir", "gitdir: {abs}/main/.git/worktrees/w", "{abs}/main/.git", "main/.git/info/exclude"},
+		{"submodule", "gitdir: ../main/.git/modules/sub\n", "", "main/.git/modules/sub/info/exclude"},
+		{"relative gitdir with trailing white space", "gitdir: .gitmeta/worktrees/w \r\n", "../..", "project/.gitmeta/info/exclude"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			abs := func(s string) string { return strings.ReplaceAll(s, "{abs}", dir) }
+			root := filepath.Join(dir, "project")
+			writeFile(t, filepath.Join(root, ".git"), abs(c.gitFile))
+			gitDir := strings.TrimSpace(strings.TrimPrefix(abs(c.gitFile), "gitdir: "))
+			if !filepath.IsAbs(gitDir) {
+				gitDir = filepath.Join(root, gitDir)
+			}
+			mkdir(t, gitDir)
+			if c.commonDir != "" {
+				writeFile(t, filepath.Join(gitDir, "commondir"), abs(c.commonDir))
+			}
+			hasGit, err := EnsureGitExclude(root)
+			if err != nil || !hasGit {
+				t.Fatalf("EnsureGitExclude = %v, %v; want true, nil", hasGit, err)
+			}
+			if got := readFile(t, filepath.Join(dir, c.exclude)); got != ".orchestrator/\n" {
+				t.Errorf("%s = %q", c.exclude, got)
+			}
+		})
+	}
+}
+
+// A .git file that is not "gitdir: <path>", or names no directory, is no repository.
+func TestEnsureGitExcludeIgnoresABrokenGitFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"malformed":         "not a pointer\n",
+		"empty":             "",
+		"no space":          "gitdir:x\n",
+		"missing gitdir":    "gitdir: /elsewhere\n",
+		"gitdir is a file":  "gitdir: file\n",
+		"relative, missing": "gitdir: elsewhere\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, ".git"), content)
+			writeFile(t, filepath.Join(root, "file"), "")
+			hasGit, err := EnsureGitExclude(root)
+			if err != nil || hasGit {
+				t.Fatalf("EnsureGitExclude = %v, %v; want false, nil", hasGit, err)
+			}
+			if entries, _ := os.ReadDir(root); len(entries) != 2 {
+				t.Errorf("wrote %v", entries)
+			}
+		})
+	}
+}
+
+// A linked worktree whose commondir names no directory is no repository, as git judges it:
+// nothing is created where the commondir points (C4-F1).
+func TestEnsureGitExcludeIgnoresACommondirNamingNoDirectory(t *testing.T) {
+	for name, commonDir := range map[string]string{
+		"relative, missing": "../../../absent\n",
+		"absolute, missing": "{root}/absent",
+		"a file":            "../../file\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			gitDir := filepath.Join(root, "meta", "worktrees", "w")
+			writeFile(t, filepath.Join(root, ".git"), "gitdir: meta/worktrees/w\n")
+			writeFile(t, filepath.Join(root, "meta", "file"), "")
+			writeFile(t, filepath.Join(gitDir, "commondir"), strings.ReplaceAll(commonDir, "{root}", root))
+			hasGit, err := EnsureGitExclude(root)
+			if err != nil || hasGit {
+				t.Fatalf("EnsureGitExclude = %v, %v; want false, nil", hasGit, err)
+			}
+			if entries, _ := os.ReadDir(filepath.Join(root, "meta")); len(entries) != 2 {
+				t.Errorf("meta holds %v", entries)
+			}
+			if _, err := os.Stat(filepath.Join(root, "absent")); !os.IsNotExist(err) {
+				t.Errorf("absent: %v", err)
+			}
+		})
+	}
+}
+
+// Real git agrees: in a linked worktree, a submodule and a repository whose .git file holds a
+// relative gitdir, the line lands where git reads it.
+func TestEnsureGitExcludeBehindAGitFileAgreesWithGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	main := filepath.Join(dir, "main")
+	runGit(t, dir, "init", "-q", main)
+	runGit(t, main, "commit", "-q", "--allow-empty", "-m", "first")
+
+	worktree := filepath.Join(dir, "worktree")
+	runGit(t, main, "worktree", "add", "-q", worktree)
+	wantExcluded(t, worktree, filepath.Join(main, ".git", "info", "exclude"))
+
+	library := filepath.Join(dir, "library")
+	runGit(t, dir, "init", "-q", library)
+	runGit(t, library, "commit", "-q", "--allow-empty", "-m", "first")
+	runGit(t, main, "-c", "protocol.file.allow=always", "submodule", "add", "-q", library, "sub")
+	wantExcluded(t, filepath.Join(main, "sub"), filepath.Join(main, ".git", "modules", "sub", "info", "exclude"))
+
+	// Git resolves a relative gitdir against the directory holding the .git file.
+	moved := filepath.Join(dir, "moved")
+	runGit(t, dir, "init", "-q", moved)
+	if err := os.Rename(filepath.Join(moved, ".git"), filepath.Join(moved, ".gitmeta")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(moved, ".git"), "gitdir: .gitmeta\n")
+	wantExcluded(t, moved, filepath.Join(moved, ".gitmeta", "info", "exclude"))
+}
+
+// wantExcluded runs EnsureGitExclude in root and checks that exclude holds the line and that
+// git ignores .orchestrator/ there.
+func wantExcluded(t *testing.T, root, exclude string) {
+	t.Helper()
+	hasGit, err := EnsureGitExclude(root)
+	if err != nil || !hasGit {
+		t.Fatalf("EnsureGitExclude(%s) = %v, %v; want true, nil", root, hasGit, err)
+	}
+	if got := readFile(t, exclude); !strings.Contains(got, "\n"+excludeLine+"\n") && !strings.HasPrefix(got, excludeLine+"\n") {
+		t.Errorf("%s = %q, want a line %q", exclude, got, excludeLine)
+	}
+	if err := exec.Command("git", "-C", root, "check-ignore", "-q", ".orchestrator/x").Run(); err != nil {
+		t.Errorf("git -C %s check-ignore .orchestrator/x = %v, want ignored", root, err)
+	}
+}
+
+// runGit runs git in dir without the user's config (no signing, no hooks), as a fixed author.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }
 
 func text(s string) *string { return &s }

@@ -5,14 +5,14 @@
 //   flip.mjs pause [--active opencode|claude] [--reason TEXT] [--brief FILE] [--cwd DIR]
 //   flip.mjs status [--cwd DIR]
 // `run` posts a handoff to the mailbox, records .orchestrator/flip.json, and starts the other door's conductor
-// headless as worker lane "conductor" (lane lock => one driver per project). Adds .orchestrator/ to .git/info/exclude.
+// headless as worker lane "conductor" (lane lock => one driver per project). Adds .orchestrator/ to the repository's info/exclude.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../lib/run-record.mjs";
 import { getRouting } from "../lib/usage.mjs";
-import { clearGate, decideFlip, otherDoor, writeFlip } from "../lib/flip.mjs";
+import { clearGate, decideFlip, ensureGitExclude, otherDoor, writeFlip } from "../lib/flip.mjs";
 import { post } from "../lib/mailbox.mjs";
 import { requireProject } from "../lib/project.mjs";
 
@@ -24,16 +24,6 @@ const FLIP = path.join(root, ".orchestrator", "flip.json");
 const readFlip = () => { try { return JSON.parse(fs.readFileSync(FLIP, "utf8")); } catch { return null; } };
 // Reporting or clearing a gate needs an existing project; setting one (and run, pause) may create it.
 if (cmd === "status" || (cmd === "gate" && opts.clear)) requireProject(root, "--cwd");
-
-export function ensureGitExclude(projectRoot) {
-  const info = path.join(projectRoot, ".git", "info");
-  if (!fs.existsSync(path.join(projectRoot, ".git"))) return false;
-  fs.mkdirSync(info, { recursive: true });
-  const file = path.join(info, "exclude");
-  const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  if (!current.split("\n").some((l) => /^\.orchestrator\/?\r?$/.test(l))) fs.appendFileSync(file, (current.endsWith("\n") || !current ? "" : "\n") + ".orchestrator/\n");
-  return true;
-}
 
 if (cmd === "pause") {
   // A conductor that stopped because both vendors are red records the pause; the supervisor relaunches

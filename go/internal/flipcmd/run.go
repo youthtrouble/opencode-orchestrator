@@ -28,10 +28,10 @@ const launcherUnits = 400
 // pendingNote is the note of a launch left to the supervisor.
 const pendingNote = "lane locked by the current conductor; supervisor will launch after release"
 
-// Run hands the project over to the conductor at --to (bin/flip.mjs l.68-94) and returns the
+// Run hands the project over to the conductor at --to (bin/flip.mjs l.72-101) and returns the
 // line to print and the exit code. In order, each step's failure (Node's error, as the JS
-// dies of it) leaving the earlier writes in place: it adds .orchestrator/ to
-// .git/info/exclude, writes the continue brief, replaces flip.json with the flip record
+// dies of it) leaving the earlier writes in place: it adds .orchestrator/ to the repository's
+// info/exclude, writes the continue brief, replaces flip.json with the flip record
 // (clearing paused and awaiting_human), posts a handoff (failures ignored) and launches the
 // conductor through launch as worker lane "conductor". When the record it replaces holds a
 // brief a kickoff saved (see savedBrief), that brief is launched and named in the handoff

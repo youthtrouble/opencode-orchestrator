@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- flip/kickoff: `.orchestrator/` is excluded in linked worktrees (the common dir's `info/exclude`)
+  and submodules (the git dir's) instead of failing with ENOTDIR; a `.git` file that is malformed or
+  names a missing git dir, or whose `commondir` names a missing directory, counts as no repository
+  and nothing is written. The JS exclude step now
+  has one implementation (`lib/flip.mjs`) for flip and kickoff (Sol R13).
+- kickoff: the docs now say `--dry-run` changes nothing in the project; it still refreshes the
+  shared usage cache (Sol R18).
 - kickoff/flip: a kickoff now supersedes any queued relaunch or pause (`gate --clear --no-relaunch`
   removes `pending_launch` and `paused`), so the supervisor cannot start an older conductor first
   (Sol R9).

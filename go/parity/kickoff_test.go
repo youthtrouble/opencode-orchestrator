@@ -3,8 +3,10 @@
 package parity
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
 // supervisorHeldByThisTest locks the project's supervisor with this test process's pid, which
@@ -62,7 +65,7 @@ func (h *harness) testKickoff(t *testing.T) {
 	door := func(door, vendor, home, mode string) string {
 		return "door: " + door + " (" + vendor + " green; home " + home + ") " + mode
 	}
-	gitFile := "gitdir: /elsewhere\n" // a worktree's .git: the exclude step dies of ENOTDIR (Q-S7-2)
+	gitFile := "gitdir: /elsewhere\n" // a .git file naming no directory: no repository, nothing written (Sol R13)
 	opencodeGreen, claudeGreen := door("opencode", "openai", "opencode", "interactive"), door("claude", "anthropic", "opencode", "interactive")
 	// A kickoff supersedes every queued launch intent (Sol R9): the gate, a pending launch and a
 	// pause all go, the rest of the record stays.
@@ -103,7 +106,9 @@ func (h *harness) testKickoff(t *testing.T) {
 		{name: "preflight/exclude-present", args: preflightOnly, seed: seeds(brief, c.green, seedExclude("*.log\n.orchestrator\n")), crash: crashC2, stdout: supervisorLine},
 		{name: "preflight/no-git", args: preflightOnly, seed: seeds(brief, c.green, withGit(nil)), crash: crashC2, stdout: supervisorLine},
 		{name: "preflight/gated-record-with-pending-launch", args: preflightOnly, seed: seeds(brief, c.green, gatedWithIntent), crash: crashC2, stdout: supervisorLine, files: gatedWithIntentCleared},
-		{name: "preflight/git-file", args: preflightOnly, seed: seeds(brief, c.green, withGit(&gitFile)), crash: crashC1, errorLine: "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", stdout: supervisorLine},
+		{name: "preflight/git-file", args: preflightOnly, seed: seeds(brief, c.green, withGit(&gitFile)), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/worktree-layout", args: preflightOnly, seed: seeds(brief, c.green, worktreeLayout()), crash: crashC2, stdout: supervisorLine,
+			files: map[string]string{"extra/" + worktreeExclude: ".orchestrator/\n"}},
 		{name: "door-gemini", args: append(dryRun, "--door", "gemini"), seed: seeds(brief, c.green), crash: crashC2, stdout: dryRunSupervisorLine},
 		{name: "door-bare", args: append(dryRun, "--door"), seed: seeds(brief, c.green), crash: crashC2, stdout: dryRunSupervisorLine},
 		{name: "both-red/dry-run", args: dryRun, seed: seeds(brief, c.bothRed), stdout: "dry-run: both vendors red; a real run would pause and let the supervisor relaunch at the first reset."},
@@ -119,25 +124,30 @@ func (h *harness) testKickoff(t *testing.T) {
 	}
 	// Exit 75 promises a relaunch at the reset, so a both-red kickoff whose supervisor did not
 	// start (its log directory is a file) or whose pause was not recorded (flip.json is a
-	// directory) fails with exit 1 instead (C3-F2).
-	notDeferred := []struct {
-		name, failed string
-		seed         seed
-		briefSaved   bool
-	}{
-		{"both-red/supervisor-fails", "the supervisor did not start", seedProjectFile(".orchestrator/logs", "not a directory\n"), false},
-		{"both-red/pause-fails", "the pause was not recorded", seedProjectDir(".orchestrator/flip.json"), true},
+	// directory) fails with exit 1 instead (C3-F2). Each failing child's error is pinned: the
+	// supervisor's in the answer kickoff prints, the pause's on the inherited stderr.
+	notDeferred := []notDeferredCase{
+		{name: "both-red/supervisor-fails", failed: "the supervisor did not start", seed: seedProjectFile(".orchestrator/logs", "not a directory\n"),
+			supervisorError: "Error: EEXIST: file already exists, mkdir '"},
+		{name: "both-red/pause-fails", failed: "the pause was not recorded", seed: seedProjectDir(".orchestrator/flip.json"), briefSaved: true,
+			pauseError: "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/flip.json.tmp"},
 	}
 	for _, nc := range notDeferred {
 		t.Run(nc.name, func(t *testing.T) {
 			t.Parallel()
 			inv := h.kickoffInvocation(kickoffCase{args: []string{"--brief", "a.md"}, seed: seeds(brief, c.bothRed, nc.seed)})
-			h.compareKickoffNotDeferred(t, inv, nc.failed, nc.briefSaved)
+			h.compareKickoffNotDeferred(t, inv, nc)
 		})
 	}
-	t.Run("dry-run-makes-no-changes", func(t *testing.T) {
+	// The guarantee is about the project: like every routing read, a dry run still refreshes the
+	// shared usage cache under HOME, by design (Sol R18).
+	t.Run("dry-run-changes-nothing-in-the-project", func(t *testing.T) {
 		t.Parallel()
-		h.testKickoffDryRunMakesNoChanges(t, seeds(brief, c.green, gate, seedExclude("*.log\n")))
+		h.testKickoffDryRunChangesNothingInTheProject(t, seeds(brief, c.green, gate, seedExclude("*.log\n")))
+	})
+	t.Run("dry-run-then-real/worktree-layout", func(t *testing.T) {
+		t.Parallel()
+		h.testKickoffDryRunThenReal(t, seeds(brief, c.green, worktreeLayout()), dryRun, preflightOnly)
 	})
 	t.Run("registry-home-claude", func(t *testing.T) {
 		t.Parallel()
@@ -176,29 +186,81 @@ func (h *harness) compareKickoff(t *testing.T, inv invocation, line string, file
 	compareOutcomes(t, js, orch)
 }
 
+// notDeferredCase is a both-red kickoff that must fail with exit 1 because the step named by
+// failed did. supervisorError starts the error the failing supervisor's answer holds ("": the
+// answer is compared as it is); pauseError starts the error line the failing pause prints on
+// stderr before kickoff's own line ("": kickoff's line is all of stderr).
+type notDeferredCase struct {
+	name, failed                string
+	seed                        seed
+	briefSaved                  bool
+	supervisorError, pauseError string
+}
+
 // compareKickoffNotDeferred checks that each runtime failed a both-red kickoff with exit 1,
 // ending its stderr with the line naming what failed, printing no pause message and saving
 // the kickoff brief only when briefSaved, then compares the pair. The failing child's own
-// error text differs between the runtimes (a Node stack, an orch error line), so the
-// supervisor's answer, the last thing on stdout, and the stderr before the last line are left
-// out of the comparison, as is the temp file the JS leaves beside a flip.json it could not
-// replace (PE-21).
-func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, failed string, briefSaved bool) {
+// error differs between the runtimes (a Node stack, an orch error line; PE-2), so each side's
+// is checked to be the expected error and then removed: the supervisor's answer, when it
+// failed, becomes "<answer>", and the pause's diagnostic is dropped from stderr. Everything
+// else is compared, as is every file but the temp the JS leaves beside a flip.json it could
+// not replace (PE-21).
+func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, nc notDeferredCase) {
 	t.Helper()
 	js, orch := h.runPair(t, inv)
-	want := "Both vendors are red, but " + failed + ": nothing will relaunch at the reset. Fix it and run kickoff again.\n"
+	want := "Both vendors are red, but " + nc.failed + ": nothing will relaunch at the reset. Fix it and run kickoff again.\n"
 	for side, o := range map[string]*outcome{"js": &js, "orch": &orch} {
 		_, saved := o.files["project/briefs/conductor-kickoff.md"]
-		if o.exitCode != 1 || !strings.HasSuffix(o.stderr, "\n"+want) && o.stderr != want || strings.Contains(o.stdout, "paused") || saved != briefSaved {
-			t.Errorf("%s: exit %d, stdout %q, stderr %q, brief saved %v; want exit 1 ending %q, no pause and brief saved %v", side, o.exitCode, o.stdout, o.stderr, saved, want, briefSaved)
+		diagnostic, endsWithWant := strings.CutSuffix(o.stderr, want)
+		if o.exitCode != 1 || !endsWithWant || strings.Contains(o.stdout, "paused") || saved != nc.briefSaved {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q, brief saved %v; want exit 1 ending %q, no pause and brief saved %v", side, o.exitCode, o.stdout, o.stderr, saved, want, nc.briefSaved)
+		}
+		if err := checkChildDiagnostic(side, diagnostic, nc.pauseError); err != "" {
+			t.Errorf("pause diagnostic: %s", err)
 		}
 		o.stderr = want
-		if before, _, found := strings.Cut(o.stdout, "\nsupervisor: "); found {
-			o.stdout = before + "\nsupervisor: <answer>\n"
+		if nc.supervisorError != "" {
+			o.stdout = replaceFailedSupervisorAnswer(t, side, o.stdout, nc.supervisorError)
 		}
 		delete(o.files, "project/flip.json.tmp")
 	}
 	compareOutcomes(t, js, orch)
+}
+
+// checkChildDiagnostic reports what is wrong with the stderr a failing child left before
+// kickoff's own line: with no expected error it must be empty; orch's is the one error line;
+// the JS's is Node's crash output, holding the error line and ending with Node's version.
+func checkChildDiagnostic(side, diagnostic, expected string) string {
+	switch {
+	case expected == "":
+		if diagnostic != "" {
+			return fmt.Sprintf("%s: unexpected stderr %q", side, diagnostic)
+		}
+	case side == "orch":
+		if !strings.HasPrefix(diagnostic, expected) || strings.Count(diagnostic, "\n") != 1 || !strings.HasSuffix(diagnostic, "\n") {
+			return fmt.Sprintf("orch: stderr %q, want one line starting %q", diagnostic, expected)
+		}
+	default:
+		lines := strings.Split(strings.TrimSuffix(diagnostic, "\n"), "\n")
+		holdsError := slices.ContainsFunc(lines, func(line string) bool { return strings.HasPrefix(line, expected) })
+		if !holdsError || !strings.HasPrefix(lines[len(lines)-1], "Node.js v") {
+			return fmt.Sprintf("js: stderr %q, want Node's crash output with a line starting %q", diagnostic, expected)
+		}
+	}
+	return ""
+}
+
+// replaceFailedSupervisorAnswer replaces the supervisor's answer, the last thing on stdout, with
+// "<answer>" after checking that it holds the expected error and is no longer than the 120
+// UTF-16 units kickoff prints of it, so nothing printed after it can be hidden.
+func replaceFailedSupervisorAnswer(t *testing.T, side, stdout, expected string) string {
+	t.Helper()
+	before, answer, found := strings.Cut(stdout, "\nsupervisor: ")
+	answer, endsWithNewline := strings.CutSuffix(answer, "\n")
+	if !found || !endsWithNewline || !strings.Contains(answer, expected) || jsstr.Len(answer) > 120 {
+		t.Errorf("%s: stdout %q, want it to end with a supervisor answer of at most 120 units holding %q", side, stdout, expected)
+	}
+	return before + "\nsupervisor: <answer>\n"
 }
 
 // kickoffInvocation runs bin/kickoff.mjs and `orch kickoff` in the sandbox project, which is
@@ -212,7 +274,7 @@ func (h *harness) kickoffInvocation(c kickoffCase) invocation {
 		crash:        c.crash,
 		errorLine:    c.errorLine,
 		projectPaths: true,
-		extraFiles:   []string{".git/info/exclude"},
+		extraFiles:   []string{".git/info/exclude", worktreeExclude},
 		// a case may make .git a file
 		extraFilesMayBeBlocked: true,
 		normalize: func(s string) string {
@@ -260,10 +322,11 @@ func (h *harness) testKickoffRegistryMissing(t *testing.T, s seed) {
 	compareOutcomes(t, js, orch)
 }
 
-// testKickoffDryRunMakesNoChanges asserts that a headless, unattended dry run with a usable door
-// leaves the project as seeded: no policy, the human gate kept, no supervisor state, no
-// conductor brief and .git/info/exclude untouched. It then compares the pair.
-func (h *harness) testKickoffDryRunMakesNoChanges(t *testing.T, s seed) {
+// testKickoffDryRunChangesNothingInTheProject asserts that a headless, unattended dry run with
+// a usable door leaves the project as seeded: no policy, the human gate kept, no supervisor
+// state, no conductor brief and .git/info/exclude untouched. The usage cache under HOME is not
+// the project's and is refreshed by design. It then compares the pair.
+func (h *harness) testKickoffDryRunChangesNothingInTheProject(t *testing.T, s seed) {
 	inv := h.kickoffInvocation(kickoffCase{args: []string{"--brief", "a.md", "--headless", "--unattended", "--dry-run"}, seed: s})
 	var changed, unseeded []string
 	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
@@ -296,6 +359,38 @@ func (h *harness) testKickoffDryRunMakesNoChanges(t *testing.T, s seed) {
 			t.Errorf("%s: exit %d, stdout %q; want 0 and the dry-run supervisor line", side, o.exitCode, o.stdout)
 		}
 	}
+	compareOutcomes(t, js, orch)
+}
+
+// testKickoffDryRunThenReal runs, in one sandbox per runtime, the dry run then the real
+// preflight (Sol R13): the dry run must succeed and leave the worktree's exclude alone, and the
+// real run must then add the line there. The real runs are compared; both die of the unknown
+// door after the preflight (C2).
+func (h *harness) testKickoffDryRunThenReal(t *testing.T, s seed, dryRun, real []string) {
+	dry := h.kickoffInvocation(kickoffCase{args: dryRun, seed: s})
+	then := h.kickoffInvocation(kickoffCase{args: real})
+	run := func(side string, dryArgv, realArgv []string) outcome {
+		sb := h.newSandbox(t)
+		dry.seed(t, sb)
+		first := h.run(t, sb, dryArgv, nil, dry.env)
+		collectExtraFiles(t, sb, dry, first.files)
+		if _, written := first.files["extra/"+worktreeExclude]; first.exitCode != 0 || written {
+			t.Errorf("%s dry run: exit %d, exclude written %v, stderr %q; want 0 and no exclude", side, first.exitCode, written, first.stderr)
+		}
+		o := h.run(t, sb, realArgv, nil, then.env)
+		collectExtraFiles(t, sb, then, o.files)
+		return o.withProjectPlaceholder(t, sb).normalized(then.normalize)
+	}
+	js, orch := run("js", dry.js, then.js), run("orch", dry.orch, then.orch)
+	for side, o := range map[string]outcome{"js": js, "orch": orch} {
+		if got := o.files["extra/"+worktreeExclude]; got != ".orchestrator/\n" {
+			t.Errorf("%s real run: %s = %q, want the line", side, worktreeExclude, got)
+		}
+	}
+	if err := crashError(crashC2, "", js, orch); err != nil {
+		t.Error(err)
+	}
+	js.stderr, orch.stderr = "", ""
 	compareOutcomes(t, js, orch)
 }
 

@@ -1,9 +1,10 @@
 // Package kickoff starts a run as bin/kickoff.mjs does: check the briefs, refresh the usage,
 // pick the door by live budget, run the preflight (policy, gate, supervisor, git exclude) and
 // launch the conductor, headless through `orch worker start --detach` or interactive in this
-// terminal. A dry run prints the door and prompt and changes nothing. The orchestrator commands it runs are self-execs of orch, as the JS spawns node
-// on its sibling scripts; every child is reached through Children so each branch can be
-// tested without processes.
+// terminal. A dry run prints the door and prompt and changes nothing in the project (it still
+// refreshes the shared usage cache). The orchestrator commands it runs are self-execs of orch,
+// as the JS spawns node on its sibling scripts; every child is reached through Children so
+// each branch can be tested without processes.
 package kickoff
 
 import (

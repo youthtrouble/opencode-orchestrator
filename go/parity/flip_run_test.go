@@ -35,7 +35,10 @@ func (h *harness) flipRunInvocation(args []string, s seed, crash crashClass, err
 	if s != nil {
 		all = seeds(all, s)
 	}
-	return h.flipInvocation(flipCase{args: append([]string{"run"}, args...), seed: all, crash: crash, errorLine: errorLine})
+	inv := h.flipInvocation(flipCase{args: append([]string{"run"}, args...), seed: all, crash: crash, errorLine: errorLine})
+	// a case may make .git a file or the exclude a directory
+	inv.extraFilesMayBeBlocked = true
+	return inv
 }
 
 // withGit replaces the sandbox's .git directory with a file holding content (a worktree's or
@@ -53,6 +56,15 @@ func withGit(content *string) seed {
 }
 
 func seedExclude(content string) seed { return seedProjectFile(".git/info/exclude", content) }
+
+// worktreeExclude is the exclude git reads in worktreeLayout: the common dir's.
+const worktreeExclude = ".gitmeta/info/exclude"
+
+// worktreeLayout makes the project a linked worktree (Sol R13): its .git file names a git dir
+// by a relative path, and that git dir's commondir names .gitmeta, whose info/ is absent.
+func worktreeLayout() seed {
+	return seeds(withGit(text("gitdir: .gitmeta/worktrees/w\n")), seedProjectFile(".gitmeta/worktrees/w/commondir", "../..\n"))
+}
 
 // testFlipRun compares `flip run`: refusals, the pending launch (the matrix of what a run
 // writes before its launch), the crashes before the launch, full launches of a conductor that
@@ -115,30 +127,44 @@ func (h *harness) testFlipRun(t *testing.T) {
 		{"exclude/double-slash", claude, seedExclude(".orchestrator//")},
 		{"exclude/invalid-utf8-at-the-end", claude, seedExclude("foo\xff")},
 		{"exclude/no-git", claude, withGit(nil)},
+		// A .git file naming no directory is no repository: nothing is written (Sol R13).
+		{"exclude/git-file-missing-gitdir", claude, withGit(text("gitdir: elsewhere\n"))},
+		{"exclude/git-file-malformed", claude, withGit(text("not a pointer\n"))},
 	}
 	for _, c := range pending {
 		t.Run(c.name, func(t *testing.T) { h.compareFlipPending(t, h.flipRunInvocation(c.args, c.seed, noCrash, "")) })
 	}
 	t.Run("pending/paused-brief", h.testFlipRunPausedBrief)
+	t.Run("exclude/worktree-layout", func(t *testing.T) {
+		js, _ := h.compareFlipPending(t, h.flipRunInvocation(claude, worktreeLayout(), noCrash, ""))
+		if got := js.files["extra/"+worktreeExclude]; got != ".orchestrator/\n" {
+			t.Errorf("js %s = %q, want the line", worktreeExclude, got)
+		}
+	})
+	// A commondir naming no directory is no repository: worktreeExclude's .gitmeta is not created (C4-F1).
+	t.Run("exclude/worktree-commondir-missing", func(t *testing.T) {
+		missingCommonDir := seeds(withGit(text("gitdir: wt\n")), seedProjectFile("wt/commondir", "../.gitmeta\n"))
+		js, _ := h.compareFlipPending(t, h.flipRunInvocation(claude, missingCommonDir, noCrash, ""))
+		if got, wrote := js.files["extra/"+worktreeExclude]; wrote {
+			t.Errorf("js %s = %q, want no file", worktreeExclude, got)
+		}
+	})
 
 	crashes := []struct {
 		name, errorLine string
 		seed            seed
-		blocksExclude   bool   // the exclude is a directory or lies under a file
 		pe21            bool   // errorLine is the JS's open failure; orch fails at its rename
 		leftover        string // both fail at the rename of flip.json; the JS leaves flip.json.tmp holding this
 	}{
-		{"crash/git-is-a-file", "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", withGit(text("gitdir: elsewhere\n")), true, false, ""},
-		{"crash/exclude-is-a-directory", "Error: EISDIR: illegal operation on a directory, read", seedProjectDir(".git/info/exclude"), true, false, ""},
+		{"crash/exclude-is-a-directory", "Error: EISDIR: illegal operation on a directory, read", seedProjectDir(".git/info/exclude"), false, ""},
 		{"crash/PE-21-brief-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/briefs/conductor-continue.md'",
-			seedProjectDir(".orchestrator/briefs/conductor-continue.md"), false, true, ""},
+			seedProjectDir(".orchestrator/briefs/conductor-continue.md"), true, ""},
 		{"crash/PE-21-flip-is-a-directory", "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/flip.json.tmp' -> '$PROJECT/.orchestrator/flip.json'",
-			seedProjectDir(".orchestrator/flip.json"), false, false, `"previous"`},
+			seedProjectDir(".orchestrator/flip.json"), false, `"previous"`},
 	}
 	for _, c := range crashes {
 		t.Run(c.name, func(t *testing.T) {
 			inv := h.flipRunInvocation(claude, c.seed, crashC1, c.errorLine)
-			inv.extraFilesMayBeBlocked = c.blocksExclude
 			if c.pe21 {
 				h.comparePE21OpenVsRename(t, inv)
 				return

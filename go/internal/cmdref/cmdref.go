@@ -68,7 +68,7 @@ func KickoffPrompt(main string, side []string) string {
 }
 
 // ConductorContinueBrief is the brief `flip run` writes to .orchestrator/briefs/
-// conductor-continue.md for the conductor it launches at door to (bin/flip.mjs l.74): from is
+// conductor-continue.md for the conductor it launches at door to (bin/flip.mjs l.118): from is
 // the door it takes over from and reason why, both as the JS template inserts them.
 func ConductorContinueBrief(to, from, reason string) string {
 	flip := ScriptFile("flip")

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { clearGate, decideFlip } from "../lib/flip.mjs";
+import { clearGate, decideFlip, ensureGitExclude } from "../lib/flip.mjs";
 
 const flipCli = fileURLToPath(new URL("../bin/flip.mjs", import.meta.url));
 
@@ -113,4 +113,54 @@ test("clearGate with relaunch keeps a queued launch", (t) => {
   assert.equal(clearGate(project, { awaiting_human: { door: "claude" }, pending_launch: queued }, { relaunch: true }), "opencode");
 
   assert.deepEqual(readFlipJson(project), { pending_launch: queued });
+});
+
+// Writes each relative path's content under dir (a trailing "/" makes a directory).
+function layout(dir, files) {
+  for (const [rel, content] of Object.entries(files)) {
+    const file = path.join(dir, rel);
+    if (rel.endsWith("/")) { fs.mkdirSync(file, { recursive: true }); continue; }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content.replaceAll("{dir}", dir));
+  }
+}
+
+test("ensureGitExclude writes the info/exclude git reads behind a .git directory or file", async (t) => {
+  for (const [name, files, exclude] of [
+    ["a .git directory", { "project/.git/": "" }, "project/.git/info/exclude"],
+    ["a linked worktree (commondir)", { "project/.git": "gitdir: {dir}/main/.git/worktrees/w\n", "main/.git/worktrees/w/commondir": "../..\n" }, "main/.git/info/exclude"],
+    ["a submodule (no commondir)", { "project/.git": "gitdir: ../main/.git/modules/sub\n", "main/.git/modules/sub/": "" }, "main/.git/modules/sub/info/exclude"],
+    ["a relative gitdir with trailing white space", { "project/.git": "gitdir: .gitmeta/worktrees/w \r\n", "project/.gitmeta/worktrees/w/commondir": "../.." }, "project/.gitmeta/info/exclude"],
+  ]) {
+    await t.test(name, (t) => {
+      const dir = tempProject(t);
+      layout(dir, files);
+      assert.equal(ensureGitExclude(path.join(dir, "project")), true);
+      assert.equal(fs.readFileSync(path.join(dir, exclude), "utf8"), ".orchestrator/\n");
+    });
+  }
+});
+
+test("ensureGitExclude treats a malformed .git file or a missing gitdir as no repository", async (t) => {
+  for (const [name, content] of [["malformed", "not a pointer\n"], ["no space", "gitdir:x\n"], ["missing gitdir", "gitdir: /elsewhere\n"], ["gitdir is a file", "gitdir: file\n"]]) {
+    await t.test(name, (t) => {
+      const project = tempProject(t);
+      layout(project, { ".git": content, file: "" });
+      assert.equal(ensureGitExclude(project), false);
+      assert.deepEqual(fs.readdirSync(project).sort(), [".git", "file"]);
+    });
+  }
+});
+
+// Git judges such a git dir no repository, so nothing is created where the commondir points (C4-F1).
+test("ensureGitExclude treats a commondir naming no directory as no repository", async (t) => {
+  for (const [name, commonDir] of [["relative, missing", "../../../absent\n"], ["absolute, missing", "{dir}/absent"], ["a file", "../../file\n"]]) {
+    await t.test(name, (t) => {
+      const project = tempProject(t);
+      layout(project, { ".git": "gitdir: meta/worktrees/w\n", "meta/worktrees/w/commondir": commonDir, "meta/file": "" });
+      assert.equal(ensureGitExclude(project), false);
+      assert.deepEqual(fs.readdirSync(path.join(project, "meta")).sort(), ["file", "worktrees"]);
+      assert.equal(fs.existsSync(path.join(project, "absent")), false);
+    });
+  }
 });

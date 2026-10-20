@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // One command to start a run: preflight, pick the door by live budget, launch the conductor.
 //   kickoff.mjs --brief .orchestrator/briefs/X.md [--brief Y.md ...] [--door auto|claude|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]
-// Preflight: refresh usage, ensure supervisor running, add .orchestrator/ to .git/info/exclude.
-// --dry-run changes nothing: it prints the door and prompt and skips the preflight and the launch.
+// Preflight: refresh usage, ensure supervisor running, add .orchestrator/ to the repository's info/exclude.
+// --dry-run changes nothing in the project (it still refreshes the shared usage cache): it prints the door and prompt and skips the preflight and the launch.
 // Door "auto": the home door if its vendor is usable, else the other. Both red => the preflight, the prompt
 // saved as the conductor's brief, a pause naming it (the supervisor's relaunch at the reset starts from it)
 // and exit 75; exit 1 when the supervisor did not start or the pause was not recorded.
@@ -12,7 +12,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "../lib/run-record.mjs";
 import { getRouting } from "../lib/usage.mjs";
-import { DOOR_VENDOR, otherDoor } from "../lib/flip.mjs";
+import { DOOR_VENDOR, ensureGitExclude, otherDoor } from "../lib/flip.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -65,8 +65,7 @@ function preflight() {
   spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "gate", "--clear", "--no-relaunch", "--cwd", root], { stdio: "ignore" });
   const sup = spawnSync(process.execPath, [path.join(HERE, "supervisor.mjs"), "start", "--cwd", root], { encoding: "utf8" });
   console.log(`supervisor: ${(sup.stdout || sup.stderr).trim().slice(0, 120)}`);
-  const info = path.join(root, ".git", "info");
-  if (fs.existsSync(path.join(root, ".git"))) { fs.mkdirSync(info, { recursive: true }); const f = path.join(info, "exclude"); const cur = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""; if (!cur.split("\n").some((l) => /^\.orchestrator\/?\r?$/.test(l))) fs.appendFileSync(f, (cur && !cur.endsWith("\n") ? "\n" : "") + ".orchestrator/\n"); }
+  ensureGitExclude(root);
   return sup.status === 0;
 }
 

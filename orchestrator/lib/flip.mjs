@@ -71,3 +71,44 @@ export function writeFlip(root, flip) {
   fs.writeFileSync(tmp, JSON.stringify(flip, null, 2) + "\n");
   fs.renameSync(tmp, file);
 }
+
+// Keeps the project's orchestrator state out of git: adds ".orchestrator/" to the repository's
+// info/exclude unless a line already names it (Git ends lines only at \n and drops one trailing \r).
+// Returns whether the project has a git repository; nothing is written when it has none.
+export function ensureGitExclude(root) {
+  const file = gitExcludeFile(root);
+  if (!file) return false;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+  if (!current.split("\n").some((l) => /^\.orchestrator\/?\r?$/.test(l))) fs.appendFileSync(file, (current.endsWith("\n") || !current ? "" : "\n") + ".orchestrator/\n");
+  return true;
+}
+
+// Starts a .git file: a linked worktree's or a submodule's pointer to its git dir.
+const GIT_FILE_PREFIX = "gitdir: ";
+
+// The info/exclude git reads (gitrepository-layout): <root>/.git/info/exclude when .git is a directory.
+// A .git file (a linked worktree or a submodule) holds "gitdir: <path>", relative to root as git resolves
+// it; a git dir with a commondir file (a linked worktree) uses the common dir's exclude, commondir being
+// relative to the git dir, otherwise (a submodule) its own. A malformed .git file, one naming no
+// directory, or a commondir naming no directory is no repository, as git judges it (null), so nothing
+// is created outside the repository.
+function gitExcludeFile(root) {
+  const dotGit = path.join(root, ".git");
+  if (!fs.existsSync(dotGit)) return null;
+  if (isDirectory(dotGit)) return path.join(dotGit, "info", "exclude");
+  const pointer = fs.readFileSync(dotGit, "utf8").trimEnd();
+  if (!pointer.startsWith(GIT_FILE_PREFIX)) return null;
+  const gitDir = path.resolve(root, pointer.slice(GIT_FILE_PREFIX.length));
+  if (!isDirectory(gitDir)) return null;
+  const commonDirFile = path.join(gitDir, "commondir");
+  if (!fs.existsSync(commonDirFile)) return path.join(gitDir, "info", "exclude");
+  const commonDir = path.resolve(gitDir, fs.readFileSync(commonDirFile, "utf8").trimEnd());
+  if (!isDirectory(commonDir)) return null;
+  return path.join(commonDir, "info", "exclude");
+}
+
+// Like fs.existsSync, any stat failure (missing, a dangling symlink, a file used as a directory) is "no".
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}

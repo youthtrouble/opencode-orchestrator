@@ -62,7 +62,7 @@ Every script is dependency-free Node and has a Go twin, `orch <script>` (see
 
 | Script | Usage | What it does |
 |---|---|---|
-| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate and any queued relaunch or pause, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. `--dry-run` prints the door and prompt and changes nothing (no preflight, no launch). Both vendors red: runs the preflight, saves the prompt as `.orchestrator/briefs/conductor-kickoff.md`, records a pause naming it (the supervisor's relaunch at the first reset starts from it) and exits 75, or exits 1 when the supervisor did not start or the pause was not recorded. A missing brief names the directory searched. |
+| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate and any queued relaunch or pause, start the supervisor, add `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir)), then launch the conductor interactively or as the headless `conductor` lane. `--dry-run` prints the door and prompt and changes nothing in the project (no preflight, no launch; it still refreshes the shared usage cache). Both vendors red: runs the preflight, saves the prompt as `.orchestrator/briefs/conductor-kickoff.md`, records a pause naming it (the supervisor's relaunch at the first reset starts from it) and exits 75, or exits 1 when the supervisor did not start or the pause was not recorded. A missing brief names the directory searched. |
 | `watch.mjs` | `[--cwd DIR] [--follow] [--interval 20]` | One-screen dashboard: budgets, routing, supervisor, flip state, lanes, open questions with the reply command, human gate, last messages, incidents of the last 24 h, next action from `STATE.md`. |
 | `usage.mjs` | `[--refresh] [--json] [--brief]` | Live Claude + Codex usage -> posture -> role routing. |
 | `mailbox.mjs` | `post \| list \| ack \| reply \| inbox` | Durable project mailbox (see [below](#mailbox-and-manifests)). |
@@ -243,7 +243,7 @@ One conductor drives a project at a time. `models.json` -> `conductor.home` name
 | it is the away door, home still red | keeps going |
 | both red | writes the remaining briefs, runs `flip.mjs pause`, stops; the supervisor relaunches at the first reset, home door first if it comes back first |
 
-`flip.mjs run --to <door>` adds `.orchestrator/` to `.git/info/exclude`, writes
+`flip.mjs run --to <door>` adds `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir), writes
 `.orchestrator/briefs/conductor-continue.md` (unless the record it replaces is a pause that names a
 brief, as a both-red kickoff's does, or a pending launch that kept one, and that file exists: then it
 launches that brief), replaces `flip.json` (clearing `paused` and
@@ -331,8 +331,8 @@ safe.
 
 ## Project state files
 
-Each work project gets a private `.orchestrator/` (kickoff and flip add it to
-`.git/info/exclude`):
+Each work project gets a private `.orchestrator/` (kickoff and flip add it to the
+repository's `info/exclude`):
 
 | Path | Contents |
 |---|---|

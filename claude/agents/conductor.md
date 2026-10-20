@@ -85,7 +85,7 @@ and continue only on a yes. Arguments: an optional brief path and `--dry-run`.
 7. End the turn and take no further action: the headless lane is now the only conductor.
 
 With `--dry-run`, only run `orch kickoff --brief <brief> --headless --unattended --dry-run`
-(it changes nothing), report the door and prompt it prints, and carry on with the session.
+(it changes nothing in the project), report the door and prompt it prints, and carry on with the session.
 
 ## Never idle on a review gate (pipelining)
 When a slice waits for a review the other vendor cannot give yet, do not wait. Start the next slice
