@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -34,25 +35,35 @@ func TestCodexArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(dir)
-	prefix := func(sandbox, effort string) []string {
-		return []string{"exec", "--json", "--skip-git-repo-check", "-C", dir, "-s", sandbox, "-c", `model_reasoning_effort="` + effort + `"`}
+	head := []string{"exec", "--json", "--skip-git-repo-check", "-C", dir}
+	effortOf := func(effort string) []string { return []string{"-c", `model_reasoning_effort="` + effort + `"`} }
+	// approved is the default sandbox's prefix: --approve-for-me alone, no -s.
+	approved := func(effort string, rest ...string) []string {
+		return slices.Concat(head, []string{"--approve-for-me"}, effortOf(effort), rest)
 	}
+	sandboxed := func(sandbox, effort string, rest ...string) []string {
+		return slices.Concat(head, []string{"-s", sandbox}, effortOf(effort), rest)
+	}
+	addDir := filepath.Join(filepath.Dir(dir), "x", "y")
 	cases := []struct {
 		name string
 		args []string
 		want []string
 	}{
-		{"defaults approve the workspace-write sandbox", nil, append(prefix("workspace-write", "high"), "-m", "gpt-6.1-sol", "--approve-for-me", "-")},
-		{"every flag, in the JS order", []string{
+		{"defaults approve without -s", nil, approved("high", "-m", "gpt-6.1-sol", "-")},
+		{"every flag, exec-only options first", []string{
 			"--ephemeral", "--add-dir", "../x/./y", "--schema", "s.json", "--resume", "", "--sandbox", "read-only", "--effort", "low", "--model", "gpt-6-luna",
-		}, append(prefix("read-only", "low"), "-m", "gpt-6-luna", "--output-schema", filepath.Join(dir, "s.json"), "--add-dir", filepath.Join(filepath.Dir(dir), "x", "y"), "--ephemeral", "-")},
-		{"resume replaces model", []string{"--resume", "abc", "--model", "m"}, append(prefix("workspace-write", "high"), "resume", "abc", "--approve-for-me", "-")},
-		{"danger-full-access is not approved", []string{"--sandbox", "danger-full-access"}, append(prefix("danger-full-access", "high"), "-m", "gpt-6.1-sol", "-")},
-		{"empty values are falsy", []string{"--model", "", "--effort", "", "--sandbox", "", "--schema", "", "--add-dir", "", "--resume", ""}, append(prefix("workspace-write", "high"), "-m", "gpt-6.1-sol", "--approve-for-me", "-")},
-		{"bare effort is String(true)", []string{"--effort"}, append(prefix("workspace-write", "true"), "-m", "gpt-6.1-sol", "--approve-for-me", "-")},
-		{"bare sandbox is -s true without approval", []string{"--sandbox"}, append(prefix("true", "high"), "-m", "gpt-6.1-sol", "-")},
-		{"bare resume is String(true)", []string{"--resume"}, append(prefix("workspace-write", "high"), "resume", "true", "--approve-for-me", "-")},
-		{"the sandbox is compared case-sensitively", []string{"--sandbox", "Workspace-Write"}, append(prefix("Workspace-Write", "high"), "-m", "gpt-6.1-sol", "-")},
+		}, sandboxed("read-only", "low", "--add-dir", addDir, "-m", "gpt-6-luna", "--output-schema", filepath.Join(dir, "s.json"), "--ephemeral", "-")},
+		{"read-only is not approved", []string{"--sandbox", "read-only"}, sandboxed("read-only", "high", "-m", "gpt-6.1-sol", "-")},
+		{"danger-full-access is not approved", []string{"--sandbox", "danger-full-access"}, sandboxed("danger-full-access", "high", "-m", "gpt-6.1-sol", "-")},
+		{"resume replaces model, approval before resume", []string{"--resume", "abc", "--model", "m"}, approved("high", "resume", "abc", "-")},
+		{"resume with add-dir and schema", []string{"--resume", "abc", "--add-dir", "../x/./y", "--schema", "s.json", "--ephemeral"},
+			approved("high", "--add-dir", addDir, "resume", "abc", "--output-schema", filepath.Join(dir, "s.json"), "--ephemeral", "-")},
+		{"empty values are falsy", []string{"--model", "", "--effort", "", "--sandbox", "", "--schema", "", "--add-dir", "", "--resume", ""}, approved("high", "-m", "gpt-6.1-sol", "-")},
+		{"bare effort is String(true)", []string{"--effort"}, approved("true", "-m", "gpt-6.1-sol", "-")},
+		{"bare sandbox is -s true without approval", []string{"--sandbox"}, sandboxed("true", "high", "-m", "gpt-6.1-sol", "-")},
+		{"bare resume is String(true)", []string{"--resume"}, approved("high", "resume", "true", "-")},
+		{"the sandbox is compared case-sensitively", []string{"--sandbox", "Workspace-Write"}, sandboxed("Workspace-Write", "high", "-m", "gpt-6.1-sol", "-")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

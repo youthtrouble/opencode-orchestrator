@@ -24,9 +24,6 @@ const (
 	defaultCodexTimeoutMins = 60
 )
 
-// codexSandboxWithApproval is the one sandbox codex-exec.mjs passes --approve-for-me with (l.44).
-const codexSandboxWithApproval = "workspace-write"
-
 // errModelIncludes is `model.includes("astra")` (l.36) for a bare --model, the JS value true.
 var errModelIncludes = &jsError{class: "TypeError", message: "model.includes is not a function"}
 
@@ -68,33 +65,55 @@ func isFrontierCodexModel(model string) bool {
 }
 
 // argv is the argv codex-exec.mjs passes to codex (l.39-45), the prompt being read from stdin
-// ("-"). --approve-for-me goes with the sandbox "workspace-write" only, compared strictly, so a
-// bare --sandbox (true) gives "-s true" and no approval flag. codex-cli 0.162.1 rejects
-// --approve-for-me together with "-s workspace-write"; the JS passes both, and so does orch
-// (Q-S5b-1). A bare --schema or --add-dir is the path.resolve TypeError.
+// ("-"). A bare --schema or --add-dir is the path.resolve TypeError. Every exec-only option
+// (the sandbox flags, --add-dir) precedes the resume token: codex-cli 0.162.1's `exec resume`
+// rejects them, while --output-schema and --ephemeral are accepted by both.
 func (q codexRequest) argv() ([]string, error) {
-	argv := []string{"exec", "--json", "--skip-git-repo-check", "-C", q.cwd, "-s", text(q.sandbox), "-c", `model_reasoning_effort="` + text(q.effort) + `"`}
+	argv := append([]string{"exec", "--json", "--skip-git-repo-check", "-C", q.cwd}, codexSandboxArgs(q.sandbox)...)
+	argv = append(argv, "-c", `model_reasoning_effort="`+text(q.effort)+`"`)
+	addDir, err := q.resolvedPathArg("add-dir", "--add-dir")
+	if err != nil {
+		return nil, err
+	}
+	argv = append(argv, addDir...)
 	if resume := q.opts.JS("resume"); jsjson.Truthy(resume) {
 		argv = append(argv, "resume", text(resume))
 	} else {
 		argv = append(argv, "-m", q.model)
 	}
-	for _, path := range []struct{ key, arg string }{{"schema", "--output-schema"}, {"add-dir", "--add-dir"}} {
-		if v := q.opts.JS(path.key); jsjson.Truthy(v) {
-			abs, err := resolvePath(v)
-			if err != nil {
-				return nil, err
-			}
-			argv = append(argv, path.arg, abs)
-		}
+	schema, err := q.resolvedPathArg("schema", "--output-schema")
+	if err != nil {
+		return nil, err
 	}
+	argv = append(argv, schema...)
 	if jsjson.Truthy(q.opts.JS("ephemeral")) {
 		argv = append(argv, "--ephemeral")
 	}
-	if q.sandbox == codexSandboxWithApproval {
-		argv = append(argv, "--approve-for-me")
-	}
 	return append(argv, "-"), nil
+}
+
+// codexSandboxArgs selects the sandbox. codex-cli 0.162.1's --approve-for-me means the
+// workspace-write sandbox with automatic approval review, and is rejected next to -s, so
+// workspace-write (compared strictly) is that flag alone; anything else, a bare --sandbox's
+// true included, is "-s <value>".
+func codexSandboxArgs(sandbox any) []string {
+	if sandbox == "workspace-write" {
+		return []string{"--approve-for-me"}
+	}
+	return []string{"-s", text(sandbox)}
+}
+
+// resolvedPathArg is `flag <absolute path>` for a truthy path option, nothing otherwise.
+func (q codexRequest) resolvedPathArg(key, flag string) ([]string, error) {
+	v := q.opts.JS(key)
+	if !jsjson.Truthy(v) {
+		return nil, nil
+	}
+	abs, err := resolvePath(v)
+	if err != nil {
+		return nil, err
+	}
+	return []string{flag, abs}, nil
 }
 
 // startLine is the "start" log line (l.49).

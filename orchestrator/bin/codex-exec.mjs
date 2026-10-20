@@ -36,12 +36,12 @@ const log = (s) => { if (!opts.quiet) console.error(`[codex] ${s}`); };
 const gate = await budgetGate("openai", { force: Boolean(opts.force), frontier: model.includes("astra") });
 if (!gate.allowed) { try { incident({ component: "bridge", kind: "limit", summary: `${path.basename(process.argv[1])} refused: budget red`, context: { resets_at: gate.resets_at || null }, project: cwd }); } catch { /* ignore */ } console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
 
-const args = ["exec", "--json", "--skip-git-repo-check", "-C", cwd, "-s", sandbox, "-c", `model_reasoning_effort="${effort}"`];
+const sandboxArgs = sandbox === "workspace-write" ? ["--approve-for-me"] : ["-s", sandbox]; // codex-cli 0.162.1: --approve-for-me means workspace-write and is rejected next to -s
+const args = ["exec", "--json", "--skip-git-repo-check", "-C", cwd, ...sandboxArgs, "-c", `model_reasoning_effort="${effort}"`];
+if (opts["add-dir"]) args.push("--add-dir", path.resolve(opts["add-dir"])); // exec-only options precede `resume`, which rejects them
 if (opts.resume) args.push("resume", opts.resume); else args.push("-m", model);
 if (opts.schema) args.push("--output-schema", path.resolve(opts.schema));
-if (opts["add-dir"]) args.push("--add-dir", path.resolve(opts["add-dir"]));
 if (opts.ephemeral) args.push("--ephemeral");
-if (sandbox === "workspace-write") args.push("--approve-for-me");
 args.push("-");
 
 const started = Date.now();

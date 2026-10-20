@@ -6,6 +6,10 @@
   gate's question) now queues a relaunch; the supervisor restarts the gated door's conductor within
   a minute. Clearing when no gate is set changes nothing; `kickoff` clears with the new
   `--no-relaunch` so it never starts a second conductor.
+- codex-exec: works with codex-cli 0.162.1. `workspace-write` is now requested with
+  `--approve-for-me` alone (the CLI rejects it next to `-s`), and `exec`-only options
+  (`--approve-for-me`, `-s`, `--add-dir`) come before `resume`, which does not accept them
+  (incident 2eeaf7d5349a, Q-S5b-1).
 - mailbox/watch: the reply hint says `orch mailbox reply <id> "..."` when `orch` is on PATH
   (PE-26).
 - parity: the harness PATH holds only links to node and sqlite3, and destructive cleanup refuses

@@ -67,7 +67,8 @@ func TestRunCodexNormalPath(t *testing.T) {
 }
 
 // PE-13: a codex that exits without reading its prompt (its own argv rejection, say) is a
-// failed run like any other, even for a prompt far beyond the pipe buffer.
+// failed run like any other, even for a prompt far beyond the pipe buffer. The CLI error is
+// synthetic: since H18 the bridge no longer sends this pair.
 func TestRunCodexReportsAnUnreadPrompt(t *testing.T) {
 	sb := newBridgeSandbox(t, "codex")
 	sb.fakeCLI(t, "codex", "", "error: the argument '--approve-for-me' cannot be used with '--sandbox <MODE>'\n", "exit 2")

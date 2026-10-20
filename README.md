@@ -44,9 +44,6 @@ model, and stalling whenever one window hits its cap. This project turns that in
   slices continue) or a same-vendor review is used and labelled as such.
 - **Budgets are advisory.** Usage comes from each vendor's own feeds; when a reading is unavailable
   the bridges proceed rather than block.
-- **Known Codex bridge issue.** On codex-cli 0.162.1 the Codex bridge (`/delegate-codex`,
-  Codex-backed workers) fails argument parsing before a model turn. Native OpenAI subagents inside
-  opencode are unaffected.
 - **The Go runtime is opt-in until 0.6.0**, and per-project plugin options do not reach the plugin
   yet: switch runtimes with the `ORCH_RUNTIME` environment variable (see [Go runtime](#go-runtime)).
 - **It is not a sandbox.** Models run tools and shell commands with the permissions you grant, and

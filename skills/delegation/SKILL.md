@@ -28,8 +28,8 @@ the plan section verbatim if it matters. Keep to one bounded unit.
 - Budget gate: bridges exit 75 when the vendor window is red; `force` overrides deliberately.
 
 ## Codex-specific
-`codex exec` has no `--full-auto` any more; the bridge uses `--sandbox workspace-write --approve-for-me`
-for writes and `read-only` otherwise. Efforts: low|medium|high|xhigh|max|ultra (ultra spawns Codex
+`codex exec` has no `--full-auto` any more; the bridge uses `--approve-for-me` (which means
+the workspace-write sandbox) for writes and `-s read-only` otherwise. Efforts: low|medium|high|xhigh|max|ultra (ultra spawns Codex
 subagents; expensive). Fast mode costs 2.5x usage; never enable it automatically.
 
 If a Codex run returns `reason: tool_host_unavailable` (its code-mode host timed out), wait about 60 s and retry once; if it fails again, use the same-vendor fallback, mark `cross_vendor: false`, and record an incident. Do not treat a Codex turn with zero commands as a completed review.

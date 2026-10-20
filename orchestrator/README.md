@@ -493,10 +493,10 @@ skips without either; under a temp `HOME`, point `GOCACHE` at a shared cache.
   installer and plugin suites in both runtimes against stubs, the Go build/vet/gofmt/tests and the
   JS-vs-Go parity harness in CI on macOS and Linux. Installer tests never touch a real config or
   authenticate a model.
-- **Known issue:** on codex-cli 0.162.1, `codex-exec` passes `--approve-for-me` with the default
-  `workspace-write` sandbox, which that CLI rejects (exit 2) before a model turn. Do not assume
-  `/delegate-codex` or Codex-backed workers work because the usage feed passes. Native OpenAI
-  subagents are a separate path.
+- **Codex flags:** for codex-cli 0.162.1, `codex-exec` requests the default `workspace-write`
+  sandbox with `--approve-for-me` alone (that CLI rejects it next to `-s`) and any other sandbox
+  with `-s <mode>`; `exec`-only options (`--approve-for-me`, `-s`, `--add-dir`) come before
+  `resume <id>`, which does not accept them.
 - **Not verified:** a real install over an existing user config, Linux/Node 22 execution, every
   bridge/review combination, storage or power failures, long unattended runs on large repositories.
 

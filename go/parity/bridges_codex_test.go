@@ -30,9 +30,11 @@ func (h *harness) testCodexExec(t *testing.T) {
 		{name: "flags/all", script: ok, seed: seedProjectFile("sub/.keep", ""), args: []string{
 			"--model", "gpt-6-luna", "--effort", "low", "--sandbox", "read-only", "--cwd", "sub", "--schema", "s.json",
 			"--add-dir", "../x/./y", "--ephemeral", "--timeout-min", "5", "--force", "--prompt", "multi\nline \u00e9", "extra"}},
-		{name: "flags/default-sandbox-mirrors-approve-for-me", args: p, script: ok},
+		{name: "flags/default-sandbox-approve-for-me", args: p, script: ok},
+		{name: "flags/read-only", args: []string{"--sandbox", "read-only", "--prompt", "p"}, script: ok},
 		{name: "flags/danger-full-access", args: []string{"--sandbox", "danger-full-access", "--prompt", "p"}, script: ok},
 		{name: "flags/resume", args: []string{"--resume", "abc", "--model", "m", "--prompt", "p"}, script: ok},
+		{name: "flags/resume-with-add-dir-and-schema", args: []string{"--resume", "abc", "--add-dir", "../x/./y", "--schema", "s.json", "--ephemeral", "--prompt", "p"}, script: ok},
 		{name: "flags/empty-values", args: []string{"--model", "", "--effort", "", "--sandbox", "", "--resume", "", "--schema", "", "--add-dir", "", "--cwd", "", "--prompt", "p"}, script: ok},
 		{name: "flags/unknown-keys-are-flags", args: []string{"--frobnicate", "x", "--prompt", "p"}, script: ok},
 		{name: "quiet", args: []string{"--quiet", "--prompt", "p"}, script: ok},
