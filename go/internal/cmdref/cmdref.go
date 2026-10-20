@@ -77,6 +77,7 @@ func ConductorContinueBrief(to, from, reason string) string {
 		"Read .orchestrator/STATE.md and the mailbox, verify recorded facts against the tree, then execute the exact next action and keep following the loop.\n" +
 		"At each brief boundary run: " + Script("flip") + " decide --active " + to + "\n" +
 		"If it says handback or flip: update STATE.md, post a handoff, run " + flip + " run --to <door> --from " + to + ", and stop.\n" +
+		"If it says gate: the project is waiting for the human; update STATE.md and stop, without running " + flip + " pause, run or gate.\n" +
 		"You cannot ask the human interactively: put questions in the mailbox (kind question) and continue with independent work, or stop at human gates.\n" +
 		"HEADLESS RULE: ending your turn ends this session and kills background subagents. Run every subagent in the FOREGROUND and wait; any background agents from a previous headless session are gone, re-run them in the foreground. " +
 		"Do not finish until the loop is complete or you have handed off with " + flip + " run/pause, or stopped at a human gate with " + flip + " gate (never pause for a human gate).\n"

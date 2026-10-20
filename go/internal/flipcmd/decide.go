@@ -18,17 +18,22 @@ var ErrActiveRequired = errors.New("--active opencode|claude required")
 type RoutingSource func() (*usage.Routing, error)
 
 // Decide says whether the conductor at --active should flip, hand back, stay or pause, from
-// the routing and the time of the last flip. The routing is read first and its errors are
-// returned as they are; the clock is read after it, as the JS reads Date.now().
+// the routing and the time of the last flip; while a human gate is set it says gate without
+// reading the routing. The routing's errors are returned as they are; the clock is read
+// after it, as the JS reads Date.now().
 func (p Project) Decide(opts cliargs.Opts, routing RoutingSource) (flip.Decision, error) {
 	if !opts.Truthy("active") {
 		return flip.Decision{}, ErrActiveRequired
+	}
+	prev := p.ReadFlip()
+	if gate, gated := humanGateDecision(prev); gated {
+		return gate, nil
 	}
 	r, err := routing()
 	if err != nil {
 		return flip.Decision{}, err
 	}
-	lastFlipAt := lastFlipAt(p.ReadFlip())
+	lastFlipAt := lastFlipAt(prev)
 	return flip.Decide(flip.Input{
 		Active:     jsjson.TemplateString(opts.JS("active")),
 		Postures:   r.Resolved.Postures,
@@ -36,6 +41,18 @@ func (p Project) Decide(opts cliargs.Opts, routing RoutingSource) (flip.Decision
 		Now:        p.Now(),
 		LastFlipAt: lastFlipAt,
 	}), nil
+}
+
+// humanGateDecision is `if (prev?.awaiting_human)`: a truthy gate answers gate with the
+// reason `awaiting human: ${prev.awaiting_human.reason}`, so a gate without a reason prints
+// undefined. Only an object holds awaiting_human; strings and arrays never do.
+func humanGateDecision(prev any) (flip.Decision, bool) {
+	gate := jsjson.Path(prev, "awaiting_human")
+	if !jsjson.Truthy(gate) {
+		return flip.Decision{}, false
+	}
+	reason, present := jsjson.Lookup(gate, "reason")
+	return flip.Decision{Action: flip.ActionGate, Reason: "awaiting human: " + jsjson.TemplateStringOf(reason, present)}, true
 }
 
 // lastFlipAt is `prev?.at ? Date.parse(prev.at) : null`. Only an object's own at counts: a

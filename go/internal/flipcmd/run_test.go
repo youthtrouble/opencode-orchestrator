@@ -127,6 +127,17 @@ func TestRunWritesExcludeBriefRecordAndHandoff(t *testing.T) {
 	}
 }
 
+// The launched conductor is headless, so its brief must tell it to stop when decide answers gate.
+func TestRunBriefStopsTheConductorAtAHumanGate(t *testing.T) {
+	p := newGitProject(t)
+	if _, code, err := p.Run(opts("run", "--to", "claude"), launched().launch); err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v", code, err)
+	}
+	if brief := readFile(t, p.briefPath()); !strings.Contains(brief, "If it says gate: the project is waiting for the human; update STATE.md and stop") {
+		t.Errorf("the continue brief has no gate instruction:\n%s", brief)
+	}
+}
+
 // In a linked worktree, whose .git is a file, the exclude goes to the common dir (Sol R13).
 func TestRunExcludesInALinkedWorktree(t *testing.T) {
 	p := newTestProject(t)

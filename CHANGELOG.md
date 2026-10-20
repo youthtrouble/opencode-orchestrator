@@ -20,6 +20,11 @@
   heartbeat automatically.
 - manifest (JS): the private temp-file write moved to `lib/replace-file.mjs`, shared with the
   session heartbeat; behaviour unchanged.
+- flip: `decide` answers `{"action":"gate","to":null,"reason":"awaiting human: <reason>"}` while
+  `flip.json` holds a human gate (`awaiting_human`), before reading any usage, so a pause recorded
+  while a headless conductor runs takes effect at its next brief boundary; the continue brief
+  `flip run` writes tells the conductor to update `STATE.md` and stop on `gate`. An interactive
+  conductor reports the gate and keeps working with the human (JS and Go, WT4).
 - flip/kickoff: `.orchestrator/` is excluded in linked worktrees (the common dir's `info/exclude`)
   and submodules (the git dir's) instead of failing with ENOTDIR; a `.git` file that is malformed or
   names a missing git dir, or whose `commondir` names a missing directory, counts as no repository

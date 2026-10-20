@@ -302,6 +302,7 @@ func (h *harness) testFlipDecide(t *testing.T) {
 		nonDoorFlip = func(vendor string) string {
 			return decision("flip", `"opencode"`, vendor+" is red; openai has headroom")
 		}
+		gate = func(reason string) string { return decision("gate", "null", "awaiting human: "+reason) }
 	)
 	cases := []struct {
 		name  string
@@ -328,6 +329,11 @@ func (h *harness) testFlipDecide(t *testing.T) {
 		{"claude/flip-future", claude, c.stable, `{"at":2030}`, cooling},
 		{"claude/flip-garbage", claude, c.stable, `{"at":"garbage"}`, handback},
 		{"claude/flip-paused-without-at", claude, c.stable, `{"paused":{"at":"` + ago(2) + `","door":"claude"}}`, handback},
+		{"gate/reason", claude, c.stable, `{"awaiting_human":{"reason":"push to main?","door":"claude"}}`, gate("push to main?")},
+		{"gate/no-reason", claude, c.stable, `{"awaiting_human":{"door":"claude"}}`, gate("undefined")},
+		{"gate/false", claude, c.stable, `{"awaiting_human":false}`, handback},
+		{"gate/array", claude, c.stable, `[{"awaiting_human":{"reason":"push"}}]`, handback},
+		{"gate/both-red", opencode, c.bothRed, `{"awaiting_human":{"reason":"deploy"}}`, gate("deploy")}, // pause unless the routing is skipped
 		{"active/absent", []string{"decide"}, c.stable, "", ""},
 		{"active/empty", []string{"decide", "--active", ""}, c.stable, "", ""},
 		{"active/bare", []string{"decide", "--active"}, c.stable, "", nonDoorFlip("undefined")},

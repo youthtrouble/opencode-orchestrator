@@ -571,6 +571,51 @@ func TestDecideReturnsRoutingFailures(t *testing.T) {
 	}
 }
 
+func TestDecideAnswersGateWithoutRoutingWhileAHumanGateIsSet(t *testing.T) {
+	for prev, reason := range map[string]string{
+		`{"awaiting_human":{"reason":"push to main?","door":"claude"}}`: "awaiting human: push to main?",
+		`{"awaiting_human":{"door":"claude"}}`:                          "awaiting human: undefined",
+		`{"awaiting_human":{"reason":null}}`:                            "awaiting human: null",
+		`{"awaiting_human":{"reason":{}}}`:                              "awaiting human: [object Object]",
+		`{"awaiting_human":true}`:                                       "awaiting human: undefined",
+		`{"awaiting_human":"yes"}`:                                      "awaiting human: undefined",
+	} {
+		p := newTestProject(t)
+		writeFile(t, p.FlipPath, prev)
+		d, err := p.Decide(opts("decide", "--active", "claude"), func() (*usage.Routing, error) {
+			t.Fatalf("routing read while gated by %s", prev)
+			return nil, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := (flip.Decision{Action: flip.ActionGate, Reason: reason}); d != want {
+			t.Errorf("Decide over %s = %+v, want %+v", prev, d, want)
+		}
+	}
+}
+
+func TestDecideRoutesWhenNoHumanGateIsSet(t *testing.T) {
+	for _, prev := range []string{
+		`{"awaiting_human":false}`,
+		`{"awaiting_human":null}`,
+		`{"awaiting_human":""}`,
+		`{"awaiting_human":0}`,
+		`[{"awaiting_human":true}]`,
+		`"awaiting_human"`,
+	} {
+		p := newTestProject(t)
+		writeFile(t, p.FlipPath, prev)
+		d, err := p.Decide(opts("decide", "--active", "claude"), func() (*usage.Routing, error) { return stableRouting(t), nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Action != flip.ActionHandback {
+			t.Errorf("Decide over %s = %+v, want %s", prev, d, flip.ActionHandback)
+		}
+	}
+}
+
 // A supervisor tick reading flip.json while gate and pause rewrite it sees the old or the new
 // record, never an empty or partial file (PE-21; the JS truncates and writes in place).
 func TestFlipJSONIsReplacedAtomically(t *testing.T) {

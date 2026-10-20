@@ -259,7 +259,9 @@ Resume with `orch flip gate --clear` (the supervisor restarts the conductor with
 supervision for the project (workers keep running). To take the wheel yourself, pause as above,
 then open `opencode` and type `/continue`, or `claude --agent conductor` and ask it to continue from
 `STATE.md`; leave the gate set while you drive, or the supervisor starts a background conductor
-beside yours.
+beside yours. At each brief boundary `orch flip decide` answers `gate` while the gate is set: a
+headless conductor stops there by itself, while the interactive conductor you drive reports the
+gate and keeps working with you.
 
 ### 4. Where things live in your project
 

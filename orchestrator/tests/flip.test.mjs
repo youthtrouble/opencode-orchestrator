@@ -115,6 +115,23 @@ test("clearGate with relaunch keeps a queued launch", (t) => {
   assert.deepEqual(readFlipJson(project), { pending_launch: queued });
 });
 
+test("decide answers gate while a human gate is set, without reading usage", (t) => {
+  const project = tempProject(t);
+  const home = tempProject(t); // an empty HOME: any usage read or collection would leave files here
+  const decide = () => {
+    const r = spawnSync(process.execPath, [flipCli, "decide", "--active", "claude", "--cwd", project], { encoding: "utf8", env: { ...process.env, HOME: home } });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.trim();
+  };
+  flip(project, "gate", "--active", "claude", "--reason", "push to main?");
+  assert.equal(decide(), '{"action":"gate","to":null,"reason":"awaiting human: push to main?"}');
+
+  fs.writeFileSync(path.join(project, ".orchestrator", "flip.json"), '{"awaiting_human":{"door":"claude"}}');
+  assert.equal(decide(), '{"action":"gate","to":null,"reason":"awaiting human: undefined"}');
+
+  assert.deepEqual(fs.readdirSync(home), []);
+});
+
 // Writes each relative path's content under dir (a trailing "/" makes a directory).
 function layout(dir, files) {
   for (const [rel, content] of Object.entries(files)) {

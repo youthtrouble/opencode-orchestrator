@@ -33,6 +33,8 @@ const (
 	ActionHandback = "handback"
 	ActionStay     = "stay"
 	ActionPause    = "pause"
+	// ActionGate is decide's answer while a human gate is set; the policy never returns it.
+	ActionGate = "gate"
 )
 
 // Decision is the result of Decide.
