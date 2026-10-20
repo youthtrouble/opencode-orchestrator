@@ -37,7 +37,7 @@ Paths below assume the default install, where this directory is
   AGENTS.md                    operating contract loaded into every session
   agents/*.md                  conductor (primary) + native OpenAI subagents (*-oai)
   commands/*.md                /usage /plan /brief /ship /review /handoff /continue /retro
-                               /delegate-claude /delegate-codex /audit-orchestrator
+                               /delegate-claude /delegate-codex /audit-orchestrator /away
   skills/*/SKILL.md            deep-planning, clean-code, cross-review, handoff-protocol,
                                delegation, orchestrator-audit
   plugins/orchestrator.ts      orch_* tools, budget injection, model sync (js or go runtime)
@@ -93,6 +93,7 @@ red (override with `--force`, not as routine).
 | `/continue`, `/handoff` | Resume or write continuation state |
 | `/retro` | Inspect recent run/review outcomes and incidents |
 | `/audit-orchestrator` | Recheck model catalogs, CLI compatibility and policy sources |
+| `/away [--dry-run] [brief]` | Hand this session to one headless, unattended conductor lane and stop (the "Going away" rule in `AGENTS.md`); `--dry-run` only shows the door and prompt |
 
 Skills (`skills/`): `deep-planning`, `clean-code`, `cross-review`, `handoff-protocol`,
 `delegation`, `orchestrator-audit`.
@@ -224,7 +225,7 @@ supervisor launches once the conductor lane is idle and unlocked (within a minut
 then prints `{"awaiting_human":false,"relaunch":"<door>"}`. Clearing when no gate is set queues
 nothing, and `gate --clear --no-relaunch` (what kickoff runs) only removes the marker. `pause`
 is for budgets only. To pause a running project by hand, set a gate and then `worker.mjs stop --lane
-conductor`; a stopped (`interrupted`) lane without a gate is relaunched by the supervisor.
+conductor`; a stopped lane without a gate is relaunched by the supervisor.
 
 Prompts and permission rules are not a security sandbox. `opencode.jsonc` separately sets the
 opencode shell permission for `git push*` to ask and denies `git push --force*`.
@@ -254,10 +255,13 @@ happen mid-brief, so a hand-back is delayed by at most one brief.
 **Workers.** `worker.mjs start` runs one brief on one harness. State lives in
 `.orchestrator/workers/<lane>.json`, the lock in `<lane>.lock`, the log in
 `.orchestrator/logs/<lane>-<run>.log`. `--detach` launches a kept-awake runner. The bridge timeout
-for a worker is 120 minutes unless `--timeout-min` says otherwise. On completion the worker posts
-`release`, `blocked` or `deferred` (exit 75 / budget red) to the mailbox. `stop --lane L` sends
-SIGINT to the lane's process group and the lane ends `interrupted`. From the conductor,
-`worker_start` accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `breadth`.
+for a worker is 120 minutes unless `--timeout-min` says otherwise. A failed run posts `blocked`
+and a budget refusal (exit 75 / budget red) posts `deferred` to the mailbox; a finished run posts
+nothing itself (the agent posts its own `release`). `stop --lane L` sends SIGINT to the lane's
+process group: the worker publishes `interrupted`, then records the bridge's failed result, so the
+lane ends `failed`. `orch worker stop` signals only a worker that still holds the lane's lock
+([PE-23](../go/README.md#crash-output-and-parity-exceptions)). From the conductor, `worker_start`
+accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `breadth`.
 Workers are instructed to publish a report and a mailbox release; check the actual state and
 messages rather than assuming every successful run did.
 
@@ -342,6 +346,13 @@ Each work project gets a private `.orchestrator/` (kickoff and flip add it to
 | `supervisor.json` | Wake channels (optional) |
 | `supervisor-state.json`, `supervisor-acks.json`, `supervisor.lock`, `supervisor.stop` | Supervisor state |
 
+The JS scripts create these with the default modes less your umask, except the worker's lane
+lock and detached log, which are 0600. `orch` writes run records, lane state, `flip.json`, the
+generated briefs and the supervisor's state and acks owner-only (0600) through a private temp file
+and a rename, never through a planted symlink; the supervisor lock and log are created 0600 (an
+existing log keeps its mode), and `runs/`, `workers/` and `logs/` are 0700. Details:
+[PE-21](../go/README.md#crash-output-and-parity-exceptions).
+
 Per-user state lives in `~/.local/state/opencode/orchestrator/` (`usage.json`,
 `incidents.jsonl`). Installer receipts and backups are separate, under
 `$XDG_STATE_HOME/opencode-orchestrator` (default `~/.local/state/opencode-orchestrator`).
@@ -369,8 +380,8 @@ runtime expects `~/.config/opencode`; a nondefault `XDG_CONFIG_HOME` is rejected
 Code 2.1.287 and codex-cli 0.162.1; Linux and Node 22 are supported assumptions, not exercised
 release environments. No npm install is needed to run the orchestrator.
 
-**Install.** `./install.sh [--copy] [--force] [--skip-binary] [--no-reload]`. The default creates a real
-`~/.config/opencode` and links `AGENTS.md`, `opencode.jsonc`, `agents`, `commands`, `skills`,
+**Install.** `./install.sh [--copy] [--force] [--skip-binary] [--no-reload]`. The default creates a
+real `~/.config/opencode` and links `AGENTS.md`, `opencode.jsonc`, `agents`, `commands`, `skills`,
 `plugins`, `orchestrator`, `install.sh` and `uninstall.sh` to the checkout, so runtime files such
 as `service.json` stay out of the checkout; keep the checkout at a stable path. `--copy` copies the
 managed entries instead (excluding history, dependencies, logs and runtime state, and refusing
@@ -481,6 +492,12 @@ with managed links, do Git work in the checkout.
   promise that all traffic goes only to Anthropic and OpenAI.
 - Run records, logs, mailbox, reports and backups can contain private content. Ignoring files in
   Git is not access control. Never commit credentials, runtime state or recovery backups.
+- With the Go runtime, run records, worker and supervisor state and logs are owner-only (see
+  [Project state files](#project-state-files)); a failed worker's recorded errors and `blocked`
+  message have token-shaped text replaced with `<token>` (PE-24); and in go mode the plugin passes
+  incidents to `orch` on stdin, not in process arguments (PE-25). The JS scripts leave those
+  files at your umask and keep the errors verbatim
+  ([go/README.md](../go/README.md#crash-output-and-parity-exceptions)).
 
 ## Tests, verification and limitations
 

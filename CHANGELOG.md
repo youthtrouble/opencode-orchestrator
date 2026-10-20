@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- docs: the READMEs document parity exceptions PE-20 to PE-26 (PE-19 stays reserved for S12),
+  including owner-only state files under `orch`.
 - mailbox/watch/flip/worker/supervisor: run outside a project (no `.orchestrator/`), the read and
   stop commands say which directory they looked in and how to fix it (`cd` or `--root`/`--cwd`),
   exit 2 and create nothing; `mailbox reply|ack` with an unknown id name the project searched.

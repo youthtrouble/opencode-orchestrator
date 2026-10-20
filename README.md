@@ -187,14 +187,15 @@ claude auth login
 codex login
 opencode auth login openai --method chatgpt-token-sharing
 ./install.sh           # links the config into ~/.config/opencode and installs orch to ~/.local/bin
-./install-claude.sh    # links the Claude Code agents and skill into ~/.claude
+./install-claude.sh    # links the Claude Code agents and skills into ~/.claude
 orch doctor            # expect OK rows; WARN means look closer, FAIL exits nonzero
 ```
 
 If the shell cannot find `orch`, add `~/.local/bin` to your `PATH`. Keep the checkout where it is:
-`~/.config/opencode` links back to it. `./install.sh --help` lists
-`--copy`, `--force`, `--skip-binary` and `--no-reload`; `./uninstall.sh` restores your previous config. Details,
-updates and recovery are in [orchestrator/README.md](orchestrator/README.md#install-update-uninstall-and-recovery).
+`~/.config/opencode` links back to it. `./install.sh --help` lists `--copy`, `--force`,
+`--skip-binary` and `--no-reload` (install without the final `opencode reload` and doctor, for
+scripted installs); `./uninstall.sh` restores your previous config. Details, updates and recovery
+are in [orchestrator/README.md](orchestrator/README.md#install-update-uninstall-and-recovery).
 
 ### 2. Start a project
 
@@ -271,8 +272,10 @@ beside yours.
 | `policy.json` | This project's autonomy overrides (`orch policy set release=auto`) |
 | `supervisor.json` | Optional wake channels for the supervisor |
 
-`.orchestrator/` is private: kickoff keeps it out of Git through `.git/info/exclude`. Your budgets
-cache and the incident log live in `~/.local/state/opencode/orchestrator/`.
+`.orchestrator/` is private: kickoff keeps it out of Git through `.git/info/exclude`. With the Go
+runtime, run records, lane and supervisor state, `flip.json`, generated briefs and new logs are
+also owner-only on disk (the JS scripts use your umask's default modes). Your budgets cache and
+the incident log live in `~/.local/state/opencode/orchestrator/`.
 
 ### 5. Switch to the Go runtime (optional)
 
@@ -294,7 +297,9 @@ switch at any time.
 ## Go runtime
 
 `orch` is one static Go binary that replaces every `orchestrator/bin/*.mjs` script with byte-for-byte
-parity, checked in CI by a parity harness. `./install.sh` builds it (or downloads the release
+parity, checked in CI by a parity harness, apart from the exceptions listed in
+[go/README.md](go/README.md#crash-output-and-parity-exceptions) (among them owner-only state files,
+bounded child output and process groups). `./install.sh` builds it (or downloads the release
 asset and checks its sha256) into `~/.local/bin`; `--skip-binary` opts out. Without a checkout:
 
 ```sh
