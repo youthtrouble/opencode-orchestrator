@@ -392,8 +392,22 @@ func TestStdinCopyIsBoundedByGrace(t *testing.T) {
 // the lines it printed before are returned too (a grandchild's pid, say).
 func startSession(t *testing.T, body string, grace time.Duration) (*Child, []string) {
 	t.Helper()
+	return startUntilReady(t, Spec{Name: script(t, body), Grace: grace, NewSession: true})
+}
+
+// startGroup is startSession for a child in a process group of its own (Spec.OwnGroup).
+func startGroup(t *testing.T, body string, grace time.Duration) (*Child, []string) {
+	t.Helper()
+	return startUntilReady(t, Spec{Name: script(t, body), Grace: grace, OwnGroup: true})
+}
+
+// startUntilReady starts s with its stdout read here, and returns once the child (or a
+// descendant sharing its stdout) has printed "ready", with the lines printed before.
+func startUntilReady(t *testing.T, s Spec) (*Child, []string) {
+	t.Helper()
 	stdout, w := io.Pipe()
-	child, err := Start(Spec{Name: script(t, body), Stdout: w, Grace: grace, NewSession: true})
+	s.Stdout = w
+	child, err := Start(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,4 +578,72 @@ func readRecord(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(content)
+}
+
+func TestStartRejectsBothASessionAndAGroup(t *testing.T) {
+	if _, err := Start(Spec{Name: "true", Grace: testGrace, NewSession: true, OwnGroup: true}); err == nil {
+		t.Error("Start accepted NewSession together with OwnGroup")
+	}
+}
+
+// ignoringGrandchild is a script line that starts a grandchild which ignores SIGTERM, prints
+// its pid and "ready" once its disposition is in place, and then sleeps with its stdout closed.
+const ignoringGrandchild = `/bin/sh -c 'trap "" TERM; echo $$; echo ready; exec /bin/sleep 30 >/dev/null 2>&1' &`
+
+func TestOwnGroupChildLeadsAGroupInTheCallersSession(t *testing.T) {
+	child, _ := startGroup(t, "echo ready; exec /bin/sleep 30", testGrace)
+	t.Cleanup(func() { child.Signal(syscall.SIGKILL); _, _ = child.Wait() })
+	if pgid, err := syscall.Getpgid(child.Pid()); err != nil || pgid != child.Pid() || pgid == syscall.Getpgrp() {
+		t.Errorf("child process group %d (%v), want its own group %d", pgid, err, child.Pid())
+	}
+}
+
+// PE-22: Signal reaches the whole group, and once the cancelled child has exited, what is
+// left of the group (here a grandchild that ignored the SIGTERM) is killed, long before the
+// escalation's Grace.
+func TestSignalledOwnGroupChildLeavesNoDescendant(t *testing.T) {
+	child, printed := startGroup(t, ignoringGrandchild+"\nwait", testGrace)
+	grandchild := grandchildPid(t, printed)
+	started := time.Now()
+	child.Signal(syscall.SIGTERM)
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, nil)
+	waitGone(t, grandchild)
+	if elapsed := time.Since(started); elapsed >= testGrace {
+		t.Errorf("the grandchild was gone only after %v, the escalation's Grace", elapsed)
+	}
+}
+
+// The escalation SIGKILLs the group: a child and a grandchild that both ignore SIGTERM end one
+// Grace after the Signal.
+func TestOwnGroupEscalationKillsTheGroup(t *testing.T) {
+	child, printed := startGroup(t, "trap '' TERM\n"+ignoringGrandchild+"\nwhile :; do /bin/sleep 0.05; done", killGrace)
+	grandchild := grandchildPid(t, printed)
+	child.Signal(syscall.SIGTERM)
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, nil)
+	waitGone(t, grandchild)
+}
+
+// A child that was never signalled leaves its descendants running when it exits, as Node does.
+func TestOwnGroupChildThatExitsLeavesItsDescendants(t *testing.T) {
+	child, printed := startGroup(t, ignoringGrandchild+"\nexit 0", testGrace)
+	grandchild := grandchildPid(t, printed)
+	// Nothing in procs stops a descendant of a child that exits on its own, so the test does.
+	t.Cleanup(func() { _ = syscall.Kill(grandchild, syscall.SIGKILL) })
+	code, err := child.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, code, intp(0))
+	time.Sleep(50 * time.Millisecond)
+	if err := syscall.Kill(grandchild, 0); err != nil {
+		t.Errorf("the grandchild of a child that exited on its own is gone: kill(0) = %v", err)
+	}
 }

@@ -114,6 +114,11 @@ type childRun struct {
 // SIGTERM once the timeout passes, and on exit runs the close handler. An error is a crash: an
 // argv element Node's spawn rejects, a spawn failure, or a TypeError the JS would have died of
 // in its line handler (the child is then sent SIGTERM).
+//
+// The child runs in a process group of its own, so each of those signals, the SIGKILL after
+// them and the final kill once the child has exited reach the tools it started (PE-22). The JS
+// leaves the CLI in its own group instead; here a signal to the bridge's group (Ctrl-C, worker
+// stop) reaches the CLI only through the forwarding, once.
 func (c childRun) run(thread *jsThread) error {
 	if err := checkNullBytes(c.args); err != nil {
 		return err
@@ -124,14 +129,15 @@ func (c childRun) run(thread *jsThread) error {
 	lines := &procs.Lines{OnLine: thread.handleLine}
 	stderr := &lockedBuffer{}
 	child, err := procs.Start(procs.Spec{
-		Name:   c.name,
-		Args:   c.args,
-		Dir:    c.dir,
-		Env:    c.env,
-		Stdin:  c.stdin,
-		Stdout: lines,
-		Stderr: stderr,
-		Grace:  childGrace,
+		Name:     c.name,
+		Args:     c.args,
+		Dir:      c.dir,
+		Env:      c.env,
+		Stdin:    c.stdin,
+		Stdout:   lines,
+		Stderr:   stderr,
+		Grace:    childGrace,
+		OwnGroup: true,
 	})
 	if err != nil {
 		return &jsError{class: "Error", message: err.Error()}

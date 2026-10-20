@@ -29,8 +29,8 @@ const (
 // RunOpencode is `orch opencode-exec [args]`: it runs one headless `opencode run` turn on the
 // prompt and prints one JSON result, exactly as bin/opencode-exec.mjs does, step for step, and
 // returns the exit code: 0 ok, 1 failed or crashed, 2 no prompt, 75 budget red. The differences
-// are the documented exceptions PE-1 and PE-8 to PE-11 and the crash output (only the error
-// line of an exception the JS leaves uncaught). Unlike the other bridges it logs neither a
+// are the documented exceptions PE-1, PE-8 to PE-11 and PE-22 and the crash output (only the
+// error line of an exception the JS leaves uncaught). Unlike the other bridges it logs neither a
 // start, a timeout nor a done line, and starts no post-run usage refresh.
 func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	parsed, positional := cliargs.ParseArgs(args, opencodeValueKeys, opencodeFlagKeys)

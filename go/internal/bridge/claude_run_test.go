@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -376,30 +375,41 @@ func TestRunClaudeUsageLimitPath(t *testing.T) {
 
 // start runs the bridge with a CLI that prints stdout and then sleeps, and returns once orch
 // has logged ready, so the CLI is running and orch's signal handling is in place.
-func (sb bridgeSandbox) start(t *testing.T, stdout, ready string, args ...string) (cmd *exec.Cmd, out *bytes.Buffer, stderr *strings.Builder) {
+func (sb bridgeSandbox) start(t *testing.T, stdout, ready string, args ...string) (cmd *exec.Cmd, out *bytes.Buffer, stderr *orchStderr) {
 	t.Helper()
-	sb.fakeCLI(t, sb.bridge, stdout, "", "exec /bin/sleep 30")
+	return sb.startEnding(t, "exec /bin/sleep 30", stdout, ready, args...)
+}
+
+// startEnding is start with a CLI that runs ending once it has printed stdout.
+func (sb bridgeSandbox) startEnding(t *testing.T, ending, stdout, ready string, args ...string) (cmd *exec.Cmd, out *bytes.Buffer, stderr *orchStderr) {
+	t.Helper()
+	sb.fakeCLI(t, sb.bridge, stdout, "", ending)
 	cmd = sb.command(args...)
-	out, stderr = &bytes.Buffer{}, &strings.Builder{}
-	cmd.Stdout = out
-	pipe, err := cmd.StderrPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	out, stderr = &bytes.Buffer{}, &orchStderr{}
+	cmd.Stdout, cmd.Stderr = out, stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
-	reader := bufio.NewReader(pipe)
+	deadline := time.Now().Add(10 * time.Second)
 	for !strings.Contains(stderr.String(), ready) {
-		line, err := reader.ReadString('\n')
-		stderr.WriteString(line)
-		if err != nil {
-			t.Fatalf("orch stderr ended before %q: %v\n%s", ready, err, stderr.String())
+		if time.Now().After(deadline) {
+			t.Fatalf("orch did not log %q within 10s:\n%s", ready, stderr)
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	go func() { _, _ = io.Copy(stderr, reader) }()
 	return cmd, out, stderr
+}
+
+// orchStderr is orch's stderr as os/exec copies it into a cmd.Stderr that is not a file: it
+// may be read while the copy runs, and is complete once cmd.Wait, which joins the copy, has
+// returned.
+type orchStderr struct {
+	lockedBuffer
+}
+
+func (s *orchStderr) String() string {
+	return string(s.Bytes())
 }
 
 // waitWithin waits for cmd, failing if it takes longer than limit (the CLI's kill grace is 10 s,
@@ -436,6 +446,42 @@ func TestRunClaudeForwardsSIGTERM(t *testing.T) {
 	}
 	if _, err := os.Stat(jsjson.Path(result, "record").(string)); err != nil {
 		t.Errorf("no run record: %v", err)
+	}
+}
+
+// PE-22: claude runs in a process group of its own, so the forwarded SIGTERM reaches a tool it
+// started, and one that ignores SIGTERM is killed once claude has exited, before orch reports.
+func TestRunClaudeSIGTERMLeavesNoToolOfClaudeRunning(t *testing.T) {
+	sb := newClaudeSandbox(t)
+	toolPid := filepath.Join(sb.home, "tool-pid")
+	tool := `/bin/sh -c 'trap "" TERM; echo $$ > "$0.tmp"; /bin/mv "$0.tmp" "$0"; exec /bin/sleep 30' "` + toolPid + `" </dev/null >/dev/null 2>&1 &` + "\n"
+	init := `{"type":"system","subtype":"init","session_id":"s1","model":"m"}` + "\n"
+	cmd, stdout, stderr := sb.startEnding(t, tool+"exec /bin/sleep 30", init, "[claude] session s1 model=m\n", "--prompt", "p")
+	fields := strings.Fields(waitForFile(t, toolPid, 5*time.Second)) // written once its trap is set
+	if len(fields) != 1 {
+		t.Fatalf("tool reported %q", fields)
+	}
+	pid, err := strconv.Atoi(fields[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if code := waitWithin(t, cmd, 5*time.Second); code != 1 {
+		t.Fatalf("exit %d; stderr:\n%s", code, stderr)
+	}
+	if exit, present := parseResult(t, stdout.String()).Get("exit_code"); !present || exit != nil {
+		t.Errorf("exit_code %v (present %v), want null", exit, present)
+	}
+	// SIGKILLed before orch exited; init may take a moment to reap the orphan.
+	deadline := time.Now().Add(time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("claude's tool %d still runs after orch exited", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

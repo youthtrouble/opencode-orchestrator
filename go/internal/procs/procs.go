@@ -15,7 +15,11 @@
 // "close" forever. Here a signalled child that has not exited after Spec.Grace is killed, and
 // once the child exits, Wait gives a grandchild that still holds stdin, stdout or stderr at
 // most Spec.Grace before it closes the pipes (PE-10). The child stays in the caller's process
-// group unless Spec.NewSession is set, so a signal to the caller's group still reaches it.
+// group unless Spec.NewSession or Spec.OwnGroup is set, so a signal to the caller's group
+// still reaches it.
+//
+// A second difference is PE-22: the JS signals a child's pid only, so the tools a cancelled
+// CLI started keep running. A Spec.OwnGroup child is cancelled with its whole process group.
 //
 // The pipes to a child are this package's own, not os/exec's: exec.Cmd.Wait reaps the child
 // and then waits for its pipes, so a Child built on it would learn of the reap only after the
@@ -47,7 +51,9 @@ import (
 // Writer, so one whose Read or Write blocks keeps Wait waiting past Grace, as with os/exec.
 // NewSession starts the child in a session and process group of its own (setsid, Node's spawn
 // option detached: true), so SignalGroup reaches its descendants and a signal to the caller's
-// group does not reach it.
+// group does not reach it. OwnGroup starts it in a process group of its own in the caller's
+// session (setpgid), so Signal and its escalation reach the child's descendants too (PE-22);
+// a signal to the caller's group does not reach it either. The two are mutually exclusive.
 type Spec struct {
 	Name           string
 	Args           []string
@@ -57,19 +63,22 @@ type Spec struct {
 	Stdout, Stderr io.Writer
 	Grace          time.Duration
 	NewSession     bool
+	OwnGroup       bool
 }
 
 // Child is a started child process. Wait must be called exactly once; Signal and SignalGroup
 // may be called from any goroutine, before or after Wait.
 type Child struct {
-	cmd   *exec.Cmd
-	grace time.Duration
+	cmd      *exec.Cmd
+	grace    time.Duration
+	ownGroup bool // the child leads a process group of its own (Spec.OwnGroup)
 
 	stdio *pipes
 
 	mu        sync.Mutex
 	killTimer *time.Timer // armed by the first Signal; nil until then
 	reaped    bool        // set by Wait as soon as the child has been reaped
+	cancelled bool        // Signal was called before the reap
 }
 
 // Start starts the child. A failure to find or execute the command is a *StartError; a
@@ -77,6 +86,9 @@ type Child struct {
 func Start(s Spec) (*Child, error) {
 	if s.Grace <= 0 {
 		return nil, errors.New("procs: Spec.Grace must be positive")
+	}
+	if s.NewSession && s.OwnGroup {
+		return nil, errors.New("procs: Spec.NewSession and Spec.OwnGroup are mutually exclusive")
 	}
 	env := s.Env
 	if env == nil {
@@ -93,8 +105,11 @@ func Start(s Spec) (*Child, error) {
 		Dir:  s.Dir,
 		Env:  env,
 	}
-	if s.NewSession {
+	switch {
+	case s.NewSession:
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	case s.OwnGroup:
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	stdio := &pipes{}
 	if err := stdio.attach(cmd, s); err != nil {
@@ -108,22 +123,25 @@ func Start(s Spec) (*Child, error) {
 		return nil, startError(s.Name, err)
 	}
 	stdio.startCopies()
-	return &Child{cmd: cmd, grace: s.Grace, stdio: stdio}, nil
+	return &Child{cmd: cmd, grace: s.Grace, ownGroup: s.OwnGroup, stdio: stdio}, nil
 }
 
-// Signal sends sig to the child (its pid only, not its group). If the child has not exited
-// Grace after the first Signal, it is sent SIGKILL. Later calls send their signal but do not
-// re-arm or extend that single timer. After the child has been reaped, Signal does nothing.
-// sent reports whether sig reached the child, which it cannot once the child is reaped.
+// Signal sends sig to the child: to its pid only, or to its whole process group for an
+// OwnGroup child (PE-22). If the child has not exited Grace after the first Signal, it (or its
+// group) is sent SIGKILL. Later calls send their signal but do not re-arm or extend that single
+// timer. After the child has been reaped, Signal does nothing. sent reports whether sig reached
+// the child, which it cannot once the child is reaped.
 func (c *Child) Signal(sig syscall.Signal) (sent bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.reaped {
 		return false
 	}
-	// The only failure for our own child is that it has already exited (os.ErrProcessDone),
-	// which is what the escalation is waiting for anyway.
-	err := c.cmd.Process.Signal(sig)
+	c.cancelled = true
+	// The only failure for our own child is that it has already exited (os.ErrProcessDone, or
+	// ESRCH for a group whose members are all gone), which is what the escalation is waiting
+	// for anyway.
+	err := c.send(sig)
 	if c.killTimer == nil {
 		c.killTimer = time.AfterFunc(c.grace, c.kill)
 	}
@@ -151,10 +169,27 @@ func (c *Child) SignalGroup(sig syscall.Signal) {
 	}
 }
 
-// kill is the escalation. os.Process refuses to signal a process it has reaped, so a pid the
-// kernel may have reused is never hit; an already-exited child makes Kill a no-op.
+// send delivers sig to the child, or to its group for an OwnGroup child, falling back to the
+// child alone if the group is gone (as SignalGroup does). It must be called with mu held and
+// the child not yet reaped.
+func (c *Child) send(sig syscall.Signal) error {
+	if c.ownGroup {
+		if err := syscall.Kill(-c.cmd.Process.Pid, sig); !errors.Is(err, syscall.ESRCH) {
+			return err
+		}
+	}
+	return c.cmd.Process.Signal(sig)
+}
+
+// kill is the escalation. It sends nothing once Wait has marked the child reaped, and
+// os.Process refuses to signal a process it has reaped, so a pid the kernel may have reused is
+// never hit; an already-exited child makes the kill a no-op.
 func (c *Child) kill() {
-	_ = c.cmd.Process.Kill()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.reaped {
+		_ = c.send(syscall.SIGKILL)
+	}
 }
 
 // Wait waits for the child to exit and returns its exit code: a normal exit n gives &n, a
@@ -180,11 +215,27 @@ func (c *Child) Wait() (code *int, err error) {
 	if c.killTimer != nil {
 		c.killTimer.Stop()
 	}
+	cancelled := c.cancelled
 	c.mu.Unlock()
+	if c.ownGroup && cancelled {
+		c.killLeftovers()
+	}
 	if drainErr := c.stdio.drain(c.grace); err == nil {
 		err = drainErr
 	}
 	return closeCode(c.cmd.ProcessState), waitError(err)
+}
+
+// killLeftovers SIGKILLs what is left of a cancelled OwnGroup child's process group once the
+// child has been reaped, so descendants that ignored or outlived the cancellation are gone
+// before the caller reports the run over (PE-22); it also frees pipes they held, so the drain
+// does not wait out Grace for them. The group id is safe to signal: a process group's id is
+// not reused while any member is alive, so the kill reaches only leftovers of this child's
+// own tree, and with none left it fails with ESRCH. Reuse in the moments since the reap would
+// need the pid to wrap around and a new process to lead a group with it. ESRCH is the expected
+// result and there is nothing else a caller could do about a failure, so the error is dropped.
+func (c *Child) killLeftovers() {
+	_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
 }
 
 // closeCode maps a wait status to Node's close code: the exit status, or nil when the child

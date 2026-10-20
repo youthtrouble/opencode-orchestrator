@@ -39,11 +39,13 @@ type SyncResult struct {
 	Err            error
 }
 
-// RunSync runs the child to completion as spawnSync does.
+// RunSync runs the child to completion as spawnSync does, but in a process group of its own,
+// so a timeout or an overflow stops the child's descendants with it (PE-22). Descendants in a
+// session of their own (a detached worker runner) are not in that group and keep running.
 func RunSync(s SyncSpec) SyncResult {
 	limit := NewOutputLimit(NodeMaxBuffer)
 	stdout, stderr := limit.Stream(), limit.Stream()
-	child, err := Start(Spec{Name: s.Name, Args: s.Args, Dir: s.Dir, Stdout: stdout, Stderr: stderr, Grace: s.Grace})
+	child, err := Start(Spec{Name: s.Name, Args: s.Args, Dir: s.Dir, Stdout: stdout, Stderr: stderr, Grace: s.Grace, OwnGroup: true})
 	if err != nil {
 		return SyncResult{Err: err}
 	}

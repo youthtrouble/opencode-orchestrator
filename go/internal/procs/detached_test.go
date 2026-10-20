@@ -130,6 +130,23 @@ func killAndReap(pid int) {
 	_, _ = syscall.Wait4(pid, &status, 0, nil)
 }
 
+// waitForPid returns the pid written to path once the file holds one, failing after slack. It
+// polls past an empty or partly written file: a shell creates the file before it writes.
+func waitForPid(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(slack)
+	for {
+		data, err := os.ReadFile(path)
+		if pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && parseErr == nil {
+			return pid
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s held no pid within %v: %q (%v)", path, slack, data, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // waitForFile returns the content of path once it exists, failing after slack.
 func waitForFile(t *testing.T, path string) string {
 	t.Helper()

@@ -133,8 +133,8 @@ func TestStartReapedLeavesNoZombie(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reported := strings.TrimSpace(waitForFile(t, report)); reported != strconv.Itoa(pid) {
-		t.Fatalf("child reported %q, want %d", reported, pid)
+	if reported := waitForPid(t, report); reported != pid {
+		t.Fatalf("child reported %d, want %d", reported, pid)
 	}
 	waitGone(t, pid)
 	assertGone(t, pid)
@@ -224,5 +224,49 @@ func TestRunSyncKeepsExactlyNodeMaxBuffer(t *testing.T) {
 	}
 	if len(got.Stdout) != NodeMaxBuffer/2 || len(got.Stderr) != NodeMaxBuffer/2 {
 		t.Errorf("kept %d and %d bytes", len(got.Stdout), len(got.Stderr))
+	}
+}
+
+// detachReportEnv names the file TestHelperStartsADetachedSleep reports its sleep's pid to;
+// without it the helper is skipped.
+const detachReportEnv = "ORCH_PROCS_TEST_DETACH_REPORT"
+
+// TestHelperStartsADetachedSleep is not a test: a RunSync child runs the test binary as this
+// helper to start a sleep in a session of its own, as `orch worker start --detach` starts a
+// worker runner.
+func TestHelperStartsADetachedSleep(t *testing.T) {
+	report := os.Getenv(detachReportEnv)
+	if report == "" {
+		t.Skip("run only as a RunSync child's helper")
+	}
+	pid, err := Detached{Name: "/bin/sleep", Args: []string{"30"}}.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// PE-22: the timeout stops the child's group, so a grandchild that ignores SIGTERM is gone once
+// the child has exited (here on the SIGTERM itself, so before any escalation), while a
+// descendant in a session of its own keeps running.
+func TestRunSyncTimeoutStopsTheGroupButNotADetachedDescendant(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	grouped, detached := filepath.Join(dir, "grouped"), filepath.Join(dir, "detached")
+	startGrouped := `/bin/sh -c 'trap "" TERM; echo $$ > "$0.tmp"; mv "$0.tmp" "$0"; exec /bin/sleep 30' '` + grouped + `' </dev/null >/dev/null 2>&1 &`
+	startDetached := detachReportEnv + `='` + detached + `' '` + os.Args[0] + `' -test.run='^TestHelperStartsADetachedSleep$' >/dev/null`
+	untilGrouped := `until [ -e '` + grouped + `' ]; do /bin/sleep 0.01; done`
+	got := runTrapping(t, "trap 'exit 3' TERM; "+startGrouped+" "+startDetached+"; "+untilGrouped, "/bin/sleep 15 & wait")
+	groupedPid, detachedPid := waitForPid(t, grouped), waitForPid(t, detached)
+	t.Cleanup(func() { _ = syscall.Kill(groupedPid, syscall.SIGKILL); _ = syscall.Kill(detachedPid, syscall.SIGKILL) })
+	wantCode(t, got.Status, intp(3))
+	if !got.TimedOut {
+		t.Error("not marked timed out")
+	}
+	waitGone(t, groupedPid)
+	if err := syscall.Kill(detachedPid, 0); err != nil {
+		t.Errorf("the detached descendant is gone: kill(0) = %v", err)
 	}
 }

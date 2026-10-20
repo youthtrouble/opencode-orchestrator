@@ -10,6 +10,9 @@
 - bridges and worker: child output is decoded as a UTF-8 stream in both runtimes, so a character
   split between two reads is no longer turned into U+FFFD by the JS (Sol S1/R7, S2/R15). The
   worker relays and counts as progress only stderr chunks that decode to text, as Node does.
+- go: the bridges' CLIs and `orch`'s synchronous children run in a process group of their own, so a
+  timeout or signal stops their tools too, and a cancelled child's leftover group members are
+  killed once it is reaped (PE-22; Sol S1/R8).
 
 - go: the supervisor's log and lock are owner-only (an existing log keeps its mode). `flip.json`
   and the conductor briefs are replaced atomically, so a supervisor never reads a half-written
