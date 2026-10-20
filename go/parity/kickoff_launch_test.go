@@ -65,6 +65,7 @@ func (h *harness) testKickoffLaunches(t *testing.T) {
 		})
 	}
 	t.Run("supervisor-started", h.testKickoffSupervisorStarted)
+	t.Run("both-red/supervisor-started", h.testKickoffBothRedStartsTheSupervisor)
 }
 
 // kickoffBrief is the brief every launching case kicks off, with the fake logs' directory.
@@ -195,6 +196,23 @@ func (h *harness) testKickoffSupervisorStarted(t *testing.T) {
 		t.Error(err)
 	}
 	js.stderr, orch.stderr = "", ""
+	compareOutcomes(t, js, orch)
+}
+
+// testKickoffBothRedStartsTheSupervisor runs a real both-red kickoff in a fresh project with
+// no supervisor lock (Sol R10): each runtime starts a serve to relaunch at the reset, saves
+// the prompt as the conductor's brief, pauses naming it and exits 75. Each serve is stopped
+// as in testKickoffSupervisorStarted.
+func (h *harness) testKickoffBothRedStartsTheSupervisor(t *testing.T) {
+	s := seeds(kickoffBrief(), newFlipCaches(t).bothRed, kickoffFeedsFail())
+	js := h.runKickoffSupervisorStarted(t, s, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, kickoffLaunchArgs...))
+	orch := h.runKickoffSupervisorStarted(t, s, append([]string{h.orchBin, "kickoff"}, kickoffLaunchArgs...))
+	paused := `"brief": ".orchestrator/briefs/conductor-kickoff.md"`
+	for side, o := range map[string]outcome{"js": js, "orch": orch} {
+		if o.exitCode != 75 || o.files["project/briefs/conductor-kickoff.md"] != cmdref.KickoffPrompt("a.md", nil)+"\n" || !strings.Contains(o.files["project/flip.json"], paused) {
+			t.Errorf("%s: exit %d, stdout %q, flip.json %q; want 75, the kickoff brief and a pause naming it", side, o.exitCode, o.stdout, o.files["project/flip.json"])
+		}
+	}
 	compareOutcomes(t, js, orch)
 }
 

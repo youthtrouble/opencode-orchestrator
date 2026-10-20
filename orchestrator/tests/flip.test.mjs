@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { decideFlip } from "../lib/flip.mjs";
+import { clearGate, decideFlip } from "../lib/flip.mjs";
 
 const flipCli = fileURLToPath(new URL("../bin/flip.mjs", import.meta.url));
 
@@ -93,4 +93,24 @@ test("gate --clear --no-relaunch (kickoff) clears without queueing a relaunch", 
   assert.equal(flip(project, "gate", "--clear", "--no-relaunch"), '{"awaiting_human":false}');
 
   assert.deepEqual(readFlipJson(project), {});
+});
+
+test("clearGate without relaunch (kickoff) also drops a queued launch and a pause", (t) => {
+  const project = tempProject(t);
+  fs.mkdirSync(path.join(project, ".orchestrator"));
+  const record = { awaiting_human: { door: "claude" }, pending_launch: { to: "opencode" }, paused: { door: "claude" }, z: 1 };
+
+  assert.equal(clearGate(project, record, { relaunch: false }), null);
+
+  assert.deepEqual(readFlipJson(project), { z: 1 });
+});
+
+test("clearGate with relaunch keeps a queued launch", (t) => {
+  const project = tempProject(t);
+  fs.mkdirSync(path.join(project, ".orchestrator"));
+  const queued = { to: "opencode", from: "claude", reason: "handback", resume: null, at: "2026-01-01T00:00:00.000Z" };
+
+  assert.equal(clearGate(project, { awaiting_human: { door: "claude" }, pending_launch: queued }, { relaunch: true }), "opencode");
+
+  assert.deepEqual(readFlipJson(project), { pending_launch: queued });
 });

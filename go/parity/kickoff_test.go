@@ -38,6 +38,9 @@ type kickoffCase struct {
 	// stdout is a line the JS output must hold, so that no case passes by both runtimes
 	// failing the same unexpected way.
 	stdout string
+	// files are outcome files (by key) the JS run must leave with exactly this normalised
+	// content.
+	files map[string]string
 }
 
 // testKickoff compares `orch kickoff` with bin/kickoff.mjs, first in cases that never launch a
@@ -61,6 +64,20 @@ func (h *harness) testKickoff(t *testing.T) {
 	}
 	gitFile := "gitdir: /elsewhere\n" // a worktree's .git: the exclude step dies of ENOTDIR (Q-S7-2)
 	opencodeGreen, claudeGreen := door("opencode", "openai", "opencode", "interactive"), door("claude", "anthropic", "opencode", "interactive")
+	// A kickoff supersedes every queued launch intent (Sol R9): the gate, a pending launch and a
+	// pause all go, the rest of the record stays.
+	gatedWithIntent := seedFlip(`{"from":"opencode","to":"claude","at":"2026-01-01T00:00:00.000Z","awaiting_human":{"reason":"push?"},` +
+		`"pending_launch":{"to":"opencode","from":"claude","reason":"handback","resume":null,"at":"2026-01-01T00:00:00.000Z"},"paused":{"at":"2026-01-01T00:00:00.000Z","door":"claude","reason":"r"}}`)
+	gatedWithIntentCleared := map[string]string{"project/flip.json": "{\n  \"from\": \"opencode\",\n  \"to\": \"claude\",\n  \"at\": \"2026-01-01T00:00:00.000Z\"\n}\n"}
+	// A real both-red kickoff saves its prompt as the conductor's brief and pauses naming it, so
+	// the supervisor's relaunch at the reset starts from it (Sol R10); an older pause is dropped.
+	bothRedMessage := "Both vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do."
+	bothRedPaused := map[string]string{
+		"project/briefs/conductor-kickoff.md": cmdref.KickoffPrompt("a.md", nil) + "\n",
+		"project/flip.json": "{\n  \"paused\": {\n    \"at\": \"<iso>\",\n    \"door\": \"opencode\",\n    \"reason\": \"both vendors red\",\n" +
+			"    \"brief\": \".orchestrator/briefs/conductor-kickoff.md\"\n  }\n}\n",
+	}
+	olderPause := seedFlip(`{"paused":{"at":"2026-01-01T00:00:00.000Z","door":"claude","reason":"r","brief":"old.md"}}`)
 	cases := []kickoffCase{
 		{name: "usage/no-args", stdout: usageLine},
 		{name: "usage/help-without-brief", args: []string{"--help"}, stdout: usageLine},
@@ -85,16 +102,37 @@ func (h *harness) testKickoff(t *testing.T) {
 		{name: "preflight/exclude-appended", args: preflightOnly, seed: seeds(brief, c.green, seedExclude("*.log")), crash: crashC2, stdout: supervisorLine},
 		{name: "preflight/exclude-present", args: preflightOnly, seed: seeds(brief, c.green, seedExclude("*.log\n.orchestrator\n")), crash: crashC2, stdout: supervisorLine},
 		{name: "preflight/no-git", args: preflightOnly, seed: seeds(brief, c.green, withGit(nil)), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/gated-record-with-pending-launch", args: preflightOnly, seed: seeds(brief, c.green, gatedWithIntent), crash: crashC2, stdout: supervisorLine, files: gatedWithIntentCleared},
 		{name: "preflight/git-file", args: preflightOnly, seed: seeds(brief, c.green, withGit(&gitFile)), crash: crashC1, errorLine: "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", stdout: supervisorLine},
 		{name: "door-gemini", args: append(dryRun, "--door", "gemini"), seed: seeds(brief, c.green), crash: crashC2, stdout: dryRunSupervisorLine},
 		{name: "door-bare", args: append(dryRun, "--door"), seed: seeds(brief, c.green), crash: crashC2, stdout: dryRunSupervisorLine},
 		{name: "both-red/dry-run", args: dryRun, seed: seeds(brief, c.bothRed), stdout: "dry-run: both vendors red; a real run would pause and let the supervisor relaunch at the first reset."},
-		{name: "both-red/pause", args: []string{"--brief", "a.md"}, seed: seeds(brief, c.bothRed), stdout: "Both vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do."},
+		{name: "both-red/pause", args: []string{"--brief", "a.md"}, seed: seeds(brief, c.bothRed), stdout: supervisorLine + "\n" + `{"paused":true,"door":"opencode"}` + "\n" + bothRedMessage, files: bothRedPaused},
+		{name: "both-red/pause-unattended", args: []string{"--brief", "a.md", "--unattended"}, seed: seeds(brief, c.bothRed), stdout: supervisorLine, files: bothRedPaused},
+		{name: "both-red/replaces-an-older-pause", args: []string{"--brief", "a.md", "--headless"}, seed: seeds(brief, c.bothRed, olderPause), stdout: bothRedMessage, files: bothRedPaused},
 	}
 	for _, kc := range cases {
 		t.Run(kc.name, func(t *testing.T) {
 			t.Parallel()
-			h.compareKickoff(t, h.kickoffInvocation(kc), kc.stdout)
+			h.compareKickoff(t, h.kickoffInvocation(kc), kc.stdout, kc.files)
+		})
+	}
+	// Exit 75 promises a relaunch at the reset, so a both-red kickoff whose supervisor did not
+	// start (its log directory is a file) or whose pause was not recorded (flip.json is a
+	// directory) fails with exit 1 instead (C3-F2).
+	notDeferred := []struct {
+		name, failed string
+		seed         seed
+		briefSaved   bool
+	}{
+		{"both-red/supervisor-fails", "the supervisor did not start", seedProjectFile(".orchestrator/logs", "not a directory\n"), false},
+		{"both-red/pause-fails", "the pause was not recorded", seedProjectDir(".orchestrator/flip.json"), true},
+	}
+	for _, nc := range notDeferred {
+		t.Run(nc.name, func(t *testing.T) {
+			t.Parallel()
+			inv := h.kickoffInvocation(kickoffCase{args: []string{"--brief", "a.md"}, seed: seeds(brief, c.bothRed, nc.seed)})
+			h.compareKickoffNotDeferred(t, inv, nc.failed, nc.briefSaved)
 		})
 	}
 	t.Run("dry-run-makes-no-changes", func(t *testing.T) {
@@ -107,7 +145,7 @@ func (h *harness) testKickoff(t *testing.T) {
 		inv := h.kickoffInvocation(kickoffCase{args: dryRun, seed: seeds(brief, c.green)})
 		inv.js[1] = filepath.Join(root, "bin", "kickoff.mjs")
 		inv.env = append(inv.env, "ORCH_HOME="+root, "ORCH_REGISTRY="+filepath.Join(root, "models.json"))
-		h.compareKickoff(t, inv, door("claude", "anthropic", "claude", "interactive"))
+		h.compareKickoff(t, inv, door("claude", "anthropic", "claude", "interactive"), nil)
 	})
 	t.Run("PE-2/registry-missing", func(t *testing.T) {
 		t.Parallel()
@@ -116,18 +154,49 @@ func (h *harness) testKickoff(t *testing.T) {
 	t.Run("launch", h.testKickoffLaunches)
 }
 
-// compareKickoff checks that the JS run printed the expected line (or nothing, for ""), then compares the pair.
-func (h *harness) compareKickoff(t *testing.T, inv invocation, line string) {
+// compareKickoff checks that the JS run printed the expected line (or nothing, for "") and
+// left the expected files, then compares the pair.
+func (h *harness) compareKickoff(t *testing.T, inv invocation, line string, files map[string]string) {
 	t.Helper()
 	js, orch := h.runPair(t, inv)
 	if line == "" && js.stdout != "" || line != "" && !strings.Contains("\n"+js.stdout, "\n"+line+"\n") {
 		t.Errorf("js stdout %q, want the line %q (none for \"\")", js.stdout, line)
+	}
+	for key, want := range files {
+		if got := js.files[key]; got != want {
+			t.Errorf("js %s = %q, want %q", key, got, want)
+		}
 	}
 	if inv.crash != noCrash {
 		if err := crashError(inv.crash, inv.errorLine, js, orch); err != nil {
 			t.Error(err)
 		}
 		js.stderr, orch.stderr = "", ""
+	}
+	compareOutcomes(t, js, orch)
+}
+
+// compareKickoffNotDeferred checks that each runtime failed a both-red kickoff with exit 1,
+// ending its stderr with the line naming what failed, printing no pause message and saving
+// the kickoff brief only when briefSaved, then compares the pair. The failing child's own
+// error text differs between the runtimes (a Node stack, an orch error line), so the
+// supervisor's answer, the last thing on stdout, and the stderr before the last line are left
+// out of the comparison, as is the temp file the JS leaves beside a flip.json it could not
+// replace (PE-21).
+func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, failed string, briefSaved bool) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	want := "Both vendors are red, but " + failed + ": nothing will relaunch at the reset. Fix it and run kickoff again.\n"
+	for side, o := range map[string]*outcome{"js": &js, "orch": &orch} {
+		_, saved := o.files["project/briefs/conductor-kickoff.md"]
+		if o.exitCode != 1 || !strings.HasSuffix(o.stderr, "\n"+want) && o.stderr != want || strings.Contains(o.stdout, "paused") || saved != briefSaved {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q, brief saved %v; want exit 1 ending %q, no pause and brief saved %v", side, o.exitCode, o.stdout, o.stderr, saved, want, briefSaved)
+		}
+		o.stderr = want
+		if before, _, found := strings.Cut(o.stdout, "\nsupervisor: "); found {
+			o.stdout = before + "\nsupervisor: <answer>\n"
+		}
+		delete(o.files, "project/flip.json.tmp")
 	}
 	compareOutcomes(t, js, orch)
 }

@@ -9,8 +9,9 @@ import (
 
 // Pause records that the conductor stopped because both vendors are red, so the supervisor
 // relaunches a door once a window is usable again, and returns the line to print. It creates
-// .orchestrator/, then rewrites flip.json as {...previous, paused: {at, door, reason}}: every
-// other key is kept, an existing paused keeps its position, a string previous value spreads
+// .orchestrator/, then rewrites flip.json as {...previous, paused: {at, door, reason[, brief]}}
+// (brief is a non-empty --brief, the brief `flip run` relaunches from; a both-red kickoff
+// passes its own): every other key is kept, an existing paused keeps its position, a string previous value spreads
 // into index keys and a number or true into nothing. It posts a handoff to the supervisor.
 // The errors are Node's filesystem errors of the mkdir and the write.
 func (p Project) Pause(opts cliargs.Opts) (*jsjson.Object, error) {
@@ -23,6 +24,9 @@ func (p Project) Pause(opts cliargs.Opts) (*jsjson.Object, error) {
 	paused.Set("at", jsjson.ISOString(p.Now()))
 	paused.Set("door", active)
 	paused.Set("reason", opts.Or("reason", "both vendors red"))
+	if brief, isText := opts.JS("brief").(string); isText && brief != "" {
+		paused.Set("brief", brief)
+	}
 	record.Set("paused", paused)
 	if err := p.writeFlip(record); err != nil {
 		return nil, err

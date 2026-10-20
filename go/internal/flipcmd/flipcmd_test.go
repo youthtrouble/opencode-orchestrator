@@ -31,7 +31,7 @@ func newTestProject(t *testing.T) Project {
 }
 
 func opts(argv ...string) cliargs.Opts {
-	o, _ := cliargs.ParseArgs(argv, []string{"active", "to", "from", "cwd", "reason", "resume", "question"}, []string{"force", "clear", "no-relaunch"})
+	o, _ := cliargs.ParseArgs(argv, []string{"active", "to", "from", "cwd", "reason", "resume", "question", "brief"}, []string{"force", "clear", "no-relaunch"})
 	return o
 }
 
@@ -221,6 +221,30 @@ func TestPauseWritesBareOptionsAsTrue(t *testing.T) {
 	}
 }
 
+// --brief (a both-red kickoff's) is stored last; a bare or empty one stores nothing.
+func TestPauseStoresANonEmptyBrief(t *testing.T) {
+	paused := `{"at":"` + nowISO + `","door":"claude","reason":"r"`
+	for _, c := range []struct {
+		name string
+		argv []string
+		want string
+	}{
+		{"brief", []string{"--brief", "x.md"}, paused + `,"brief":"x.md"}`},
+		{"bare", []string{"--brief"}, paused + `}`},
+		{"empty", []string{"--brief", ""}, paused + `}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := newTestProject(t)
+			if _, err := p.Pause(opts(append([]string{"pause", "--active", "claude", "--reason", "r"}, c.argv...)...)); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := readFile(t, p.FlipPath), indented(t, `{"paused":`+c.want+`}`); got != want {
+				t.Errorf("flip.json = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestPauseIgnoresMailboxFailures(t *testing.T) {
 	p := newTestProject(t)
 	writeFile(t, filepath.Join(p.Root, ".orchestrator", "mailbox"), "not a directory")
@@ -400,18 +424,43 @@ func TestGateClearQueuesARelaunchOfTheGatedDoor(t *testing.T) {
 	}
 }
 
-func TestGateClearNoRelaunchOnlyDeletesTheGate(t *testing.T) {
+// Kickoff (--no-relaunch) launches the conductor itself, so any queued launch or pause is
+// superseded along with the gate.
+func TestGateClearNoRelaunchDropsTheGateAQueuedLaunchAndAPause(t *testing.T) {
+	for _, c := range []struct {
+		name, prev, want string
+	}{
+		{"gate only", `{"awaiting_human":{"door":"claude"},"to":"c"}`, `{"to":"c"}`},
+		{"gate, launch and pause", `{"awaiting_human":{"door":"claude"},"pending_launch":{"to":"opencode"},"paused":{"door":"claude"},"z":1}`, `{"z":1}`},
+		{"no gate", `{"pending_launch":{"to":"opencode"},"paused":{"door":"claude"},"z":1}`, `{"z":1}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := newTestProject(t)
+			writeFile(t, p.FlipPath, c.prev)
+			answer, err := p.Gate(opts("gate", "--clear", "--no-relaunch"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := compact(t, answer); got != `{"awaiting_human":false}` {
+				t.Errorf("answer = %s", got)
+			}
+			if got := readFile(t, p.FlipPath); got != indented(t, c.want) {
+				t.Errorf("flip.json = %s, want %s", got, indented(t, c.want))
+			}
+		})
+	}
+}
+
+// mailbox reply (relaunch on) keeps a launch queued before the gate, and a pause.
+func TestClearGateWithRelaunchKeepsAQueuedLaunchAndAPause(t *testing.T) {
 	p := newTestProject(t)
-	writeFile(t, p.FlipPath, `{"awaiting_human":{"door":"claude"},"to":"c"}`)
-	answer, err := p.Gate(opts("gate", "--clear", "--no-relaunch"))
-	if err != nil {
-		t.Fatal(err)
+	writeFile(t, p.FlipPath, `{"awaiting_human":{"door":"claude"},"pending_launch":{"to":"opencode"},"paused":{"door":"claude"}}`)
+	door, queued, err := p.ClearGate(p.ReadFlip(), true)
+	if err != nil || door != "opencode" || !queued {
+		t.Fatalf("ClearGate = %v, %v, %v", door, queued, err)
 	}
-	if got := compact(t, answer); got != `{"awaiting_human":false}` {
-		t.Errorf("answer = %s", got)
-	}
-	if got := readFile(t, p.FlipPath); got != indented(t, `{"to":"c"}`) {
-		t.Errorf("flip.json = %s", got)
+	if got, want := readFile(t, p.FlipPath), indented(t, `{"pending_launch":{"to":"opencode"},"paused":{"door":"claude"}}`); got != want {
+		t.Errorf("flip.json = %s, want %s", got, want)
 	}
 }
 

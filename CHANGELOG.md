@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- kickoff/flip: a kickoff now supersedes any queued relaunch or pause (`gate --clear --no-relaunch`
+  removes `pending_launch` and `paused`), so the supervisor cannot start an older conductor first
+  (Sol R9).
+- kickoff: with both vendors red, a real kickoff runs the preflight (starting the supervisor),
+  saves its prompt as `.orchestrator/briefs/conductor-kickoff.md` and pauses with `flip pause
+  --brief`. At the reset, `flip run` launches that brief, and a launch the lane lock leaves pending
+  keeps it for the retry. If the supervisor does not start or the pause is not recorded, kickoff
+  exits 1 instead of 75 (Sol R10).
 - plugin: a failed spawn no longer leaves a two-hour deadline timer behind (Sol R8).
 - manifest (JS, Go, plugin): a manifest is written through a private temp file and a rename, so a symlink at the
   destination is replaced, never followed. A temp-name collision draws a new name and never removes another writer's

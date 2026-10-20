@@ -13,7 +13,7 @@ import (
 )
 
 var (
-	flipValueKeys = []string{"active", "to", "from", "cwd", "reason", "resume", "question"}
+	flipValueKeys = []string{"active", "to", "from", "cwd", "reason", "resume", "question", "brief"}
 	flipFlagKeys  = []string{"force", "clear", "no-relaunch"}
 )
 

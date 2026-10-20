@@ -108,6 +108,9 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "pause/prototype-keys", args: []string{"pause"}, seed: seedFlip(`{"__proto__":{"a":1},"constructor":2}`)},
 		{name: "pause/orchestrator-is-file", args: []string{"pause"}, seed: seedProjectFile(".orchestrator", ""), crash: crashC1, errorLine: orchestratorIsFile},
 		{name: "pause/PE-21-flip-is-directory", args: []string{"pause"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, leftover: `"paused"`},
+		{name: "pause/brief", args: []string{"pause", "--brief", ".orchestrator/briefs/conductor-kickoff.md"}, seed: seedFlip(seeded)},
+		{name: "pause/brief-bare", args: []string{"pause", "--brief"}},
+		{name: "pause/brief-empty", args: []string{"pause", "--brief", ""}},
 		{name: "pause/mailbox-is-file", args: []string{"pause"}, seed: seedProjectFile(".orchestrator/mailbox", "x")},
 
 		{name: "gate/fresh", args: []string{"gate"}},
@@ -129,7 +132,10 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "gate/clear-queues-relaunch", args: []string{"gate", "--clear"}, seed: seedFlip(`{"to":"claude","awaiting_human":{"door":"claude","at":"2026-01-02T00:00:00.000Z","reason":"g","question":"q"},"z":1}`)},
 		{name: "gate/clear-keeps-pending-launch", args: []string{"gate", "--clear"}, seed: seedFlip(`{"pending_launch":{"to":"opencode","from":"claude","reason":"handback","resume":null,"at":"2026-01-01T00:00:00.000Z"},"awaiting_human":{"door":"claude"}}`)},
 		{name: "gate/clear-queues-relaunch-without-door", args: []string{"gate", "--clear"}, seed: seedFlip(`{"awaiting_human":"yes"}`)},
+		// --no-relaunch (kickoff) also drops seeded's paused (Sol R9).
 		{name: "gate/clear-no-relaunch", args: []string{"gate", "--clear", "--no-relaunch"}, seed: seedFlip(seeded)},
+		{name: "gate/clear-no-relaunch-drops-pending-launch", args: []string{"gate", "--clear", "--no-relaunch"}, seed: seedFlip(`{"pending_launch":{"to":"opencode","from":"claude","reason":"handback","resume":null,"at":"2026-01-01T00:00:00.000Z"},"awaiting_human":{"door":"claude"},"z":1}`)},
+		{name: "gate/clear-no-relaunch-drops-paused", args: []string{"gate", "--clear", "--no-relaunch"}, seed: seedFlip(`{"paused":{"at":"2026-01-01T00:00:00.000Z","door":"claude","reason":"r","brief":"b.md"},"z":1}`)},
 		{name: "gate/clear-fresh", args: []string{"gate", "--clear"}, seed: seedProjectDir(".orchestrator")},
 		{name: "gate/clear-string", args: []string{"gate", "--clear"}, seed: seedFlip(`"abc"`)},
 		{name: "gate/clear-number", args: []string{"gate", "--clear"}, seed: seedFlip(`5`)},

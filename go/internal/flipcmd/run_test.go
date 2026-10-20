@@ -127,6 +127,93 @@ func TestRunWritesExcludeBriefRecordAndHandoff(t *testing.T) {
 	}
 }
 
+// kickoffBrief is the brief a both-red kickoff saves and names in its pause.
+const kickoffBrief = ".orchestrator/briefs/conductor-kickoff.md"
+
+func (p Project) saveKickoffBrief(t *testing.T) {
+	t.Helper()
+	writeFile(t, filepath.Join(p.Root, kickoffBrief), "Ship a.md.\n")
+}
+
+// The supervisor's relaunch of a both-red kickoff starts the conductor from the brief the
+// pause named, not from a generic continue brief.
+func TestRunLaunchesTheBriefAPauseNamed(t *testing.T) {
+	p := newGitProject(t)
+	p.saveKickoffBrief(t)
+	writeFile(t, p.FlipPath, `{"paused":{"at":"x","door":"opencode","reason":"r","brief":".orchestrator/briefs/conductor-kickoff.md"}}`)
+	launcher := launched()
+	if _, code, err := p.Run(opts("run", "--to", "claude", "--from", "opencode"), launcher.launch); err != nil || code != 0 {
+		t.Fatalf("Run = %d, %v", code, err)
+	}
+	want := [][]string{{"start", "--brief", ".orchestrator/briefs/conductor-kickoff.md", "--lane", "conductor", "--harness", "claude",
+		"--agent", "conductor", "--breadth", "broad", "--cwd", p.Root, "--detach", "--permission-mode", "auto"}}
+	if !slices.EqualFunc(launcher.calls, want, slices.Equal[[]string]) {
+		t.Errorf("launched %q, want %q", launcher.calls, want)
+	}
+	if _, err := os.Stat(p.briefPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("continue brief written (%v)", err)
+	}
+	if got := p.messages(t); !strings.Contains(got, `"refs":[".orchestrator/STATE.md",".orchestrator/briefs/conductor-kickoff.md"]`) {
+		t.Errorf("messages = %s, want refs naming the kickoff brief", got)
+	}
+	if got, want := readFile(t, p.FlipPath), indented(t, `{"at":"`+nowISO+`","from":"opencode","to":"claude","reason":null,"previous":{}}`); got != want {
+		t.Errorf("flip.json = %s, want %s", got, want)
+	}
+}
+
+// A lane-locked launch keeps the kickoff's brief in pending_launch, so the supervisor's retry
+// (`flip run` once the lane is free) still starts from it and never from the continue brief.
+func TestRunKeepsTheKickoffBriefAcrossALaneLockedRetry(t *testing.T) {
+	p := newGitProject(t)
+	p.saveKickoffBrief(t)
+	writeFile(t, p.FlipPath, `{"paused":{"at":"x","door":"opencode","reason":"r","brief":".orchestrator/briefs/conductor-kickoff.md"}}`)
+	locked := laneLocked()
+	if answer, _, err := p.Run(opts("run", "--to", "opencode", "--from", "opencode"), locked.launch); err != nil || !strings.Contains(compact(t, answer), `"pending":true`) {
+		t.Fatalf("first Run = %v, %v; want pending", answer, err)
+	}
+	if got := readFile(t, p.FlipPath); !strings.Contains(got, `"brief": ".orchestrator/briefs/conductor-kickoff.md"`) {
+		t.Fatalf("flip.json = %s, want the pending launch to keep the kickoff brief", got)
+	}
+	retry := launched()
+	if _, code, err := p.Run(opts("run", "--to", "opencode", "--from", "opencode", "--reason", "pending launch"), retry.launch); err != nil || code != 0 {
+		t.Fatalf("retry Run = %d, %v", code, err)
+	}
+	for i, call := range append(locked.calls, retry.calls...) {
+		if call[2] != kickoffBrief {
+			t.Errorf("launch %d briefed %q, want %q", i+1, call[2], kickoffBrief)
+		}
+	}
+	if _, err := os.Stat(p.briefPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("continue brief written (%v)", err)
+	}
+	if got := readFile(t, p.FlipPath); strings.Contains(got, "pending_launch") {
+		t.Errorf("flip.json = %s, want the launched retry to drop the pending launch", got)
+	}
+}
+
+// Only a non-empty string in an object record's paused.brief or pending_launch.brief, naming a
+// file that exists, is launched; anything else starts from the continue brief.
+func TestRunWritesTheContinueBriefWithoutASavedBrief(t *testing.T) {
+	for _, prev := range []string{`{"paused":{"door":"opencode"}}`, `{"paused":{"brief":""}}`, `{"paused":{"brief":true}}`, `"paused"`, `[1]`,
+		`{"paused":{"brief":"gone.md"}}`, `{"pending_launch":{"to":"opencode","brief":"gone.md"}}`} {
+		t.Run(prev, func(t *testing.T) {
+			p := newGitProject(t)
+			p.saveKickoffBrief(t) // present, but not named
+			writeFile(t, p.FlipPath, prev)
+			launcher := launched()
+			if _, _, err := p.Run(opts("run", "--to", "opencode"), launcher.launch); err != nil {
+				t.Fatal(err)
+			}
+			if len(launcher.calls) != 1 || launcher.calls[0][2] != ".orchestrator/briefs/conductor-continue.md" {
+				t.Errorf("launched %q", launcher.calls)
+			}
+			if _, err := os.Stat(p.briefPath()); err != nil {
+				t.Errorf("continue brief: %v", err)
+			}
+		})
+	}
+}
+
 // Only a trailing key is bare: the run-record parser takes the next argument as a value even
 // when it starts with "--".
 func TestRunWritesBareOptionsAsTrue(t *testing.T) {

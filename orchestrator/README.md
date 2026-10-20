@@ -62,12 +62,12 @@ Every script is dependency-free Node and has a Go twin, `orch <script>` (see
 
 | Script | Usage | What it does |
 |---|---|---|
-| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate without queueing a relaunch, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. `--dry-run` prints the door and prompt and changes nothing (no preflight, no launch). Both vendors red: records a pause and exits 75. A missing brief names the directory searched. |
+| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate and any queued relaunch or pause, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. `--dry-run` prints the door and prompt and changes nothing (no preflight, no launch). Both vendors red: runs the preflight, saves the prompt as `.orchestrator/briefs/conductor-kickoff.md`, records a pause naming it (the supervisor's relaunch at the first reset starts from it) and exits 75, or exits 1 when the supervisor did not start or the pause was not recorded. A missing brief names the directory searched. |
 | `watch.mjs` | `[--cwd DIR] [--follow] [--interval 20]` | One-screen dashboard: budgets, routing, supervisor, flip state, lanes, open questions with the reply command, human gate, last messages, incidents of the last 24 h, next action from `STATE.md`. |
 | `usage.mjs` | `[--refresh] [--json] [--brief]` | Live Claude + Codex usage -> posture -> role routing. |
 | `mailbox.mjs` | `post \| list \| ack \| reply \| inbox` | Durable project mailbox (see [below](#mailbox-and-manifests)). |
 | `policy.mjs` | `show \| set key=value... \| unattended [--cwd DIR]` | Effective autonomy policy: registry `autonomy` merged with `.orchestrator/policy.json`. |
-| `flip.mjs` | `decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | Move the conductor between doors, record budget pauses and human gates. |
+| `flip.mjs` | `decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] [--brief FILE] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | Move the conductor between doors, record budget pauses and human gates. |
 | `worker.mjs` | `start --brief F --harness claude\|codex\|opencode [--lane L] [--model M] [--effort E] ... [--detach] \| status [--lane L] \| stop --lane L` | One bounded brief on one harness as a tracked, lockable, resumable lane. |
 | `supervisor.mjs` | `start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | Per-project daemon: watches lanes, wakes the coordinator, relaunches conductors. |
 | `claude-exec.mjs` | `[--model M] [--effort E] [--permission-mode P] ... [--timeout-min 60] [--force] [--prompt T \| --prompt-file F \| stdin]` | Bounded task on Claude Code (`claude -p`, stream-json) -> JSON result + session id. |
@@ -223,7 +223,8 @@ relaunch while the gate is set. `kickoff` and `flip.mjs run` clear it and start 
 it, as recorded by `--question`), clear it and record `pending_launch` for the gated door, which the
 supervisor launches once the conductor lane is idle and unlocked (within a minute); `gate --clear`
 then prints `{"awaiting_human":false,"relaunch":"<door>"}`. Clearing when no gate is set queues
-nothing, and `gate --clear --no-relaunch` (what kickoff runs) only removes the marker. `pause`
+nothing, and `gate --clear --no-relaunch` (what kickoff runs) removes the marker and any queued launch or
+pause. `pause`
 is for budgets only. To pause a running project by hand, set a gate and then `worker.mjs stop --lane
 conductor`; a stopped lane without a gate is relaunched by the supervisor.
 
@@ -243,11 +244,13 @@ One conductor drives a project at a time. `models.json` -> `conductor.home` name
 | both red | writes the remaining briefs, runs `flip.mjs pause`, stops; the supervisor relaunches at the first reset, home door first if it comes back first |
 
 `flip.mjs run --to <door>` adds `.orchestrator/` to `.git/info/exclude`, writes
-`.orchestrator/briefs/conductor-continue.md`, replaces `flip.json` (clearing `paused` and
+`.orchestrator/briefs/conductor-continue.md` (unless the record it replaces is a pause that names a
+brief, as a both-red kickoff's does, or a pending launch that kept one, and that file exists: then it
+launches that brief), replaces `flip.json` (clearing `paused` and
 `awaiting_human`), posts a `handoff`, and starts the target conductor headless as worker lane
 `conductor` (`--breadth broad`; `--permission-mode auto` for claude). The lane lock means one
 driver. If the lane is still locked, usually by the calling conductor, `flip.json` gains
-`pending_launch` and the supervisor launches the target once the lock is released. Flips never
+`pending_launch` (keeping that brief) and the supervisor launches the target once the lock is released. Flips never
 happen mid-brief, so a hand-back is delayed by at most one brief.
 
 ## Workers and the supervisor

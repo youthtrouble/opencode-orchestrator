@@ -3,6 +3,7 @@ package kickoff
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 type fakeChildren struct {
 	calls       [][]string
 	answers     map[string]procs.SyncResult // by the first two args joined by a space
+	inherited   *int                        // every SelfInherited's exit status
 	interactive struct {
 		code *int
 		err  error
@@ -32,9 +34,12 @@ func (f *fakeChildren) Self(args []string) procs.SyncResult {
 	return f.answers[strings.Join(args[:2], " ")]
 }
 
-func (f *fakeChildren) SelfInherited(args []string) {
+func (f *fakeChildren) SelfInherited(args []string) *int {
 	f.calls = append(f.calls, append([]string{"inherited"}, args...))
+	return f.inherited
 }
+
+func exitStatus(code int) *int { return &code }
 
 func (f *fakeChildren) Interactive(name string, args []string) (*int, error) {
 	f.calls = append(f.calls, append([]string{"interactive", name}, args...))
@@ -67,8 +72,8 @@ func newRun(t *testing.T, anthropic, openai string) *kickoffRun {
 	return &kickoffRun{
 		root: root,
 		children: &fakeChildren{answers: map[string]procs.SyncResult{
-			"supervisor start": {Stdout: "  {\"started\":false}\n"},
-		}},
+			"supervisor start": {Status: exitStatus(0), Stdout: "  {\"started\":false}\n"},
+		}, inherited: exitStatus(0)},
 		routing: &usage.Routing{
 			Registry: registry.(*jsjson.Object),
 			Resolved: routing.Resolved{Postures: routing.Postures{
@@ -221,18 +226,109 @@ func TestUnknownDoorCrashesAfterThePreflight(t *testing.T) {
 	}
 }
 
-func TestBothRed(t *testing.T) {
+func TestBothRedDryRunOnlySaysSo(t *testing.T) {
 	k := newRun(t, "red", "")
 	code, err := k.run("--brief", "a.md", "--dry-run")
 	if err != nil || code != exitBothRed || len(k.children.calls) != 0 ||
 		k.out.String() != "line 1\nline 2\ndry-run: both vendors red; a real run would pause and let the supervisor relaunch at the first reset.\n" {
-		t.Errorf("dry run: code %d err %v calls %q out %q", code, err, k.children.calls, k.out.String())
+		t.Errorf("code %d err %v calls %q out %q", code, err, k.children.calls, k.out.String())
 	}
-	k = newRun(t, "red", "red")
-	code, err = k.run("--brief", "a.md", "--headless")
-	if want := [][]string{{"inherited", "flip", "pause", "--active", "opencode", "--cwd", k.root}}; err != nil || code != exitBothRed || !reflect.DeepEqual(k.children.calls, want) ||
-		!strings.HasSuffix(k.out.String(), "\nBoth vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do.\n") {
-		t.Errorf("real: code %d err %v calls %q out %q", code, err, k.children.calls, k.out.String())
+}
+
+// A real both-red run clears the gate (which drops any older pause) before it records its own
+// pause, and names the saved prompt as the brief the supervisor's relaunch starts from.
+func TestBothRedRunsThePreflightSavesTheBriefAndPausesWithIt(t *testing.T) {
+	for _, unattended := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unattended=%v", unattended), func(t *testing.T) {
+			k := newRun(t, "red", "red")
+			argv := []string{"--brief", "a.md", "--brief", "b.md", "--headless"}
+			var policy [][]string
+			if unattended {
+				argv = append(argv, "--unattended")
+				policy = [][]string{{"self", "policy", "unattended", "--cwd", k.root}}
+			}
+			code, err := k.run(argv...)
+			if err != nil || code != exitBothRed {
+				t.Fatalf("code %d err %v", code, err)
+			}
+			pause := []string{"inherited", "flip", "pause", "--active", "opencode", "--brief", ".orchestrator/briefs/conductor-kickoff.md", "--cwd", k.root}
+			if want := append(k.preflightCalls(policy...), pause); !reflect.DeepEqual(k.children.calls, want) {
+				t.Errorf("calls %q, want %q", k.children.calls, want)
+			}
+			wantOut := "line 1\nline 2\nsupervisor: {\"started\":false}\nBoth vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do.\n"
+			if k.out.String() != wantOut {
+				t.Errorf("out %q, want %q", k.out.String(), wantOut)
+			}
+			brief, _ := os.ReadFile(filepath.Join(k.root, ".orchestrator", "briefs", "conductor-kickoff.md"))
+			if want := cmdref.KickoffPrompt("a.md", []string{"b.md"}) + "\n"; string(brief) != want {
+				t.Errorf("brief %q, want %q", brief, want)
+			}
+			if exclude, _ := os.ReadFile(filepath.Join(k.root, ".git", "info", "exclude")); string(exclude) != ".orchestrator/\n" {
+				t.Errorf("exclude = %q", exclude)
+			}
+		})
+	}
+}
+
+func TestBothRedPreflightFailureIsReturnedBeforeAnyPause(t *testing.T) {
+	k := newRun(t, "red", "red")
+	if err := os.MkdirAll(filepath.Join(k.root, ".git", "info", "exclude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.run("--brief", "a.md"); err == nil || !strings.HasPrefix(err.Error(), "EISDIR") {
+		t.Errorf("err = %v, want the exclude's EISDIR", err)
+	}
+	if !reflect.DeepEqual(k.children.calls, k.preflightCalls()) {
+		t.Errorf("calls %q, want the preflight only", k.children.calls)
+	}
+	if _, err := os.Stat(filepath.Join(k.root, ".orchestrator", "briefs", "conductor-kickoff.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("brief written (%v)", err)
+	}
+}
+
+// Exit 75 tells the caller (/away) that the supervisor will start the run at the reset, so a
+// supervisor that did not start fails the run before the brief is written or a pause recorded.
+func TestBothRedWithoutASupervisorFailsBeforeThePause(t *testing.T) {
+	for name, answer := range map[string]procs.SyncResult{
+		"exit 1":  {Status: exitStatus(1), Stderr: "Error: EEXIST\n"},
+		"signal":  {},
+		"no orch": {Err: errors.New("no executable")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := newRun(t, "red", "red")
+			k.children.answers["supervisor start"] = answer
+			code, err := k.run("--brief", "a.md")
+			if err != nil || code != 1 {
+				t.Fatalf("code %d err %v, want 1", code, err)
+			}
+			if !reflect.DeepEqual(k.children.calls, k.preflightCalls()) {
+				t.Errorf("calls %q, want the preflight only", k.children.calls)
+			}
+			want := "Both vendors are red, but the supervisor did not start: nothing will relaunch at the reset. Fix it and run kickoff again.\n"
+			if k.err.String() != want || strings.Contains(k.out.String(), "paused") {
+				t.Errorf("err %q out %q, want %q and no pause message", k.err.String(), k.out.String(), want)
+			}
+			if _, err := os.Stat(filepath.Join(k.root, ".orchestrator", "briefs", "conductor-kickoff.md")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("brief written (%v)", err)
+			}
+		})
+	}
+}
+
+func TestBothRedWithoutARecordedPauseFails(t *testing.T) {
+	for name, status := range map[string]*int{"exit 1": exitStatus(1), "signal or no status": nil} {
+		t.Run(name, func(t *testing.T) {
+			k := newRun(t, "red", "red")
+			k.children.inherited = status
+			code, err := k.run("--brief", "a.md")
+			if err != nil || code != 1 {
+				t.Fatalf("code %d err %v, want 1", code, err)
+			}
+			want := "Both vendors are red, but the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.\n"
+			if k.err.String() != want || strings.Contains(k.out.String(), "paused") {
+				t.Errorf("err %q out %q, want %q and no pause message", k.err.String(), k.out.String(), want)
+			}
+		})
 	}
 }
 

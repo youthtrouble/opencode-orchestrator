@@ -42,12 +42,17 @@ export function decideFlip({ active, postures, registry, nowMs = Date.now(), las
 // a `pending_launch` is queued: the supervisor's pending-launch branch starts that conductor once the lane
 // is idle and unlocked, and `flip run` drops the record, so it fires once. A `pending_launch` already
 // queued (a flip that found the lane locked before the gate) is kept rather than replaced by the gated
-// door: it is the handover the conductor asked for, and the supervisor launches it all the same. Without
-// a gate the record is written back unchanged (any JSON shape). Returns the door the supervisor will
-// launch, or null when nothing was queued.
+// door: it is the handover the conductor asked for, and the supervisor launches it all the same. With
+// `relaunch` off (kickoff, which launches the conductor itself) any queued `pending_launch` and any
+// `paused` record are removed too, so the supervisor cannot start an older conductor first or a second
+// one beside an interactive kickoff. Without a gate the record is otherwise written back unchanged (any
+// JSON shape). Returns the door the supervisor will launch, or null when nothing was queued.
 export function clearGate(root, flip, { relaunch = true } = {}) {
   const gate = flip?.awaiting_human;
-  if (flip !== null && typeof flip === "object") delete flip.awaiting_human;
+  if (flip !== null && typeof flip === "object") {
+    delete flip.awaiting_human;
+    if (!relaunch) { delete flip.pending_launch; delete flip.paused; }
+  }
   let door = null;
   if (gate && relaunch) {
     const gatedDoor = gate.door || "opencode";

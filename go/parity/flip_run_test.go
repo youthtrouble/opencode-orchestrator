@@ -119,6 +119,7 @@ func (h *harness) testFlipRun(t *testing.T) {
 	for _, c := range pending {
 		t.Run(c.name, func(t *testing.T) { h.compareFlipPending(t, h.flipRunInvocation(c.args, c.seed, noCrash, "")) })
 	}
+	t.Run("pending/paused-brief", h.testFlipRunPausedBrief)
 
 	crashes := []struct {
 		name, errorLine string
@@ -154,17 +155,43 @@ func (h *harness) testFlipRun(t *testing.T) {
 	t.Run("cross-runtime", h.testFlipRunCrossRuntime)
 }
 
+// kickoffPausedRecord is the pause a both-red kickoff records: it names the kickoff's brief.
+const kickoffPausedRecord = `{"paused":{"at":"2026-01-01T00:00:00.000Z","door":"opencode","reason":"both vendors red","brief":".orchestrator/briefs/conductor-kickoff.md"}}`
+
+// kickoffPendingRecord is the record a lane-locked run from kickoffPausedRecord leaves: its
+// pending launch keeps the kickoff's brief for the supervisor's retry (C3-F1).
+const kickoffPendingRecord = `{"at":"2026-01-01T00:00:00.000Z","from":"opencode","to":"claude","reason":null,"previous":null,` +
+	`"pending_launch":{"to":"claude","from":"opencode","reason":null,"resume":null,"at":"2026-01-01T00:00:00.000Z","brief":".orchestrator/briefs/conductor-kickoff.md"}}`
+
+// testFlipRunPausedBrief asserts that a run replacing a pause that names a brief (Sol R10)
+// launches that brief: no continue brief is written, the handoff names it, and the lane lock
+// leaves the launch pending with the brief kept for the retry (C3-F1). The pair is then
+// compared.
+func (h *harness) testFlipRunPausedBrief(t *testing.T) {
+	js, orch := h.compareFlipPending(t, h.flipRunInvocation([]string{"--to", "claude"}, seeds(seedFlip(kickoffPausedRecord), seedProjectFile(".orchestrator/briefs/conductor-kickoff.md", "Ship a.md.\n")), noCrash, ""))
+	refs := `"refs":[".orchestrator/STATE.md",".orchestrator/briefs/conductor-kickoff.md"]`
+	for side, o := range map[string]outcome{"js": js, "orch": orch} {
+		_, continued := o.files["project/briefs/conductor-continue.md"]
+		pendingBrief := `"pending_launch": {` + "\n" + `    "to": "claude",` + "\n" + `    "from": "opencode",` + "\n" + `    "reason": null,` + "\n" +
+			`    "resume": null,` + "\n" + `    "at": "<iso>",` + "\n" + `    "brief": ".orchestrator/briefs/conductor-kickoff.md"` + "\n  }"
+		if continued || !strings.Contains(o.files["project/mailbox/messages.jsonl"], refs) || !strings.Contains(o.files["project/flip.json"], pendingBrief) {
+			t.Errorf("%s: files %q; want no continue brief, a handoff naming the kickoff brief and a pending launch keeping it", side, o.files)
+		}
+	}
+}
+
 // compareFlipPending compares a run both runtimes must leave pending, which proves neither
-// launched a conductor.
-func (h *harness) compareFlipPending(t *testing.T, inv invocation) {
+// launched a conductor, and returns both outcomes.
+func (h *harness) compareFlipPending(t *testing.T, inv invocation) (js, orch outcome) {
 	t.Helper()
-	js, orch := h.runPair(t, inv)
+	js, orch = h.runPair(t, inv)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
 		if o.exitCode != 0 || !strings.HasPrefix(o.stdout, `{"flipped":false,"pending":true,`) {
 			t.Errorf("%s: exit %d, stdout %q, stderr %q; want a pending launch", side, o.exitCode, o.stdout, o.stderr)
 		}
 	}
 	compareOutcomes(t, js, orch)
+	return js, orch
 }
 
 // flipLaunchCase is a run that launches the conductor worker, whose runner runs to its end
@@ -202,6 +229,40 @@ func (h *harness) testFlipLaunches(t *testing.T) {
 		})
 	}
 	t.Run("PE-2/launcher-crash", h.testFlipLauncherCrash)
+	const kickoffPrompt = "Ship a.md from the kickoff brief."
+	savedBrief := seedProjectFile(".orchestrator/briefs/conductor-kickoff.md", kickoffPrompt+"\n")
+	// The supervisor's relaunch at the budget reset after a both-red kickoff is exactly this
+	// `flip run` (Sol R10), and so is its retry of a launch the lane lock left pending (C3-F1):
+	// both start the fake conductor on the kickoff's brief. A brief whose file is gone falls
+	// back to the continue brief, so the relaunch still starts a conductor.
+	saved := []struct {
+		name, record, prompt string
+		seed                 seed
+		continued            bool
+	}{
+		{"paused-brief", kickoffPausedRecord, kickoffPrompt, savedBrief, false},
+		{"pending-launch-brief", kickoffPendingRecord, kickoffPrompt, savedBrief, false},
+		{"paused-brief-missing", kickoffPausedRecord, "# Continue as conductor (claude door)", nil, true},
+	}
+	for _, c := range saved {
+		t.Run(c.name, func(t *testing.T) {
+			h.testFlipLaunchesASavedBrief(t, seeds(seedFlip(c.record), orNothing(c.seed)), c.prompt, c.continued)
+		})
+	}
+}
+
+// testFlipLaunchesASavedBrief runs `flip run --to claude` from a record that names a saved
+// brief and asserts that the fake conductor's prompt holds prompt and whether the continue
+// brief was written, then compares the pair.
+func (h *harness) testFlipLaunchesASavedBrief(t *testing.T, state seed, prompt string, continued bool) {
+	js, orch := h.runFlipLaunchPair(t, flipLaunchCase{args: []string{"--to", "claude", "--from", "opencode"}, bridge: claudeBridge, run: bridgeCase{fixture: "ok", seed: state}})
+	for side, o := range map[string]outcome{"js": js, "orch": orch} {
+		_, wrote := o.files["project/briefs/conductor-continue.md"]
+		if o.exitCode != 0 || !strings.HasPrefix(o.stdout, `{"flipped":true,`) || wrote != continued || !strings.Contains(o.files["fakelog/claude-argv.txt"], prompt) {
+			t.Errorf("%s: exit %d, stdout %q, argv %q, continue brief %v; want the conductor launched on %q (continue brief %v)", side, o.exitCode, o.stdout, o.files["fakelog/claude-argv.txt"], wrote, prompt, continued)
+		}
+	}
+	compareOutcomes(t, js, orch)
 }
 
 // flipLaunchInvocation is the worker invocation of the case's bridge with flip run as the

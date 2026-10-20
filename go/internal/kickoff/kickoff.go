@@ -31,7 +31,12 @@ const exitBothRed = 75
 // so its output has the shape of a real run's.
 const dryRunSupervisorLine = "supervisor: not started (dry-run)"
 
-// conductorBrief is where a headless kickoff writes the conductor's prompt, relative to the root.
+// notDeferred is the error line of a both-red run that could not set up the relaunch at the
+// reset; %s says which step failed.
+const notDeferred = "Both vendors are red, but %s: nothing will relaunch at the reset. Fix it and run kickoff again.\n"
+
+// conductorBrief is where a headless or both-red kickoff writes the conductor's prompt,
+// relative to the root.
 var conductorBrief = filepath.Join(".orchestrator", "briefs", "conductor-kickoff.md")
 
 // Args is kickoff's command line: the --brief values in order and the other options.
@@ -68,8 +73,9 @@ type Children interface {
 	// sibling script with encoding utf8 does.
 	Self(args []string) procs.SyncResult
 	// SelfInherited runs `orch <args>` to completion writing to this process's stdout and
-	// stderr (spawnSync with stdio inherit).
-	SelfInherited(args []string)
+	// stderr (spawnSync with stdio inherit) and returns its exit status, nil when it could not
+	// be started, a signal ended it or its status could not be collected.
+	SelfInherited(args []string) *int
 	// Interactive runs name with args in the project root with this process's stdin, stdout,
 	// stderr and environment and returns its exit code, nil when a signal ended it. A child
 	// that cannot be started is a *procs.StartError.
@@ -115,15 +121,15 @@ func Run(args Args, d Deps) (int, error) {
 	home := homeDoor(r.Registry)
 	door, chosen := chooseDoor(args.Opts, home, &r.Resolved.Postures)
 	fmt.Fprintln(d.Out, promptHead(r.Prompt))
+	prompt := cmdref.KickoffPrompt(args.Briefs[0], args.Briefs[1:])
 	if !chosen {
-		return bothRed(args.Opts, home, d), nil
+		return bothRed(args.Opts, home, prompt, d)
 	}
 	if args.Opts.Truthy("dry-run") {
 		fmt.Fprintln(d.Out, dryRunSupervisorLine)
-	} else if err := preflight(args.Opts, d); err != nil {
+	} else if _, err := preflight(args.Opts, d); err != nil {
 		return 0, err
 	}
-	prompt := cmdref.KickoffPrompt(args.Briefs[0], args.Briefs[1:])
 	line, err := doorLine(door, home, args.Opts.Truthy("headless"), &r.Resolved.Postures)
 	if err != nil {
 		return 0, err
@@ -187,32 +193,57 @@ func promptHead(prompt string) string {
 	return strings.Join(lines[:min(2, len(lines))], "\n")
 }
 
-// bothRed handles a run neither vendor can take: a dry run only says so; a real one pauses the
-// home door through `orch flip pause` (whose answer reaches this stdout) and says so.
-func bothRed(opts cliargs.Opts, home string, d Deps) int {
+// bothRed handles a run neither vendor can take: a dry run only says so. A real one runs the
+// preflight (so a supervisor is running to relaunch at the reset), saves the prompt as the
+// conductor's brief, pauses the home door naming that brief through `orch flip pause` (whose
+// answer reaches this stdout), which the supervisor's relaunch (`flip run`) then starts from,
+// and says so. The gate clear in the preflight drops any older pause, so it must come first.
+// Exit 75 promises that relaunch, so a supervisor that did not start (before the brief is
+// written) or a pause that was not recorded is an ordinary failure instead: exit 1.
+func bothRed(opts cliargs.Opts, home, prompt string, d Deps) (int, error) {
 	if opts.Truthy("dry-run") {
 		fmt.Fprintln(d.Out, "dry-run: both vendors red; a real run would pause and let the supervisor relaunch at the first reset.")
-		return exitBothRed
+		return exitBothRed, nil
 	}
-	d.Children.SelfInherited([]string{"flip", "pause", "--active", home, "--cwd", d.Root})
+	supervising, err := preflight(opts, d)
+	if err != nil {
+		return 0, err
+	}
+	if !supervising {
+		fmt.Fprintf(d.Err, notDeferred, "the supervisor did not start")
+		return 1, nil
+	}
+	if err := writeConductorBrief(prompt, d.Root); err != nil {
+		return 0, err
+	}
+	pause := d.Children.SelfInherited([]string{"flip", "pause", "--active", home, "--brief", conductorBrief, "--cwd", d.Root})
+	if pause == nil || *pause != 0 {
+		fmt.Fprintf(d.Err, notDeferred, "the pause was not recorded")
+		return 1, nil
+	}
 	fmt.Fprintln(d.Out, "Both vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do.")
-	return exitBothRed
+	return exitBothRed, nil
 }
 
 // preflight runs in the JS order, never for a dry run: --unattended applies the unattended
 // policy, a human gate is cleared (a human is running this), the supervisor is started and
 // its answer printed, and .orchestrator/ is excluded from git. The policy and gate outputs
-// are discarded. The gate is cleared with --no-relaunch: kickoff starts the conductor itself,
-// so a queued relaunch would give the project a second one.
-func preflight(opts cliargs.Opts, d Deps) error {
+// are discarded. The gate is cleared with --no-relaunch: kickoff starts the conductor itself
+// (or, both red, records its own pause), so the clear also drops any queued relaunch or pause,
+// which would let the supervisor start an older conductor or a second one beside an
+// interactive kickoff. supervising reports that the supervisor is running: `start` exits 0
+// when it started one or found one.
+func preflight(opts cliargs.Opts, d Deps) (supervising bool, err error) {
 	if opts.Truthy("unattended") {
 		d.Children.Self([]string{"policy", "unattended", "--cwd", d.Root})
 	}
 	d.Children.Self([]string{"flip", "gate", "--clear", "--no-relaunch", "--cwd", d.Root})
 	supervisor := d.Children.Self([]string{"supervisor", "start", "--cwd", d.Root})
 	fmt.Fprintf(d.Out, "supervisor: %s\n", jsstr.Slice(trim(stdoutOrStderr(supervisor)), 0, 120))
-	_, err := flipcmd.EnsureGitExclude(d.Root)
-	return err
+	if _, err := flipcmd.EnsureGitExclude(d.Root); err != nil {
+		return false, err
+	}
+	return supervisor.Status != nil && *supervisor.Status == 0, nil
 }
 
 // doorLine is `door: <door> (<vendor> <overall>; home <home>) headless|interactive`. A door
@@ -229,16 +260,21 @@ func doorLine(door, home string, headless bool, postures *routing.Postures) (str
 	return fmt.Sprintf("door: %s (%s %s; home %s)%s", door, vendor, postures.ByVendor(vendor).Overall, home, mode), nil
 }
 
+// writeConductorBrief writes the prompt as the conductor's brief, creating its directory. The
+// brief is replaced atomically and owner-only, never written through a symlink (PE-21).
+func writeConductorBrief(prompt, root string) error {
+	path := filepath.Join(root, conductorBrief)
+	if err := nodefs.MkdirAll(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return nodefs.WritePrivateFile(path, []byte(prompt+"\n"))
+}
+
 // launchHeadless writes the prompt as the conductor's brief and starts a detached conductor
 // lane through `orch worker start`, printing its answer and the watch hint. The exit code is
-// the worker's, or 1 when it gave none. The brief is replaced atomically and owner-only, never
-// written through a symlink (PE-21).
+// the worker's, or 1 when it gave none.
 func launchHeadless(door, prompt string, d Deps) (int, error) {
-	path := filepath.Join(d.Root, conductorBrief)
-	if err := nodefs.MkdirAll(filepath.Dir(path)); err != nil {
-		return 0, err
-	}
-	if err := nodefs.WritePrivateFile(path, []byte(prompt+"\n")); err != nil {
+	if err := writeConductorBrief(prompt, d.Root); err != nil {
 		return 0, err
 	}
 	args := []string{"worker", "start", "--brief", conductorBrief, "--lane", "conductor", "--harness", door, "--agent", "conductor", "--breadth", "broad", "--cwd", d.Root, "--detach"}

@@ -217,8 +217,9 @@ Kickoff refreshes budgets, starts the supervisor, adds `.orchestrator/` to `.git
 picks the door whose vendor has headroom (home first) and launches the conductor. Extra `--brief`
 files run as side work when budget allows. `--door claude|opencode` forces a door; `--dry-run`
 shows the door and prompt and changes nothing (no policy, gate, supervisor or exclude change). If
-both vendors are red it records a pause, exits 75, and the supervisor starts the run at the first
-reset.
+both vendors are red it starts the supervisor, records the pause with this brief, exits 75, and the
+supervisor starts the run from this brief at the first reset. If the supervisor does not start or the
+pause is not recorded, it exits 1 instead, since nothing would relaunch.
 
 ### 3. While it runs
 

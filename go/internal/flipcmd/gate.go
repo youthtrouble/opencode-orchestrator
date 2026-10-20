@@ -15,8 +15,8 @@ const subjectReasonUnits = 80
 // Gate records that the headless conductor stopped at a human gate, which the supervisor
 // must not relaunch past until a human clears it, and returns the line to print. With
 // --clear it removes the gate instead and queues the gated conductor's relaunch, unless
-// --no-relaunch (kickoff, which launches the conductor itself). flip.json is read before
-// .orchestrator/ is created.
+// --no-relaunch (kickoff, which launches the conductor itself and so also drops any queued
+// launch or pause). flip.json is read before .orchestrator/ is created.
 func (p Project) Gate(opts cliargs.Opts) (*jsjson.Object, error) {
 	prev := p.ReadFlip()
 	if !jsjson.Truthy(prev) {
@@ -74,14 +74,20 @@ func (p Project) clearGateAnswer(prev any, relaunch bool) (*jsjson.Object, error
 // run` drops the record, so it fires once. A truthy pending_launch already queued (a flip that
 // found the lane locked before the gate) is kept rather than replaced by the gated door: it is
 // the handover the conductor asked for, and the supervisor launches it all the same. Otherwise
-// it queues {to, from, reason, resume, at} for the gated door (door || "opencode"). prev is
-// written back whatever its shape. It returns the door the supervisor will launch and whether
+// it queues {to, from, reason, resume, at} for the gated door (door || "opencode"). With
+// relaunch off (kickoff, which launches the conductor itself) an object also loses any
+// pending_launch and paused, so the supervisor cannot start an older conductor first, or a
+// second one beside an interactive kickoff. prev is written back whatever its shape. It returns the door the supervisor will launch and whether
 // there is one (a truthy pending_launch.to).
 func (p Project) ClearGate(prev any, relaunch bool) (door any, queued bool, err error) {
 	record, isObject := prev.(*jsjson.Object)
 	if isObject {
 		gate := jsjson.Path(record, "awaiting_human")
 		record.Delete("awaiting_human")
+		if !relaunch {
+			record.Delete("pending_launch")
+			record.Delete("paused")
+		}
 		if jsjson.Truthy(gate) && relaunch {
 			if !jsjson.Truthy(jsjson.Path(record, "pending_launch")) {
 				record.Set("pending_launch", p.gateRelaunch(gatedDoor(gate)))

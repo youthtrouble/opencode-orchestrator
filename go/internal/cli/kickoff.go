@@ -60,16 +60,20 @@ func (c kickoffChildren) Self(args []string) procs.SyncResult {
 	return procs.RunSync(procs.SyncSpec{Name: self, Args: args, Grace: launcherGrace})
 }
 
-func (c kickoffChildren) SelfInherited(args []string) {
+func (c kickoffChildren) SelfInherited(args []string) *int {
 	self, err := os.Executable()
 	if err != nil {
-		return
+		return nil
 	}
 	child, err := procs.Start(procs.Spec{Name: self, Args: args, Stdout: c.stdio.Out, Stderr: c.stdio.Err, Grace: launcherGrace})
 	if err != nil {
-		return
+		return nil
 	}
-	_, _ = child.Wait() // spawnSync's result is not read
+	code, err := child.Wait()
+	if err != nil {
+		return nil
+	}
+	return code
 }
 
 func (c kickoffChildren) Interactive(name string, args []string) (*int, error) {
