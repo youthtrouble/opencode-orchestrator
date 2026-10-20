@@ -1,10 +1,13 @@
 package supervisor
 
 import (
-	"strings"
+	"os"
+	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
@@ -114,8 +117,22 @@ func TestAckCrashes(t *testing.T) {
 	f.mkdir("supervisor-acks.json")
 	_, err := f.sup.Ack("e1", "c", time.Now())
 	acks := f.path("supervisor-acks.json")
-	wantError(t, err, "EISDIR: illegal operation on a directory, rename '"+acks+".tmp' -> '"+acks+"'")
-	if !strings.Contains(f.read("supervisor-acks.json.tmp"), `"e1"`) {
-		t.Error("the .tmp file should be left")
+	wantRenameOntoDirError(t, err, acks)
+}
+
+// The supervisor's files hold events and lane state: owner-only under a permissive umask (PE-21).
+func TestWriteJSONIsOwnerOnly(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	path := filepath.Join(t.TempDir(), ".orchestrator", "supervisor-acks.json")
+	if err := writeJSON(path, jsjson.NewObject()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode %v, want 0600", got)
 	}
 }

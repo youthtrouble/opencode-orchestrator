@@ -21,6 +21,10 @@
   clean (Sol S1/R3).
 - go: `procs` marks a child reaped as soon as it exits and drains its pipes afterwards (at most the
   PE-10 grace), so no signal can reach a reused process group during the drain (Sol S2/R2).
+- go: run records, worker state and the supervisor's state files are written owner-only (0600
+  files, 0700 directories) through a unique temp file and an atomic rename, so planted symlinks are
+  never followed and concurrent writers cannot mix content (PE-21; Sol S1/R1, S2/R4, S2/R9, S3/R4,
+  S3/R5). Run-record names replace `/` in session ids in both runtimes (Sol S1/R4).
 
 ## 0.5.0 — 2026-10-19
 

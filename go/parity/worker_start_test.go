@@ -206,13 +206,17 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		{name: "locked/state-zero", args: claude, run: locked(`0`)},
 		{name: "locked/state-string", args: claude, run: locked(`"abc"`)},
 		{name: "locked/state-without-status", args: claude, run: locked(`{"pid":"x"}`)},
-
-		// state unwritable
-		{name: "state/json-is-a-directory", args: claude, run: bridgeCase{fixture: "ok", seed: seedProjectDir(".orchestrator/workers/b.json")}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.workerStartInvocation(t, c)) })
 	}
+	// The state path a directory: every publish fails its rename (EISDIR), and the run goes on
+	// with the failure recorded. PE-21: the JS leaves `b.json.tmp`, orch no temp.
+	t.Run("state/PE-21-json-is-a-directory", func(t *testing.T) {
+		js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: claude, run: bridgeCase{fixture: "ok", seed: seedProjectDir(".orchestrator/workers/b.json")}}))
+		assertPE21FailedRename(t, &js, &orch, "project/workers/b.json", `"last_state_write_error": "EISDIR"`)
+		compareOutcomes(t, js, orch)
+	})
 	// comparePair only diffs one runtime's files against the other's, so it would pass if both
 	// left a lock; this asserts the absence in each.
 	t.Run("unreadable-brief-claims-nothing", func(t *testing.T) {

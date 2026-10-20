@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -183,5 +184,19 @@ func wantError(t *testing.T, err error, want string) {
 	t.Helper()
 	if err == nil || err.Error() != want {
 		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+// wantRenameOntoDirError checks the EISDIR a private write onto the directory at path gives:
+// it names orch's own `<path>.tmp-<random>`, which is removed (PE-21: the JS names and leaves
+// `<path>.tmp`).
+func wantRenameOntoDirError(t *testing.T, err error, path string) {
+	t.Helper()
+	pattern := "^EISDIR: illegal operation on a directory, rename '" + regexp.QuoteMeta(path) + `\.tmp-[0-9]+' -> '` + regexp.QuoteMeta(path) + "'$"
+	if err == nil || !regexp.MustCompile(pattern).MatchString(err.Error()) {
+		t.Fatalf("error = %v, want a match for %s", err, pattern)
+	}
+	if temps, _ := filepath.Glob(path + ".tmp*"); len(temps) > 0 {
+		t.Errorf("temps left by the failed rename: %v", temps)
 	}
 }

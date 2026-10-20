@@ -80,15 +80,7 @@ func WriteFile(path string, data []byte) error {
 	if err != nil {
 		return FileError(err, "open", path)
 	}
-	_, writeErr := f.Write(data)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return FileError(writeErr, "write", "")
-	}
-	if closeErr != nil {
-		return FileError(closeErr, "close", "")
-	}
-	return nil
+	return writeAndClose(f, data)
 }
 
 // AppendFile mirrors fs.appendFileSync(path, data): open for appending, creating the file with
@@ -98,15 +90,7 @@ func AppendFile(path string, data []byte) error {
 	if err != nil {
 		return FileError(err, "open", path)
 	}
-	_, writeErr := f.Write(data)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return FileError(writeErr, "write", "")
-	}
-	if closeErr != nil {
-		return FileError(closeErr, "close", "")
-	}
-	return nil
+	return writeAndClose(f, data)
 }
 
 // ReadJSONOrNull is `try { return JSON.parse(fs.readFileSync(path, "utf8")) } catch { return
@@ -132,41 +116,125 @@ func ReadJSON(path string) (value any, ok bool) {
 	return value, true
 }
 
-// ReplaceFile is the write-then-rename of the JS writeJson helpers: writeFileSync(path +
-// ".tmp", data), then renameSync onto path, so readers see the old or the new content and
-// never a partial file. A failed rename leaves the .tmp file, as in the JS.
-func ReplaceFile(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := WriteFile(tmp, data); err != nil {
+// WritePrivateFile replaces path with data, owner-only and atomically (PE-21). data goes to a
+// sibling `<base>.tmp-<random>` created exclusively with mode 0600, so a file or symlink planted
+// at that name is never opened and concurrent writers never share a temp; the temp is then
+// renamed over path, so a symlink at path is replaced, not followed, and readers see the old or
+// the new content, never a partial file. On any failure the temp is removed. The JS writes the
+// fixed `<file>.tmp` with writeFileSync and leaves it behind when the rename fails.
+func WritePrivateFile(path string, data []byte) error {
+	// filepath.Dir, not Split: an empty dir would make CreateTemp use the system temp dir, and
+	// the rename would then cross directories or file systems.
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return FileError(err, "open", path+".tmp-*")
+	}
+	tmp := f.Name()
+	if err := writeAndClose(f, data); err != nil {
+		removeTemp(tmp)
 		return err
 	}
 	// rename(2) itself: os.Rename refuses a directory target with EEXIST before trying,
 	// where Node reports the EISDIR the system call gives.
 	if err := syscall.Rename(tmp, path); err != nil {
+		removeTemp(tmp)
 		return RenameError(err, tmp, path)
 	}
 	return nil
 }
 
+// writeAndClose writes data to f and closes it, reporting the failure as Node words a write.
+func writeAndClose(f *os.File, data []byte) error {
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return FileError(writeErr, "write", "")
+	}
+	if closeErr != nil {
+		return FileError(closeErr, "close", "")
+	}
+	return nil
+}
+
+// removeTemp deletes a temp WritePrivateFile failed to rename. The write's own failure is what
+// the caller reports; a temp that cannot be removed is harmless to later writes, whose temp
+// names are unique, so its removal error is deliberately not reported.
+func removeTemp(tmp string) {
+	_ = os.Remove(tmp)
+}
+
+// OpenPrivateAppend opens path for appending, creating it with mode 0600 (PE-21). A symlink at
+// path is refused (ELOOP), never followed. An existing file keeps its mode.
+func OpenPrivateAppend(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, FileError(err, "open", path)
+	}
+	return f, nil
+}
+
+// AppendPrivateFile is AppendFile through OpenPrivateAppend: one write to a 0600 file that is
+// never reached through a symlink (PE-21).
+func AppendPrivateFile(path string, data []byte) error {
+	f, err := OpenPrivateAppend(path)
+	if err != nil {
+		return err
+	}
+	return writeAndClose(f, data)
+}
+
 // MkdirAll mirrors fs.mkdirSync(dir, {recursive: true}), failing with Node's errno and message.
 func MkdirAll(dir string) error {
-	if err := mkdirRecursive(dir); err != nil {
+	if err := mkdirRecursive(dir, 0o777); err != nil {
 		return FileError(err, "mkdir", dir)
 	}
 	return nil
+}
+
+// MkdirPrivate is MkdirAll with the leaf directory created 0700 (PE-21); missing parents are
+// created as MkdirAll creates them. An existing leaf owned by this user that grants group or
+// other access is tightened to 0700. That chmod is best-effort: the 0600 file modes are the
+// real protection, and a directory that cannot be tightened must not stop a worker or a run.
+func MkdirPrivate(dir string) error {
+	if err := mkdirRecursive(dir, 0o700); err != nil {
+		return FileError(err, "mkdir", dir)
+	}
+	tightenOwnDir(dir)
+	return nil
+}
+
+// tightenOwnDir chmods dir to 0700 when this user owns it and it grants group or other access.
+// Failures are ignored by design; see MkdirPrivate.
+func tightenOwnDir(dir string) {
+	info, err := os.Lstat(dir)
+	// A symlinked leaf is left alone: PE-21 never follows a planted symlink, and chmod would
+	// tighten the target (a user's shared storage, or their home directory).
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 == 0 {
+		return
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int(stat.Uid) != os.Getuid() {
+		return
+	}
+	_ = os.Chmod(dir, 0o700)
 }
 
 // mkdirRecursive mirrors Node's fs.mkdirSync(dir, {recursive: true}) (MKDirpSync in
 // node_file.cc) so the errno matches Node's: os.MkdirAll stats before creating, so a regular file
 // at dir reports ENOTDIR and a dangling or looping symlink reports EEXIST, where Node reports
 // EEXIST, ENOENT and ELOOP. Node reports every failure against the requested dir; the caller does.
-func mkdirRecursive(dir string) error {
+// dir itself is created with leafMode, its missing parents with 0777, both less the umask.
+func mkdirRecursive(dir string, leafMode os.FileMode) error {
+	leaf := filepath.Clean(dir)
 	pending := []string{dir}
 	for len(pending) > 0 {
 		path := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
+		mode := os.FileMode(0o777)
+		if filepath.Clean(path) == leaf {
+			mode = leafMode
+		}
 		var errno syscall.Errno // stays 0 when Mkdir succeeds
-		if err := os.Mkdir(path, 0o777); err != nil && !errors.As(err, &errno) {
+		if err := os.Mkdir(path, mode); err != nil && !errors.As(err, &errno) {
 			return err
 		}
 		switch errno {

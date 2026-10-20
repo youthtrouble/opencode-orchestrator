@@ -28,6 +28,8 @@ func TestWriteNamesTheFile(t *testing.T) {
 		{"array id joined", `{"harness":"h","session_id":["a","b"]}`, "2026-10-19T01-02-03-004Z-h-a,b.json"},
 		{"array id sliced by element", `{"harness":"h","thread_id":["0123456789",1,2,3,4,5,6,7,8]}`, "2026-10-19T01-02-03-004Z-h-0123456789,1,2,3,4,5,6,7.json"},
 		{"array id elements coerced", `{"harness":"h","thread_id":[["x","y"],null,{"k":1},1.5,true]}`, "2026-10-19T01-02-03-004Z-h-x,y,,[object Object],1.5,true.json"},
+		{"slashes in a string id stay in runs/", `{"harness":"h","thread_id":"/../../x"}`, "2026-10-19T01-02-03-004Z-h-_.._.._x.json"},
+		{"slashes in an array id stay in runs/", `{"harness":"h","thread_id":["a/../../b"]}`, "2026-10-19T01-02-03-004Z-h-a_.._.._b.json"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -60,7 +62,8 @@ func TestWriteRejectsFieldsWithoutTheStringMethod(t *testing.T) {
 	}
 }
 
-func TestWriteOverwritesWithMode0644UnderUmask022(t *testing.T) {
+// Records hold prompts and answers: owner-only under a permissive umask (PE-21).
+func TestWriteOverwritesOwnerOnlyUnderUmask022(t *testing.T) {
 	old := syscall.Umask(0o022)
 	defer syscall.Umask(old)
 	root := t.TempDir()
@@ -79,12 +82,57 @@ func TestWriteOverwritesWithMode0644UnderUmask022(t *testing.T) {
 	if want := "{\n  \"started_at\": \"s\",\n  \"harness\": \"h\",\n  \"thread_id\": \"t\",\n  \"n\": 1\n}\n"; string(data) != want {
 		t.Errorf("content = %q, want the second record only", data)
 	}
-	info, err := os.Stat(file)
+	wantPerm(t, file, 0o600)
+	wantPerm(t, filepath.Dir(file), 0o700)
+}
+
+func TestWriteTightensAnExistingRunsDirectory(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	root := t.TempDir()
+	runs := filepath.Join(root, ".orchestrator", "runs")
+	if err := os.MkdirAll(runs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write(root, mustObject(t, `{"harness":"h"}`), testNow); err != nil {
+		t.Fatal(err)
+	}
+	wantPerm(t, runs, 0o700)
+}
+
+func TestWriteReplacesAPlantedSymlinkWithoutFollowingIt(t *testing.T) {
+	root := t.TempDir()
+	runs := filepath.Join(root, ".orchestrator", "runs")
+	if err := os.MkdirAll(runs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(root, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(runs, "s-h-t.json")
+	if err := os.Symlink(victim, file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write(root, mustObject(t, `{"started_at":"s","harness":"h","thread_id":"t"}`), testNow); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(file); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("record = %v, %v; want a regular file", info, err)
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "keep" {
+		t.Errorf("symlink target = %q, want it untouched", data)
+	}
+}
+
+func wantPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("mode = %v, want 0644", info.Mode().Perm())
+	if got := info.Mode().Perm(); got != want {
+		t.Errorf("%s: mode %v, want %v", path, got, want)
 	}
 }
 
@@ -104,6 +152,8 @@ func TestWriteMatchesNode(t *testing.T) {
 		{"proj", `{"started_at":"s","harness":"h","thread_id":[],"session_id":"fallback"}`},
 		{"proj", `{"started_at":"s","harness":"h","thread_id":0,"session_id":["0123456789abcdef",1,2,3,4,5,6,7,8,9]}`},
 		{"proj", `{"started_at":"s","harness":"h","thread_id":[["x","y"],null,{"k":1},1.5,true,"😀😀😀😀😀"]}`},
+		{"proj", `{"started_at":"s","harness":"h","thread_id":"/../../x"}`},
+		{"proj", `{"started_at":"s","harness":"h","thread_id":["a/../../b"]}`},
 	}
 	for _, c := range cases {
 		jsDir, goDir := t.TempDir(), t.TempDir()

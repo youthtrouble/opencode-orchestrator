@@ -58,8 +58,9 @@ func readJSON(path string, fallback func() any) any {
 // emptyObject is the `{}` fallback.
 func emptyObject() any { return jsjson.NewObject() }
 
-// writeJSON is the JS writeJson(f, v): mkdir the parent, then write `<f>.tmp` and rename it
-// onto f.
+// writeJSON is the JS writeJson(f, v): mkdir the parent, then replace f. The JS writes `<f>.tmp`
+// and renames it; orch writes a private, uniquely named temp instead (PE-21), so a planted
+// symlink is not followed and a worker publishing the same lane file never shares the temp.
 func writeJSON(path string, value any) error {
 	if err := nodefs.MkdirAll(filepath.Dir(path)); err != nil {
 		return err
@@ -68,7 +69,7 @@ func writeJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return nodefs.ReplaceFile(path, append(data, '\n'))
+	return nodefs.WritePrivateFile(path, append(data, '\n'))
 }
 
 // asObject reads a document the supervisor mutates: an object as it is, an array as {}

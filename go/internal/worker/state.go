@@ -21,11 +21,10 @@ func (p Project) NewState(fields *jsjson.Object, now func() time.Time) *State {
 }
 
 // Publish is the JS publish(state, changes): Object.assign(state, changes, {updated_at}), then
-// the whole state is written to `<lane>.json.tmp` and renamed onto `<lane>.json`. Only after a
-// successful write is state_storage set to "available", so the file shows it from the second
-// write on. A failure never stops the worker: it sets state_storage "unavailable" and
-// last_state_write_error (Node's err.code), which stays after a later write succeeds, and a
-// failed rename leaves the .tmp file.
+// the whole state is written to `<lane>.json` through a private temp and a rename (PE-21). Only
+// after a successful write is state_storage set to "available", so the file shows it from the
+// second write on. A failure never stops the worker: it sets state_storage "unavailable" and
+// last_state_write_error (Node's err.code), which stays after a later write succeeds.
 func (s *State) Publish(changes *jsjson.Object) {
 	for _, key := range changes.Keys() {
 		value, _ := changes.Get(key)
@@ -40,9 +39,11 @@ func (s *State) Publish(changes *jsjson.Object) {
 	s.Fields.Set("state_storage", "available")
 }
 
-// write is the try block of publish: mkdir, write the .tmp file, rename it onto the state file.
+// write is the try block of publish: mkdir, then replace the state file. The state holds
+// prompts and errors, and the supervisor may rewrite it concurrently, so the directory and file
+// are owner-only and each write uses its own temp (PE-21).
 func (s *State) write() error {
-	if err := nodefs.MkdirAll(s.project.WorkersDir); err != nil {
+	if err := nodefs.MkdirPrivate(s.project.WorkersDir); err != nil {
 		return err
 	}
 	data, err := jsjson.MarshalIndent(s.Fields, "  ")
@@ -50,5 +51,5 @@ func (s *State) write() error {
 		return err
 	}
 	file := s.project.StatePath(jsjson.Path(s.Fields, "lane")) // a worker's lane is never null
-	return nodefs.ReplaceFile(file, append(data, '\n'))
+	return nodefs.WritePrivateFile(file, append(data, '\n'))
 }

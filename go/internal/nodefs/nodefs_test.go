@@ -1,9 +1,14 @@
 package nodefs
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -80,7 +85,7 @@ func TestMkdirRecursiveMatchesNodeErrno(t *testing.T) {
 			root := t.TempDir()
 			tc.seed(t, root)
 			dir := filepath.Join(root, "a/b")
-			err := mkdirRecursive(dir)
+			err := mkdirRecursive(dir, 0o777)
 			if tc.want == 0 {
 				if err != nil {
 					t.Fatalf("got %v, want success", err)
@@ -260,35 +265,276 @@ func TestReadJSONOrNullReadsAnyValueAndNilOnFailure(t *testing.T) {
 	}
 }
 
-// Probed with Node v26.5.1: renameSync onto a directory prints
-// "Error: EISDIR: illegal operation on a directory, rename '<from>' -> '<to>'".
-func TestReplaceFileLeavesTheTmpFileAndNamesBothPathsOnAFailedRename(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "acks.json")
-	if err := os.Mkdir(target, 0o755); err != nil {
+// withUmask022 runs the rest of the test under umask 022, so a mode the code asks for is not
+// masked by the caller's own umask. Tests using it must not run in parallel: the umask is
+// process-wide.
+func withUmask022(t *testing.T) {
+	t.Helper()
+	old := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(old) })
+}
+
+func wantMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	err := ReplaceFile(target, []byte("{}\n"))
-	want := "EISDIR: illegal operation on a directory, rename '" + target + ".tmp' -> '" + target + "'"
-	if err == nil || err.Error() != want || Code(err) != "EISDIR" {
-		t.Fatalf("ReplaceFile onto a directory = %v (code %q), want %q", err, Code(err), want)
-	}
-	if data, err := os.ReadFile(target + ".tmp"); err != nil || string(data) != "{}\n" {
-		t.Errorf(".tmp = %q, %v; want the data left behind", data, err)
+	if got := info.Mode().Perm(); got != want || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("%s: mode %v, want a regular %v", path, info.Mode(), want)
 	}
 }
 
-func TestReplaceFileReplacesTheContent(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "state.json")
-	writeFile(t, target)
-	if err := ReplaceFile(target, []byte("new\n")); err != nil {
+func wantNoTemps(t *testing.T, dir string) {
+	t.Helper()
+	if temps, _ := filepath.Glob(filepath.Join(dir, "*.tmp-*")); len(temps) > 0 {
+		t.Errorf("temps left behind: %v", temps)
+	}
+}
+
+func TestWritePrivateFileReplacesTheContentOwnerOnly(t *testing.T) {
+	withUmask022(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "state.json")
+	writeFile(t, target) // 0644, as the JS left it
+	if err := WritePrivateFile(target, []byte("new\n")); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(target); string(data) != "new\n" {
 		t.Errorf("content = %q", data)
 	}
-	if Exists(target + ".tmp") {
-		t.Error(".tmp left after a successful rename")
+	wantMode(t, target, 0o600)
+	wantNoTemps(t, dir)
+}
+
+func TestWritePrivateFileReplacesAPlantedSymlinkWithoutFollowingIt(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "state.json")
+	symlink(t, victim, target)
+	if err := WritePrivateFile(target, []byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	wantMode(t, target, 0o600)
+	if data, _ := os.ReadFile(victim); string(data) != "keep" {
+		t.Errorf("symlink target = %q, want it untouched", data)
+	}
+}
+
+func TestWritePrivateFileKeepsTheTempBesideARelativePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := WritePrivateFile("state.json", []byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(dir, "state.json")); string(data) != "new\n" {
+		t.Errorf("content = %q", data)
+	}
+}
+
+// The JS and the old Go wrote the fixed `<file>.tmp`; whatever sits there now (a leftover, or a
+// symlink planted to redirect the write) is neither opened nor removed.
+func TestWritePrivateFileLeavesTheOldFixedTmpNameAlone(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(target+".tmp", []byte("planted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePrivateFile(target, []byte("new\n")); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(target); string(data) != "new\n" {
+		t.Errorf("content = %q", data)
+	}
+	if data, _ := os.ReadFile(target + ".tmp"); string(data) != "planted" {
+		t.Errorf(".tmp = %q, want it untouched", data)
+	}
+}
+
+// Two writers (a worker publishing while the supervisor redispatches its lane) each use their
+// own temp, so a reader only ever sees one writer's complete document.
+func TestWritePrivateFileConcurrentWritersNeverMixContent(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "lane.json")
+	if err := WritePrivateFile(target, []byte(`{"writer":"seed"}`)); err != nil {
+		t.Fatal(err)
+	}
+	const writes = 200
+	var writers sync.WaitGroup
+	errs := make(chan error, 2*writes)
+	for _, writer := range []string{"a", "b"} {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			for i := range writes {
+				doc := fmt.Sprintf(`{"writer":%q,"n":%d,"pad":%q}`, writer, i, strings.Repeat(writer, 4096))
+				if err := WritePrivateFile(target, []byte(doc)); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	stop := make(chan struct{})
+	reads := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				reads <- nil
+				return
+			default:
+			}
+			data, err := os.ReadFile(target)
+			if err == nil && !json.Valid(data) {
+				err = fmt.Errorf("read a mixed or partial document: %.80q", data)
+			}
+			if err != nil {
+				reads <- err
+				return
+			}
+		}
+	}()
+	writers.Wait()
+	close(stop)
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if err := <-reads; err != nil {
+		t.Error(err)
+	}
+	wantNoTemps(t, dir)
+}
+
+// Probed with Node v26.5.1: renameSync onto a directory prints
+// "Error: EISDIR: illegal operation on a directory, rename '<from>' -> '<to>'". The temp named is
+// orch's own, and it is removed (PE-21: the JS names and leaves `<file>.tmp`).
+func TestWritePrivateFileNamesAndRemovesTheTempOnAFailedRename(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "acks.json")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := WritePrivateFile(target, []byte("{}\n"))
+	pattern := "^EISDIR: illegal operation on a directory, rename '" + regexp.QuoteMeta(target) + `\.tmp-[0-9]+' -> '` + regexp.QuoteMeta(target) + "'$"
+	if err == nil || !regexp.MustCompile(pattern).MatchString(err.Error()) || Code(err) != "EISDIR" {
+		t.Fatalf("WritePrivateFile onto a directory = %v (code %q), want a match for %s", err, Code(err), pattern)
+	}
+	wantNoTemps(t, dir)
+}
+
+func TestWritePrivateFileReportsAMissingDirectoryAgainstTheTempPattern(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "missing", "state.json")
+	err := WritePrivateFile(target, nil)
+	if want := "ENOENT: no such file or directory, open '" + target + ".tmp-*'"; err == nil || err.Error() != want {
+		t.Fatalf("WritePrivateFile = %v, want %q", err, want)
+	}
+}
+
+func TestMkdirPrivateCreatesTheLeafOwnerOnly(t *testing.T) {
+	withUmask022(t)
+	root := t.TempDir()
+	leaf := filepath.Join(root, "parent", "runs")
+	if err := MkdirPrivate(leaf); err != nil {
+		t.Fatal(err)
+	}
+	wantMode(t, leaf, 0o700)
+	wantMode(t, filepath.Dir(leaf), 0o755) // parents as MkdirAll makes them
+}
+
+func TestMkdirPrivateTightensAnExistingDirectoryOfOurs(t *testing.T) {
+	withUmask022(t)
+	leaf := filepath.Join(t.TempDir(), "runs")
+	if err := os.Mkdir(leaf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := MkdirPrivate(leaf); err != nil {
+		t.Fatal(err)
+	}
+	wantMode(t, leaf, 0o700)
+}
+
+func TestMkdirPrivateLeavesASymlinkedLeafsTargetAlone(t *testing.T) {
+	withUmask022(t)
+	root := t.TempDir()
+	target := filepath.Join(root, "shared")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(root, "runs")
+	if err := os.Symlink(target, leaf); err != nil {
+		t.Fatal(err)
+	}
+	if err := MkdirPrivate(leaf); err != nil {
+		t.Fatalf("MkdirPrivate = %v, want nil as MkdirAll gives (%v)", err, MkdirAll(leaf))
+	}
+	wantMode(t, target, 0o755)
+}
+
+func TestMkdirPrivateFailsAsMkdirAllDoes(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "runs")
+	writeFile(t, file)
+	err := MkdirPrivate(file)
+	if want := MkdirAll(file); err == nil || want == nil || err.Error() != want.Error() {
+		t.Fatalf("MkdirPrivate = %v, want MkdirAll's %v", err, want)
+	}
+}
+
+func TestAppendPrivateFileCreatesAnOwnerOnlyFileAndAppends(t *testing.T) {
+	withUmask022(t)
+	file := filepath.Join(t.TempDir(), "supervisor.log")
+	for _, line := range []string{"one\n", "two\n"} {
+		if err := AppendPrivateFile(file, []byte(line)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data, _ := os.ReadFile(file); string(data) != "one\ntwo\n" {
+		t.Errorf("content = %q", data)
+	}
+	wantMode(t, file, 0o600)
+}
+
+func TestOpenPrivateAppendRefusesASymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "supervisor.log")
+	symlink(t, victim, link)
+	f, err := OpenPrivateAppend(link)
+	if err == nil {
+		f.Close()
+	}
+	if want := "ELOOP: too many symbolic links encountered, open '" + link + "'"; err == nil || err.Error() != want {
+		t.Fatalf("OpenPrivateAppend = %v, want %q", err, want)
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "keep" {
+		t.Errorf("symlink target = %q, want it untouched", data)
+	}
+}
+
+func TestOpenPrivateAppendKeepsAppending(t *testing.T) {
+	withUmask022(t)
+	file := filepath.Join(t.TempDir(), "supervisor.log")
+	if err := os.WriteFile(file, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := OpenPrivateAppend(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("new\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(file); string(data) != "old\nnew\n" {
+		t.Errorf("content = %q", data)
 	}
 }
 

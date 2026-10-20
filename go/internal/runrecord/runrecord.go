@@ -26,10 +26,11 @@ var ErrNoStringMethod = errors.New("run record field lacks the string method the
 // <projectRoot>/.orchestrator/runs/<stamp>-<harness>-<id>.json, replacing any file of that
 // name, and returns that path. stamp is started_at (now when it is absent or empty) with every
 // ':' and '.' replaced by '-'; harness is `${record.harness}` ("undefined" when absent); id is
-// runID's.
+// runID's. Every '/' in the name becomes '_', so a session id cannot place the file outside
+// runs/. Records hold prompts and answers, so runs/ and the record are owner-only (PE-21).
 func Write(projectRoot string, record *jsjson.Object, now time.Time) (string, error) {
 	dir := paths.RunsDir(projectRoot)
-	if err := nodefs.MkdirAll(dir); err != nil {
+	if err := nodefs.MkdirPrivate(dir); err != nil {
 		return "", err
 	}
 	startedAt, err := stringOr(record, "started_at", jsjson.ISOString(now))
@@ -46,8 +47,9 @@ func Write(projectRoot string, record *jsjson.Object, now time.Time) (string, er
 	if err != nil {
 		return "", err
 	}
-	file := filepath.Join(dir, fmt.Sprintf("%s-%s-%s.json", stamp, harness, id))
-	if err := nodefs.WriteFile(file, append(data, '\n')); err != nil {
+	name := strings.ReplaceAll(fmt.Sprintf("%s-%s-%s", stamp, harness, id), "/", "_")
+	file := filepath.Join(dir, name+".json")
+	if err := nodefs.WritePrivateFile(file, append(data, '\n')); err != nil {
 		return "", err
 	}
 	return file, nil

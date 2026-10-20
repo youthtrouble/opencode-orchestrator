@@ -4,6 +4,7 @@ package parity
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,6 @@ func (h *harness) testSupervisor(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	const orchestratorIsFile = "Error: EEXIST: file already exists, mkdir '$PROJECT/.orchestrator'"
 	const stopIsDir = "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/supervisor.stop'"
-	const acksIsDir = "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/supervisor-acks.json.tmp' -> '$PROJECT/.orchestrator/supervisor-acks.json'"
 	events := seedSupervisorState(`{"events":{"e1":{"status":"queued"},"e2":{"status":"queued"},"zero":0},"lanes":{}}`)
 	ack := func(extra ...string) []string { return append([]string{"ack"}, extra...) }
 	cases := []supervisorCase{
@@ -114,16 +114,41 @@ func (h *harness) testSupervisor(t *testing.T) {
 		{name: "ack/acks-null", args: ack("--event", "e1"), seed: seeds(events, seedAcks(`null`)), crash: crashC1, errorLine: "TypeError: Cannot set properties of null (setting 'e1')"},
 		{name: "ack/acks-number", args: ack("--event", "e1"), seed: seeds(events, seedAcks(`5`)), crash: crashC1, errorLine: "TypeError: Cannot create property 'e1' on number '5'"},
 		{name: "ack/acks-unparsable", args: ack("--event", "e1"), seed: seeds(events, seedAcks(`{`))},
-		{name: "ack/acks-directory", args: ack("--event", "e1"), seed: seeds(events, seedProjectDir(".orchestrator/supervisor-acks.json")), crash: crashC1, errorLine: acksIsDir},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.supervisorInvocation(c)) })
 	}
+	t.Run("ack/PE-21-acks-directory", h.testSupervisorAckAcksDirectory)
 	t.Run("ack/PE-16-string-events", h.testSupervisorAckStringEvents)
 	t.Run("ack/PE-16-array-acks", h.testSupervisorAckArrayAcks)
 	t.Run("cross-runtime", h.testSupervisorCrossRuntime)
 	t.Run("serve", h.testSupervisorServe)
 	t.Run("start", h.testSupervisorStart)
+}
+
+// acksIsDir is the JS crash line of an ack whose acks file is a directory: the rename of the
+// fixed temp fails.
+const acksIsDir = "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/supervisor-acks.json.tmp' -> '$PROJECT/.orchestrator/supervisor-acks.json'"
+
+// testSupervisorAckAcksDirectory asserts PE-21 over an acks file that is a directory: both
+// runtimes die of the rename's EISDIR (C1), but orch's line names its own
+// `<acks>.tmp-<random>`, which it removes, where the JS names and leaves `<acks>.tmp`.
+func (h *harness) testSupervisorAckAcksDirectory(t *testing.T) {
+	js, orch := h.runPair(t, h.supervisorInvocation(supervisorCase{
+		args:      []string{"ack", "--event", "e1"},
+		seed:      seeds(seedSupervisorState(`{"events":{"e1":{"status":"queued"}}}`), seedProjectDir(".orchestrator/supervisor-acks.json")),
+		errorLine: acksIsDir, // its $PROJECT has runPair spell the sandbox path in stderr
+	}))
+	orchLine := "^" + strings.Replace(regexp.QuoteMeta(acksIsDir), `\.tmp'`, `\.tmp-[0-9]+'`, 1) + "\n$"
+	if !regexp.MustCompile(orchLine).MatchString(orch.stderr) {
+		t.Errorf("orch stderr = %q, want a match for %s", orch.stderr, orchLine)
+	}
+	assertPE21FailedRename(t, &js, &orch, "project/supervisor-acks.json", `"e1"`)
+	if err := crashError(crashC1, acksIsDir, js, orch); err != nil {
+		t.Error(err)
+	}
+	js.stderr, orch.stderr = "", ""
+	compareOutcomes(t, js, orch)
 }
 
 // testSupervisorAckStringEvents asserts PE-16(4): with events "ab", the JS acknowledges

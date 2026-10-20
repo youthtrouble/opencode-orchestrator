@@ -196,8 +196,25 @@ func TestPublishKeyOrderAcrossWrites(t *testing.T) {
 	if got := readText(t, file); got != want {
 		t.Errorf("second write:\n%s\nwant:\n%s", got, want)
 	}
-	if _, err := os.Stat(file + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf(".tmp left after a successful write: %v", err)
+	if temps, _ := filepath.Glob(file + ".tmp*"); len(temps) > 0 {
+		t.Errorf("temps left after a successful write: %v", temps)
+	}
+}
+
+// Worker state holds prompts and errors: owner-only under a permissive umask (PE-21).
+func TestPublishWritesOwnerOnly(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	p := NewProject(t.TempDir())
+	newTestState(p).Publish(changes())
+	for path, want := range map[string]os.FileMode{p.StatePath("a"): 0o600, p.WorkersDir: 0o700} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s: mode %v, want %v", path, got, want)
+		}
 	}
 }
 
@@ -213,8 +230,8 @@ func TestPublishFailureIsRecordedAndNeverFatal(t *testing.T) {
 	if got := marshal(t, s.Fields); got != `{"lane":"a","status":"running","pid":42,"updated_at":"2026-10-19T12:00:01.000Z","state_storage":"unavailable","last_state_write_error":"EISDIR"}` {
 		t.Errorf("state after a failed write: %s", got)
 	}
-	if got := readText(t, file+".tmp"); !strings.Contains(got, `"status": "running"`) {
-		t.Errorf(".tmp not left by the failed rename: %q", got)
+	if temps, _ := filepath.Glob(file + ".tmp*"); len(temps) > 0 {
+		t.Errorf("temps left by the failed rename (PE-21: the JS leaves <file>.tmp): %v", temps)
 	}
 
 	if err := os.Remove(file); err != nil {
@@ -237,26 +254,6 @@ func TestPublishMkdirFailureRecordsTheCode(t *testing.T) {
 	s.Publish(changes())
 	if got, _ := s.Fields.Get("last_state_write_error"); got != "ENOTDIR" {
 		t.Errorf("last_state_write_error = %v, want ENOTDIR", got)
-	}
-}
-
-func TestPublishFileModeIsUmaskedDefault(t *testing.T) {
-	dir := t.TempDir()
-	reference := filepath.Join(dir, "reference")
-	f, err := os.OpenFile(reference, os.O_CREATE|os.O_WRONLY, 0o666)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	p := NewProject(dir)
-	newTestState(p).Publish(changes())
-	want, _ := os.Stat(reference)
-	got, err := os.Stat(p.StatePath("a"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Mode().Perm() != want.Mode().Perm() {
-		t.Errorf("mode %v, want %v (0666 less the umask)", got.Mode().Perm(), want.Mode().Perm())
 	}
 }
 

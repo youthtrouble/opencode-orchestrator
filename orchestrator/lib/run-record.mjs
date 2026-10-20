@@ -14,7 +14,9 @@ export function writeRunRecord(projectRoot, record) {
   fs.mkdirSync(dir, { recursive: true });
   const stamp = (record.started_at || new Date().toISOString()).replace(/[:.]/g, "-");
   const id = (record.thread_id || record.session_id || "run").slice(0, 8);
-  const file = path.join(dir, `${stamp}-${record.harness}-${id}.json`);
+  // A session id must not place the record outside runs/.
+  const name = `${stamp}-${record.harness}-${id}`.replace(/\//g, "_");
+  const file = path.join(dir, `${name}.json`);
   fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n");
   return file;
 }

@@ -451,7 +451,7 @@ func TestTickThrowSites(t *testing.T) {
 		f.worker("b1", `"status": "failed"`)
 		state, err := f.tick(`{}`)
 		path := f.path("supervisor-state.json")
-		wantError(t, err, "EISDIR: illegal operation on a directory, rename '"+path+".tmp' -> '"+path+"'")
+		wantRenameOntoDirError(t, err, path)
 		if nodefs.ErrorCode(err) != "EISDIR" || len(f.messages()) != 0 || jsjson.Path(state, "events", "run-b1:failed", "status") != "intent_persisted" {
 			t.Errorf("state = %s", compact(t, state))
 		}
