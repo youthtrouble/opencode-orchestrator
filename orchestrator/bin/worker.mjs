@@ -33,6 +33,8 @@ const laneOf = () => opts.lane || (opts.brief ? path.basename(opts.brief).replac
 const statePath = (lane) => path.join(workersDir, `${lane}.json`);
 const lockPath = (lane) => path.join(workersDir, `${lane}.lock`);
 
+// A lane names its state, lock and log files; a "/" would let it name a file outside workers/ or logs/.
+function refuseUnsafeLane(lane) { if (`${lane}`.includes("/")) { console.error('lane must not contain "/"'); process.exit(2); } }
 function readState(lane) { try { return JSON.parse(fs.readFileSync(statePath(lane), "utf8")); } catch { return null; } }
 function alive(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }
 function publish(state, changes) {
@@ -42,12 +44,14 @@ function publish(state, changes) {
 }
 
 if (cmd === "status") {
+  refuseUnsafeLane(opts.lane);
   const lanes = opts.lane ? [opts.lane] : fs.existsSync(workersDir) ? fs.readdirSync(workersDir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")) : [];
   const out = lanes.map((lane) => { const s = readState(lane) || { lane, status: "unknown" }; return { ...s, process_alive: alive(s.pid), lock_present: fs.existsSync(lockPath(lane)) }; });
   console.log(JSON.stringify(out, null, 2));
   process.exit(0);
 }
 if (cmd === "stop") {
+  refuseUnsafeLane(opts.lane);
   const lane = opts.lane; const s = readState(lane);
   if (!s || !alive(s.pid)) { console.log(JSON.stringify({ lane, stopped: false, reason: "no live worker" })); process.exit(0); }
   try { process.kill(-s.pid, "SIGINT"); } catch { process.kill(s.pid, "SIGINT"); }
@@ -61,6 +65,7 @@ if (!fs.existsSync(brief) || !brief.endsWith(".md")) { console.error("brief must
 const lane = laneOf();
 const harness = opts.harness;
 if (!["codex", "claude", "opencode"].includes(harness)) { console.error("harness must be codex, claude or opencode"); process.exit(2); }
+refuseUnsafeLane(lane);
 
 if (opts.detach) {
   // Fail fast if the lane is already owned by a live process: callers (flip.mjs) rely on seeing "lane locked"
@@ -74,7 +79,7 @@ if (opts.detach) {
   const runId = crypto.randomUUID();
   const logPath = path.join(logsDir, `${lane}-${runId.slice(0, 8)}.log`);
   const fd = fs.openSync(logPath, "wx", 0o600);
-  const args = [fileURLToPath(import.meta.url), ...process.argv.slice(2).filter((a) => a !== "--detach"), "--log-path", logPath, "--run-id", runId];
+  const args = [fileURLToPath(import.meta.url), ...process.argv.slice(2).filter((a) => a !== "--detach"), "--log-path", logPath, "--run-id", runId, "--cwd", root]; // the runner runs in root: a relative --cwd must not apply twice
   let keepAwake = true; try { keepAwake = loadRegistry().runtime?.keep_awake !== false; } catch { /* default on */ }
   const wrapped = keepAwakeWrap(process.execPath, args, { enabled: keepAwake });
   const child = spawn(wrapped.cmd, wrapped.args, { cwd: root, detached: true, stdio: ["ignore", fd, fd] });

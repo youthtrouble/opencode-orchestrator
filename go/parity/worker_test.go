@@ -25,11 +25,16 @@ type workerCase struct {
 	victims *victims
 }
 
-// workerStatePid is a stored pid in stop output and state files, rewritten for the cases whose
-// pid is a victim started per runtime.
-var workerStatePid = regexp.MustCompile(`("pid": ?"?)\d+`)
+// workerStatePid is a stored pid in stop output and state files, and workerLockPid the whole
+// text of a lock, rewritten for the cases whose pid is a victim started per runtime.
+var (
+	workerStatePid = regexp.MustCompile(`("pid": ?"?)\d+`)
+	workerLockPid  = regexp.MustCompile(`^\d+$`)
+)
 
-func normalizeVictimPid(s string) string { return workerStatePid.ReplaceAllString(s, "${1}<pid>") }
+func normalizeVictimPid(s string) string {
+	return workerLockPid.ReplaceAllString(workerStatePid.ReplaceAllString(s, "${1}<pid>"), "<pid>")
+}
 
 func (h *harness) workerInvocation(c workerCase) invocation {
 	inv := invocation{
@@ -53,7 +58,12 @@ func seedWorkerState(lane, content string) seed {
 }
 
 func seedWorkerLock(lane string) seed {
-	return seedProjectFile(".orchestrator/workers/"+lane+".lock", "1")
+	return seedWorkerLockHolding(lane, "1")
+}
+
+// seedWorkerLockHolding writes the lane's lock holding pid as text, as a worker claims it.
+func seedWorkerLockHolding(lane, pid string) seed {
+	return seedProjectFile(".orchestrator/workers/"+lane+".lock", pid)
 }
 
 func seedProjectDir(rel string) seed {
@@ -62,7 +72,8 @@ func seedProjectDir(rel string) seed {
 
 // testWorker compares `orch worker start|status|stop` and its usage errors with bin/worker.mjs.
 // Status only sends signal 0, so any pid is safe there; stop signals only victims the case
-// started itself. Stop of the pids the JS would turn into kill(-1) runs orch only (PE-14).
+// started itself. Stop of the pids the JS would turn into kill(-1) (PE-14), and of a live pid
+// without its lock (PE-23), runs orch only.
 func (h *harness) testWorker(t *testing.T) {
 	live := strconv.Itoa(os.Getpid())
 	dead := strconv.Itoa(reapedPid(t))
@@ -104,11 +115,18 @@ func (h *harness) testWorker(t *testing.T) {
 			errorLine: "Error: ENOTDIR: not a directory, scandir '$PROJECT/.orchestrator/workers'"},
 		{name: "status/cwd-bare", args: []string{"status", "--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 		{name: "status/cwd-relative", args: []string{"status", "--cwd", "sub"}, seed: seedProjectFile("sub/.orchestrator/workers/s.json", `{"lane":"s"}`)},
+		// Sol S2/R8: a lane with a slash is refused before anything is read; ".." stays a name
+		// inside workers/ ("...json").
+		{name: "status/lane-traversal", args: []string{"status", "--lane", "../flip"}, seed: seedProjectFile(".orchestrator/flip.json", `{"lane":"w","status":"running","pid":`+dead+`}`)},
+		{name: "status/lane-absolute", args: []string{"status", "--lane", "/etc/hosts"}},
+		{name: "status/lane-dot-dot", args: []string{"status", "--lane", ".."}, seed: seedWorkerState("..", `{"lane":".."}`)},
 
 		{name: "stop/no-state", args: []string{"stop", "--lane", "w"}},
 		{name: "stop/dead-pid", args: []string{"stop", "--lane", "w"}, seed: seedWorkerState("w", pidState(dead))},
 		{name: "stop/falsy-state", args: []string{"stop", "--lane", "w"}, seed: seedWorkerState("w", `0`)},
 		{name: "stop/lane-empty", args: []string{"stop", "--lane", ""}, seed: seedWorkerState("", pidState(dead))},
+		{name: "stop/lane-traversal", args: []string{"stop", "--lane", "../flip"}, seed: seeds(seedProjectFile(".orchestrator/flip.json", `{"lane":"w","status":"running","pid":`+dead+`}`),
+			seedProjectFile(".orchestrator/flip.lock", dead))},
 
 		{name: "usage/no-command", args: nil},
 		{name: "usage/unknown-command", args: []string{"frob", "--lane", "w"}},
@@ -120,6 +138,7 @@ func (h *harness) testWorker(t *testing.T) {
 	}
 	h.testWorkerStopVictims(t)
 	t.Run("stop/PE-14", h.testWorkerStopGuard)
+	t.Run("stop/PE-23", h.testWorkerStopNeedsTheLock)
 	t.Run("start", h.testWorkerStart)
 	t.Run("detach", h.testWorkerDetach)
 }
@@ -144,6 +163,7 @@ func (h *harness) testWorkerStopVictims(t *testing.T) {
 			v := &victims{}
 			seedVictim := func(t *testing.T, sb sandbox) {
 				pid := strconv.Itoa(v.start(t, c.leader))
+				seedWorkerLockHolding(c.lane, pid)(t, sb) // PE-23: the running worker holds its lock
 				if c.quote {
 					pid = `"` + pid + `"`
 				}
@@ -157,22 +177,58 @@ func (h *harness) testWorkerStopVictims(t *testing.T) {
 
 // testWorkerStopGuard asserts PE-14 on orch alone. The JS is never run here: for pid 1, true,
 // "1" and [1] it sends SIGINT to every process of the user, and for a negative pid to that
-// process. A victim started for the case must survive, and so must this test process.
+// process. The lock holds the pid as process.kill coerces it, so PE-23 alone would not refuse
+// it. A victim started for the case must survive, and so must this test process.
 func (h *harness) testWorkerStopGuard(t *testing.T) {
-	for _, pid := range []string{`1`, `true`, `"1"`, `[1]`, `-1`, `-12345`, `"0"`, `[]`, `-<victim>`} {
-		t.Run(pid, func(t *testing.T) {
+	for _, c := range []struct{ pid, lock string }{
+		{`1`, "1"}, {`true`, "1"}, {`"1"`, "1"}, {`[1]`, "1"}, {`-1`, "-1"}, {`-12345`, "-12345"}, {`"0"`, "0"}, {`[]`, "0"},
+		{`-<victim>`, "-<victim>"},
+	} {
+		t.Run(c.pid, func(t *testing.T) {
 			v := &victims{}
-			survivor := v.start(t, true)
-			stored := strings.ReplaceAll(pid, "<victim>", strconv.Itoa(survivor))
+			survivor := strconv.Itoa(v.start(t, true))
 			sb := h.newSandbox(t)
-			seedWorkerState("w", `{"lane":"w","status":"running","pid":`+stored+`}`)(t, sb)
-			o := h.run(t, sb, []string{h.orchBin, "worker", "stop", "--lane", "w"}, nil, []string{noPostRunRefresh})
-			if o.exitCode != 0 || o.stdout != `{"lane":"w","stopped":false,"reason":"no live worker"}`+"\n" || o.stderr != "" {
-				t.Errorf("orch: exit %d, stdout %q, stderr %q; want 0 and no live worker (PE-14)", o.exitCode, o.stdout, o.stderr)
-			}
-			v.requireRunning(t)
+			seedWorkerState("w", `{"lane":"w","status":"running","pid":`+strings.ReplaceAll(c.pid, "<victim>", survivor)+`}`)(t, sb)
+			seedWorkerLockHolding("w", strings.ReplaceAll(c.lock, "<victim>", survivor))(t, sb)
+			h.requireOrchStopsNothing(t, sb, v, "PE-14")
 		})
 	}
+}
+
+// testWorkerStopNeedsTheLock asserts PE-23 on orch alone: a live process recorded as the
+// state's pid is not signalled unless the lane's lock holds that pid. The JS is never run
+// here: it would interrupt the stand-in, as it would an unrelated process that reused a
+// finished worker's pid.
+func (h *harness) testWorkerStopNeedsTheLock(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		lock seed // nil: no lock
+	}{
+		{name: "no-lock"},
+		{name: "lock-of-another-pid", lock: seedWorkerLockHolding("w", strconv.Itoa(reapedPid(t)))},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			v := &victims{}
+			standIn := strconv.Itoa(v.start(t, true))
+			sb := h.newSandbox(t)
+			seedWorkerState("w", `{"lane":"w","status":"finished","pid":`+standIn+`}`)(t, sb)
+			if c.lock != nil {
+				c.lock(t, sb)
+			}
+			h.requireOrchStopsNothing(t, sb, v, "PE-23")
+		})
+	}
+}
+
+// requireOrchStopsNothing runs `orch worker stop --lane w` in sb and requires "no live worker"
+// with every victim still running.
+func (h *harness) requireOrchStopsNothing(t *testing.T, sb sandbox, v *victims, exception string) {
+	t.Helper()
+	o := h.run(t, sb, []string{h.orchBin, "worker", "stop", "--lane", "w"}, nil, []string{noPostRunRefresh})
+	if o.exitCode != 0 || o.stdout != `{"lane":"w","stopped":false,"reason":"no live worker"}`+"\n" || o.stderr != "" {
+		t.Errorf("orch: exit %d, stdout %q, stderr %q; want 0 and no live worker (%s)", o.exitCode, o.stdout, o.stderr, exception)
+	}
+	v.requireRunning(t)
 }
 
 // reapedPid is the pid of a child that has exited and been reaped: no process holds it (until

@@ -191,6 +191,11 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		{name: "usage/harness-bare", args: append(brief, "--harness")},
 		{name: "usage/brief-bare", args: []string{"--harness", "claude", "--brief"}, crash: crashC1, errorLine: briefBoolean},
 		{name: "usage/cwd-bare", args: append(claude, "--cwd"), crash: crashC1, errorLine: cwdBoolean},
+		// Sol S2/R8: a lane with a slash is refused after the harness check, before anything is
+		// written, with or without --detach.
+		{name: "usage/lane-traversal", args: append(claude, "--lane", "../flip"), run: bridgeCase{seed: seedProjectFile(".orchestrator/flip.json", "{}\n")}},
+		{name: "usage/lane-traversal-detach", args: append(claude, "--lane", "../flip", "--detach"), run: bridgeCase{seed: seedProjectFile(".orchestrator/flip.json", "{}\n")}},
+		{name: "usage/lane-traversal-harness-first", args: append(brief, "--harness", "gemini", "--lane", "../flip")},
 		// S2/R11: the brief is read before the lane is claimed, so neither leaves a lock or a
 		// state, and the read error wins over a held lane (exit 1, not 3).
 		{name: "crash/brief-is-a-directory", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seedProjectDir("d.md")},

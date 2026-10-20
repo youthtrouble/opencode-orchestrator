@@ -19,8 +19,8 @@ import (
 // DetachRuntime is what a detached launch takes from the process it runs in. Tests replace
 // each.
 type DetachRuntime struct {
-	// Self is the executable the runner runs as: `<Self> worker <args> --log-path L --run-id R`
-	// (the JS runs `node worker.mjs <args> ...`).
+	// Self is the executable the runner runs as: `<Self> worker <args> --log-path L --run-id R
+	// --cwd ROOT` (the JS runs `node worker.mjs <args> ...`).
 	Self string
 	// Argv is the unparsed command line after `orch worker`, decoded as the JS reads
 	// process.argv.slice(2).
@@ -50,7 +50,7 @@ func (l *Launch) Detach(rt DetachRuntime) (int, error) {
 		holderAlive := func(any) bool { return true }
 		return l.printLaneLocked(rt.Stderr, previousWorker(l.project.ReadState(l.lane), holderAlive), "")
 	}
-	if err := nodefs.MkdirAll(l.project.LogsDir); err != nil {
+	if err := nodefs.MkdirPrivate(l.project.LogsDir); err != nil {
 		return 1, err
 	}
 	runID := rt.NewID()
@@ -60,7 +60,7 @@ func (l *Launch) Detach(rt DetachRuntime) (int, error) {
 		return 1, err
 	}
 	defer log.Close() // the runner holds its own copy of the descriptor
-	cmd, args := rt.KeepAwake(rt.Self, runnerArgs(rt.Argv, logPath, runID))
+	cmd, args := rt.KeepAwake(rt.Self, runnerArgs(rt.Argv, l.project.Root, logPath, runID))
 	pid, err := procs.Detached{Name: cmd, Args: args, Dir: l.project.Root, Output: log}.Start()
 	var notStarted *procs.StartError
 	if err != nil && !(errors.As(err, &notStarted) && notStarted.Code != "") {
@@ -119,16 +119,18 @@ func createLog(path string) (*os.File, error) {
 
 // runnerArgs is the runner's command line after the executable: `worker`, the raw arguments
 // without every token that is exactly "--detach" (even one that was another key's value, so
-// that key takes the next token in the runner), then --log-path and --run-id, which win in the
-// runner's parse by coming last.
-func runnerArgs(argv []string, logPath, runID string) []string {
+// that key takes the next token in the runner), then --log-path, --run-id and --cwd with the
+// absolute project root, which win in the runner's parse by coming last. The runner already
+// runs in the root, so a relative --cwd from the command line would be applied twice (Sol
+// S2/R6).
+func runnerArgs(argv []string, root, logPath, runID string) []string {
 	args := []string{"worker"}
 	for _, arg := range argv {
 		if arg != "--detach" {
 			args = append(args, arg)
 		}
 	}
-	return append(args, "--log-path", logPath, "--run-id", runID)
+	return append(args, "--log-path", logPath, "--run-id", runID, "--cwd", root)
 }
 
 // KeepAwakeEnabled is `loadRegistry().runtime?.keep_awake !== false`, where any failure to

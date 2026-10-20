@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 )
 
@@ -92,7 +93,7 @@ func TestDetachLaunchesTheRunnerAndPrintsTheLaunch(t *testing.T) {
 	if d.stdout.String() != want || d.stderr.String() != "" {
 		t.Errorf("stdout %q, stderr %q; want %q", d.stdout.String(), d.stderr.String(), want)
 	}
-	wantArgv := "worker\nstart\n--brief\nb.md\n--harness\nclaude\n--log-path\n" + logPath + "\n--run-id\n" + detachRunID + "\n"
+	wantArgv := "worker\nstart\n--brief\nb.md\n--harness\nclaude\n--log-path\n" + logPath + "\n--run-id\n" + detachRunID + "\n--cwd\n" + p.Root + "\n"
 	if got := readText(t, filepath.Join(d.log, "argv")); got != wantArgv {
 		t.Errorf("runner argv %q, want %q", got, wantArgv)
 	}
@@ -256,12 +257,47 @@ func TestRunnerArgsDropEveryDetachToken(t *testing.T) {
 		{[]string{"start", "--lane", "--detach", "--harness", "claude"}, []string{"start", "--lane", "--harness", "claude"}},
 		// Only exact tokens: these are other values.
 		{[]string{"start", "--detach=1", "--lane", "x--detach", "-detach"}, []string{"start", "--detach=1", "--lane", "x--detach", "-detach"}},
-		// An earlier --log-path or --run-id stays; the appended ones come last and win.
+		// An earlier --log-path, --run-id or --cwd stays; the appended ones come last and win.
 		{[]string{"start", "--run-id", "mine", "--log-path", "/tmp/x"}, []string{"start", "--run-id", "mine", "--log-path", "/tmp/x"}},
+		{[]string{"start", "--cwd", "sub"}, []string{"start", "--cwd", "sub"}},
 	} {
-		want := append(append([]string{"worker"}, c.want...), "--log-path", "/l/b-1.log", "--run-id", "r")
-		if got := runnerArgs(c.argv, "/l/b-1.log", "r"); !slices.Equal(got, want) {
+		want := append(append([]string{"worker"}, c.want...), "--log-path", "/l/b-1.log", "--run-id", "r", "--cwd", "/p")
+		if got := runnerArgs(c.argv, "/p", "/l/b-1.log", "r"); !slices.Equal(got, want) {
 			t.Errorf("runnerArgs(%q) = %q, want %q", c.argv, got, want)
+		}
+	}
+}
+
+// The runner parses its arguments as `orch worker` does, so its last --cwd, the root, wins.
+func TestRunnerArgsRunInTheProjectRoot(t *testing.T) {
+	args := runnerArgs([]string{"start", "--cwd", "sub", "--detach"}, "/repo/sub", "/l", "r")
+	opts, _ := cliargs.ParseArgs(args[1:], []string{"cwd", "log-path", "run-id"}, []string{"detach"})
+	if cwd, _ := opts.Value("cwd"); cwd != "/repo/sub" {
+		t.Errorf("the runner's --cwd is %q, want the root", cwd)
+	}
+}
+
+// PE-21: a launch creates logs/ and a run creates workers/ owner-only, whatever the umask.
+func TestWorkerDirectoriesAreOwnerOnly(t *testing.T) {
+	defer syscall.Umask(syscall.Umask(0o022))
+	p := testProject(t, "brief")
+	d := newDetachRun(t)
+	if code, err := detach(t, p, d.runtime("start", "--brief", "b.md", "--harness", "claude", "--detach")); err != nil || code != 0 {
+		t.Fatalf("Detach = %d, %v", code, err)
+	}
+	match := launchedPid.FindStringSubmatch(d.stdout.String())
+	if match == nil {
+		t.Fatalf("stdout %q has no runner_pid", d.stdout.String())
+	}
+	pid, _ := strconv.Atoi(match[1])
+	reapRunner(t, pid)
+	f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+	if code, err := startForeground(t, p, f, "--brief", "b.md", "--harness", "claude"); err != nil || code != 0 {
+		t.Fatalf("Foreground = %d, %v", code, err)
+	}
+	for _, dir := range []string{p.LogsDir, p.WorkersDir} {
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("%s: mode %v (%v), want 0700", dir, info.Mode(), err)
 		}
 	}
 }

@@ -1,9 +1,11 @@
 package worker
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -116,7 +118,6 @@ func TestLanePathsInterpolateTheJSValue(t *testing.T) {
 		{"a", "/p/.orchestrator/workers/a.json"},
 		{true, "/p/.orchestrator/workers/true.json"},
 		{nil, "/p/.orchestrator/workers/undefined.json"},
-		{"../x", "/p/.orchestrator/x.json"}, // not sanitised, as in the JS
 	} {
 		if got := p.StatePath(tc.lane); got != tc.want {
 			t.Errorf("StatePath(%v) = %q, want %q", tc.lane, got, tc.want)
@@ -124,6 +125,46 @@ func TestLanePathsInterpolateTheJSValue(t *testing.T) {
 	}
 	if got := p.LockPath(true); got != "/p/.orchestrator/workers/true.lock" {
 		t.Errorf("LockPath(true) = %q", got)
+	}
+}
+
+func TestCheckLaneRefusesASlash(t *testing.T) {
+	for _, tc := range []struct {
+		lane    any
+		refused bool
+	}{
+		{"a", false}, {nil, false}, {true, false}, {"", false}, {".", false}, {"..", false}, {"a.b", false},
+		{"../flip", true}, {"a/b", true}, {"/abs", true}, {"x/", true},
+	} {
+		want := error(nil)
+		if tc.refused {
+			want = &UsageError{`lane must not contain "/"`}
+		}
+		if err := CheckLane(tc.lane); !reflect.DeepEqual(err, want) {
+			t.Errorf("CheckLane(%#v) = %v, want %v", tc.lane, err, want)
+		}
+	}
+}
+
+// Status and stop refuse a lane with a slash before they read or write anything.
+func TestStatusAndStopRefuseALaneWithASlash(t *testing.T) {
+	var sent []signal
+	p := NewProject(filepath.Join(t.TempDir(), "p"))
+	p.kill = recordingKiller(&sent)
+	writeFile(t, filepath.Join(p.Root, ".orchestrator", "flip.json"), `{"pid":`+strconv.Itoa(os.Getpid())+`}`)
+	writeFile(t, filepath.Join(p.Root, ".orchestrator", "flip.lock"), strconv.Itoa(os.Getpid()))
+	var refused *UsageError
+	if out, err := p.Status("../flip"); !errors.As(err, &refused) || out != nil {
+		t.Errorf("Status = %v, %v; want the lane refusal", out, err)
+	}
+	if out, err := p.Stop("../flip"); !errors.As(err, &refused) || out != nil {
+		t.Errorf("Stop = %v, %v; want the lane refusal", out, err)
+	}
+	if len(sent) != 0 {
+		t.Errorf("signals sent: %v", sent)
+	}
+	if _, err := os.Stat(p.WorkersDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("workers/ was created (%v)", err)
 	}
 }
 
@@ -343,6 +384,7 @@ func TestStopSignalsTheGroupThenThePid(t *testing.T) {
 			p := NewProject(t.TempDir())
 			p.kill = recordingKiller(&sent, tc.fail...)
 			writeFile(t, p.StatePath("w"), `{"pid":"`+strconv.Itoa(live)+`"}`)
+			writeFile(t, p.LockPath("w"), " "+strconv.Itoa(live)+"\n") // read as Number(text.trim())
 			out, err := p.Stop("w")
 			if err != nil {
 				t.Fatal(err)
@@ -363,6 +405,7 @@ func TestStopFailingSignalIsTheKillError(t *testing.T) {
 	p := NewProject(t.TempDir())
 	p.kill = recordingKiller(&sent, -live, live)
 	writeFile(t, p.StatePath("w"), `{"pid":`+strconv.Itoa(live)+`}`)
+	writeFile(t, p.LockPath("w"), strconv.Itoa(live))
 	_, err := p.Stop("w")
 	if err == nil || err.Error() != "kill ESRCH" {
 		t.Errorf("err = %v, want kill ESRCH", err)
@@ -406,14 +449,18 @@ func TestStopWithoutALiveWorker(t *testing.T) {
 }
 
 // PE-14: pids that are alive to the JS yet would make it signal every process of the user
-// (kill(-1)), its own group (kill(0)) or an unrelated process (a negative pid) are refused.
+// (kill(-1)), its own group (kill(0)) or an unrelated process (a negative pid) are refused, even
+// when the lock holds the same pid.
 func TestStopRefusesPidsBelowTwo(t *testing.T) {
-	for _, pid := range []string{`1`, `true`, `"1"`, `[1]`, `-1`, `-12345`, `"0"`, `[]`} {
-		t.Run(pid, func(t *testing.T) {
+	for _, tc := range []struct{ pid, lock string }{
+		{`1`, "1"}, {`true`, "1"}, {`"1"`, "1"}, {`[1]`, "1"}, {`-1`, "-1"}, {`-12345`, "-12345"}, {`"0"`, "0"}, {`[]`, "0"},
+	} {
+		t.Run(tc.pid, func(t *testing.T) {
 			var sent []signal
 			p := NewProject(t.TempDir())
 			p.kill = recordingKiller(&sent)
-			writeFile(t, p.StatePath("w"), `{"pid":`+pid+`}`)
+			writeFile(t, p.StatePath("w"), `{"pid":`+tc.pid+`}`)
+			writeFile(t, p.LockPath("w"), tc.lock)
 			out, err := p.Stop("w")
 			if err != nil {
 				t.Fatal(err)
@@ -427,6 +474,43 @@ func TestStopRefusesPidsBelowTwo(t *testing.T) {
 		})
 	}
 }
+
+// PE-23: a live pid is signalled only while the lane's lock holds it. A finished worker removed
+// its lock, and its pid may since belong to an unrelated process.
+func TestStopRequiresTheLockToHoldThePid(t *testing.T) {
+	live := strconv.Itoa(os.Getpid())
+	for _, tc := range []struct {
+		name string
+		lock *string
+	}{
+		{name: "no lock"},
+		{name: "another pid", lock: ptr(strconv.Itoa(os.Getpid() + 1))},
+		{name: "not a pid", lock: ptr("abc")},
+		{name: "empty", lock: ptr("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []signal
+			p := NewProject(t.TempDir())
+			p.kill = recordingKiller(&sent)
+			writeFile(t, p.StatePath("w"), `{"lane":"w","status":"finished","pid":`+live+`}`)
+			if tc.lock != nil {
+				writeFile(t, p.LockPath("w"), *tc.lock)
+			}
+			out, err := p.Stop("w")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := marshal(t, out); got != `{"lane":"w","stopped":false,"reason":"no live worker"}` {
+				t.Errorf("stop: %s", got)
+			}
+			if len(sent) != 0 {
+				t.Errorf("signals sent: %v", sent)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
 
 func equalSignals(a, b []signal) bool {
 	if len(a) != len(b) {

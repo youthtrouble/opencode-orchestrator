@@ -52,8 +52,9 @@ type Launch struct {
 // PrepareStart is the validation of `worker.mjs start` that follows the usage check
 // (worker.mjs l.59-63), in the JS order: the brief is resolved against the project root and
 // must exist and end in ".md" (a directory "x.md" passes and fails later, when it is read);
-// the lane is --lane or the brief's base name; the harness must be one of Harnesses. A refusal
-// is a *UsageError; a bare --brief is the TypeError path.resolve throws.
+// the lane is --lane or the brief's base name; the harness must be one of Harnesses; the lane
+// must pass CheckLane. A refusal is a *UsageError; a bare --brief is the TypeError
+// path.resolve throws.
 func (p Project) PrepareStart(opts cliargs.Opts) (*Launch, error) {
 	if opts.IsFlag("brief") {
 		return nil, errBriefArgBoolean
@@ -67,6 +68,9 @@ func (p Project) PrepareStart(opts cliargs.Opts) (*Launch, error) {
 	harness, _ := opts.Value("harness")
 	if opts.IsFlag("harness") || !slices.Contains(Harnesses, harness) {
 		return nil, &UsageError{"harness must be codex, claude or opencode"}
+	}
+	if err := CheckLane(lane); err != nil {
+		return nil, err
 	}
 	return &Launch{project: p, opts: opts, brief: brief, lane: lane, harness: harness}, nil
 }
@@ -112,7 +116,7 @@ func (l *Launch) Foreground(rt Runtime) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	if err := nodefs.MkdirAll(p.WorkersDir); err != nil {
+	if err := nodefs.MkdirPrivate(p.WorkersDir); err != nil {
 		return 1, err
 	}
 	if err := l.lock(rt.Pid); err != nil {

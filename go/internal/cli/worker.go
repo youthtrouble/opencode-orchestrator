@@ -26,8 +26,8 @@ var (
 var errResolveArgBoolean = &jsTypeError{"ERR_INVALID_ARG_TYPE", cliargs.ErrPathArgBoolean.Error()}
 
 // Worker implements `orch worker start|status|stop` (bin/worker.mjs), byte-identical to the JS
-// except for the parity exceptions in go/README.md (stop signals only pids of at least 2,
-// PE-14).
+// except for the parity exceptions in go/README.md (stop signals only pids of at least 2 that
+// hold the lane's lock, PE-14 and PE-23).
 func Worker(args []string, stdio Stdio) int {
 	argv := decodeArgv(args) // process.argv.slice(2): parsed here, and passed on by --detach
 	opts, positional := cliargs.ParseArgs(argv, workerValueKeys, workerFlagKeys)
@@ -57,13 +57,8 @@ func Worker(args []string, stdio Stdio) int {
 // unparsed command line as the JS reads it, which the runner receives.
 func workerStart(project worker.Project, opts cliargs.Opts, argv []string, stdio Stdio) int {
 	launch, err := project.PrepareStart(opts)
-	var refused *worker.UsageError
-	switch {
-	case errors.As(err, &refused):
-		fmt.Fprintln(stdio.Err, refused.Message)
-		return 2
-	case err != nil:
-		return workerCrash(stdio, err)
+	if err != nil {
+		return workerFailed(stdio, err)
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -105,6 +100,17 @@ func workerDetach(launch *worker.Launch, self string, argv []string, stdio Stdio
 	return code
 }
 
+// workerFailed prints why a worker command did not run: a refusal (*worker.UsageError) on
+// stderr with exit 2, else the exception the JS dies of.
+func workerFailed(stdio Stdio, err error) int {
+	var refused *worker.UsageError
+	if errors.As(err, &refused) {
+		fmt.Fprintln(stdio.Err, refused.Message)
+		return 2
+	}
+	return workerCrash(stdio, err)
+}
+
 // workerCrash prints the error line of the exception a worker dies of: the worker's own
 // TypeErrors carry their class, the rest are Errors.
 func workerCrash(stdio Stdio, err error) int {
@@ -129,7 +135,7 @@ func projectRoot(opts cliargs.Opts) (string, error) {
 func workerStatus(project worker.Project, lane any, stdio Stdio) int {
 	lanes, err := project.Status(lane)
 	if err != nil {
-		return crash(stdio, err)
+		return workerFailed(stdio, err)
 	}
 	data, err := jsjson.MarshalIndent(lanes, "  ")
 	if err != nil {
@@ -142,7 +148,7 @@ func workerStatus(project worker.Project, lane any, stdio Stdio) int {
 func workerStop(project worker.Project, lane any, stdio Stdio) int {
 	result, err := project.Stop(lane)
 	if err != nil {
-		return crash(stdio, err)
+		return workerFailed(stdio, err)
 	}
 	return printLine(stdio, result)
 }

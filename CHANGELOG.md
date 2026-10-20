@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- worker: a lane name containing `/` is refused, and a detached runner gets the absolute project
+  root as `--cwd` (both runtimes; Sol S2/R8, S2/R6).
+- worker (Go): `stop` signals only a worker whose lane lock holds the state's pid; a lock left by
+  a SIGKILLed worker still matches until post-S12 (PE-23; Sol S2/R1).
+- worker (Go): `workers/` and `logs/` are created owner-only (PE-21).
 - worker (Go): a failed run's errors and its blocked message no longer carry token-shaped text
   (PE-24; Sol S2/R10).
 - doctor: plugin error lines are redacted before they are printed (both runtimes; Sol S3/R10).

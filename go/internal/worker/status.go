@@ -12,8 +12,12 @@ import (
 // Status is `worker.mjs status [--lane L]`: for the given lane, or else every `<lane>.json` in
 // the workers directory, the parsed state (or {lane, status: "unknown"} when it is falsy or
 // unreadable) spread into a new object with process_alive and lock_present set. The error is
-// Node's, for a workers directory that exists but cannot be listed.
+// Node's, for a workers directory that exists but cannot be listed, or a *UsageError for a
+// lane that CheckLane refuses, before anything is read.
 func (p Project) Status(lane any) ([]any, error) {
+	if err := CheckLane(lane); err != nil {
+		return nil, err
+	}
 	lanes, err := p.statusLanes(lane)
 	if err != nil {
 		return nil, err

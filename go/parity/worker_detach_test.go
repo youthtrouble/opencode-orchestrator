@@ -31,6 +31,9 @@ type workerDetachCase struct {
 	steps     detachSteps
 	// runnerRefuses marks a runner that exits before writing a worker state.
 	runnerRefuses bool
+	// project, when set, is the project directory the launch names with a relative --cwd, under
+	// the sandbox's working directory; its .orchestrator/ is collected as the project's.
+	project string
 	// launchLine extracts the launch JSON from a successful command's stdout; nil means the
 	// stdout is the launch line itself, as `worker start --detach` prints it.
 	launchLine func(t *testing.T, stdout string) string
@@ -84,6 +87,12 @@ func (h *harness) testWorkerDetach(t *testing.T) {
 		// "--detach", the runner's --lane takes "--harness" as its value and the runner refuses
 		// the start without a harness, in its log.
 		{name: "detach-as-a-value", run: ok, args: []string{"--brief", "b.md", "--lane", "--detach", "--harness", "claude", "--detach"}, runnerRefuses: true},
+		// Sol S2/R6: the runner gets the absolute root as its last --cwd, so it works in sub/,
+		// not in sub/sub/, where it would refuse the missing brief after a successful launch.
+		{name: "relative-cwd", args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
+			run: bridgeCase{fixture: "ok", seed: seedProjectFile("sub/b.md", "brief body\n")}},
+		{name: "relative-cwd-keep-awake", args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
+			run: bridgeCase{fixture: "ok", seed: seedProjectFile("sub/b.md", "brief body\n")}, keepAwake: true},
 		{name: "locked/live-holder", args: claude, run: lockedBy(live)},
 		{name: "locked/live-holder-no-state", args: claude, run: bridgeCase{seed: seedProjectFile(".orchestrator/workers/b.lock", live+"\n")}},
 		{name: "locked/stale-holder", args: claude, run: lockedBy(dead)},
@@ -194,6 +203,9 @@ func (h *harness) runDetached(t *testing.T, inv invocation, worker, argv []strin
 			}
 		}()
 		o.files = sb.files(t)
+		if c.project != "" {
+			collectFiles(t, filepath.Join(sb.project, c.project, ".orchestrator"), "project", o.files)
+		}
 		requireLaunchRecorded(t, argv[0], l, o.files, !c.runnerRefuses)
 	}
 	collectExtraFiles(t, sb, inv, o.files)

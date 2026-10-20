@@ -4,12 +4,13 @@
 //
 // The JS reads its options as JS values, so a lane is any: a string, true for a bare --lane, or
 // nil for an absent one (JS undefined). It is interpolated into file names as the JS template
-// literal does ("true.json", "undefined.json") and never sanitised, as in the JS.
+// literal does ("true.json", "undefined.json"); CheckLane refuses one that contains "/".
 package worker
 
 import (
 	"math"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
@@ -45,6 +46,17 @@ func (p Project) StatePath(lane any) string {
 // LockPath is `${workersDir}/${lane}.lock`.
 func (p Project) LockPath(lane any) string {
 	return filepath.Join(p.WorkersDir, laneText(lane)+".lock")
+}
+
+// CheckLane refuses a lane whose text contains "/", which would let its state, lock or log
+// name a file outside workers/ or logs/ (`--lane ../flip` overwrote flip.json; Sol S2/R8). A
+// bare, absent or empty lane, "." and ".." stay allowed: their names ("true.json",
+// "...json") stay inside.
+func CheckLane(lane any) error {
+	if strings.Contains(laneText(lane), "/") {
+		return &UsageError{`lane must not contain "/"`}
+	}
+	return nil
 }
 
 // laneText is the lane as a template literal prints it; nil is undefined.

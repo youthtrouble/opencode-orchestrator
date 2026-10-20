@@ -165,6 +165,9 @@ func TestPrepareStartValidatesInTheJSOrder(t *testing.T) {
 		{[]string{"--brief", "d.md/", "--harness", "codex"}, "lane d"},
 		{[]string{"--brief", "b.md", "--harness", "opencode", "--lane", "x"}, "lane x"},
 		{[]string{"--brief", "b.md", "--harness", "claude", "--lane"}, "lane true"},
+		{[]string{"--brief", "b.md", "--harness", "claude", "--lane", ".."}, "lane .."},
+		{[]string{"--brief", "b.md", "--harness", "gemini", "--lane", "../flip"}, "harness must be codex, claude or opencode"},
+		{[]string{"--brief", "b.md", "--harness", "claude", "--lane", "../flip"}, `lane must not contain "/"`},
 	} {
 		launch, err := p.PrepareStart(opts(tc.args...))
 		var got string
@@ -827,6 +830,23 @@ func TestLockedLaneIsRefused(t *testing.T) {
 	}
 	if got := readText(t, p.LockPath("b")); got != "1" {
 		t.Errorf("the lock was changed to %q", got)
+	}
+}
+
+// PE-21: a run makes workers/ owner-only before it claims the lock, not only when it publishes
+// the state. A held lane stops the run between the two, so Publish cannot have done it.
+func TestForegroundMakesWorkersOwnerOnlyBeforeTheLock(t *testing.T) {
+	p := testProject(t, "brief")
+	writeFile(t, p.LockPath("b"), "1")
+	if err := os.Chmod(p.WorkersDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeRun(t, nil)
+	if code, err := startForeground(t, p, f, "--brief", "b.md", "--harness", "claude"); err != nil || code != ExitLaneLocked {
+		t.Fatalf("Foreground = %d, %v", code, err)
+	}
+	if info, err := os.Stat(p.WorkersDir); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("workers/: mode %v (%v), want 0700", info.Mode(), err)
 	}
 }
 
