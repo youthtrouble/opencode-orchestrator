@@ -13,6 +13,7 @@ import { parseArgs } from "../lib/run-record.mjs";
 import { getRouting } from "../lib/usage.mjs";
 import { clearGate, decideFlip, otherDoor, writeFlip } from "../lib/flip.mjs";
 import { post } from "../lib/mailbox.mjs";
+import { requireProject } from "../lib/project.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { opts, positional } = parseArgs(process.argv.slice(2), { valueKeys: ["active", "to", "from", "cwd", "reason", "resume", "question"], flagKeys: ["force", "clear", "no-relaunch"] });
@@ -20,6 +21,8 @@ const cmd = positional[0];
 const root = path.resolve(opts.cwd || process.cwd());
 const FLIP = path.join(root, ".orchestrator", "flip.json");
 const readFlip = () => { try { return JSON.parse(fs.readFileSync(FLIP, "utf8")); } catch { return null; } };
+// Reporting or clearing a gate needs an existing project; setting one (and run, pause) may create it.
+if (cmd === "status" || (cmd === "gate" && opts.clear)) requireProject(root, "--cwd");
 
 export function ensureGitExclude(projectRoot) {
   const info = path.join(projectRoot, ".git", "info");

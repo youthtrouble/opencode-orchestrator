@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -23,6 +24,12 @@ func Mailbox(args []string, stdio Stdio) int {
 	root, err := parsed.ProjectRoot(os.Getenv)
 	if err != nil {
 		return fail(stdio, "mailbox", err)
+	}
+	switch parsed.Command {
+	case "list", "ack", "reply", "inbox":
+		if code, ok := requireProject(stdio, root, "--root"); !ok {
+			return code
+		}
 	}
 	box := mailbox.New(root)
 	switch parsed.Command {
@@ -187,7 +194,7 @@ func mailboxReply(box *mailbox.Mailbox, project flipcmd.Project, rest []string, 
 	}
 	id, err := box.ResolveID(idArg)
 	if err != nil {
-		return crash(stdio, err)
+		return unknownIDOrCrash(box, stdio, err)
 	}
 	all, err := box.List(mailbox.Query{Limit: 100000})
 	if err != nil {
@@ -308,9 +315,19 @@ func mailboxInbox(box *mailbox.Mailbox, stdio Stdio) int {
 func mailboxAck(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) int {
 	entry, err := box.Ack(mailbox.AckRequest{ID: optional(parsed.Values, "id"), By: optional(parsed.Values, "by"), Note: parsed.Values["note"]})
 	if err != nil {
-		return crash(stdio, err)
+		return unknownIDOrCrash(box, stdio, err)
 	}
 	return printLine(stdio, entry)
+}
+
+// unknownIDOrCrash names the mailbox searched when no message matched the id, which usually
+// means the shell is in another project, and exits 1; other errors are crashes.
+func unknownIDOrCrash(box *mailbox.Mailbox, stdio Stdio, err error) int {
+	if !errors.Is(err, mailbox.ErrNoMessage) {
+		return crash(stdio, err)
+	}
+	fmt.Fprintf(stdio.Err, "%v in %s; if it belongs to another project, cd there or pass --root <project dir>\n", err, box.Dir)
+	return 1
 }
 
 // text is `${m[key]}`.

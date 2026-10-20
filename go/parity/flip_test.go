@@ -81,7 +81,7 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "usage/cwd-bare", args: []string{"--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 		{name: "usage/cwd-bare-with-command", args: []string{"status", "--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 
-		{name: "status/no-orchestrator", args: []string{"status"}},
+		{name: "status/empty-project", args: []string{"status"}, seed: seedProjectDir(".orchestrator")},
 		{name: "status/record", args: []string{"status"}, seed: seedFlip(`{"at":"2026-01-01T00:00:00.000Z","from":"opencode","to":"claude","reason":null,"previous":null}`)},
 		{name: "status/zero", args: []string{"status"}, seed: seedFlip(`0`)},
 		{name: "status/false", args: []string{"status"}, seed: seedFlip(`false`)},
@@ -130,7 +130,7 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "gate/clear-keeps-pending-launch", args: []string{"gate", "--clear"}, seed: seedFlip(`{"pending_launch":{"to":"opencode","from":"claude","reason":"handback","resume":null,"at":"2026-01-01T00:00:00.000Z"},"awaiting_human":{"door":"claude"}}`)},
 		{name: "gate/clear-queues-relaunch-without-door", args: []string{"gate", "--clear"}, seed: seedFlip(`{"awaiting_human":"yes"}`)},
 		{name: "gate/clear-no-relaunch", args: []string{"gate", "--clear", "--no-relaunch"}, seed: seedFlip(seeded)},
-		{name: "gate/clear-fresh", args: []string{"gate", "--clear"}},
+		{name: "gate/clear-fresh", args: []string{"gate", "--clear"}, seed: seedProjectDir(".orchestrator")},
 		{name: "gate/clear-string", args: []string{"gate", "--clear"}, seed: seedFlip(`"abc"`)},
 		{name: "gate/clear-number", args: []string{"gate", "--clear"}, seed: seedFlip(`5`)},
 		{name: "gate/clear-array", args: []string{"gate", "--clear"}, seed: seedFlip(`[1]`)},
@@ -145,6 +145,12 @@ func (h *harness) testFlip(t *testing.T) {
 			}
 			h.comparePair(t, h.flipInvocation(c))
 		})
+	}
+	for _, c := range []flipCase{
+		{name: "status/outside-project", args: []string{"status"}},
+		{name: "gate/clear-outside-project", args: []string{"gate", "--clear"}},
+	} {
+		t.Run(c.name, func(t *testing.T) { h.compareOutsideProject(t, h.flipInvocation(c), "--cwd") })
 	}
 	t.Run("gate/array", h.testFlipGateArray)
 	t.Run("gate/PE-1", h.testFlipGateSubjectCut)

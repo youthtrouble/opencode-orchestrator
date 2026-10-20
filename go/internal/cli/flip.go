@@ -35,6 +35,13 @@ func Flip(args []string, stdio Stdio) int {
 	if len(positional) > 0 {
 		command = positional[0]
 	}
+	// Reporting or clearing a gate needs an existing project; setting one (and run, pause) may
+	// create it.
+	if command == "status" || command == "gate" && opts.Truthy("clear") {
+		if code, ok := requireProject(stdio, root, "--cwd"); !ok {
+			return code
+		}
+	}
 	switch command {
 	case "status":
 		return printJSON(stdio, "flip", project.Status(), "  ")

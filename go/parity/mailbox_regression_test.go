@@ -81,7 +81,7 @@ func (h *harness) testMailboxRegressions(t *testing.T) {
 			}))
 		})
 		t.Run("ack/raw-id="+raw, func(t *testing.T) {
-			h.comparePair(t, h.mailboxInvocation(mailboxCase{args: []string{"ack", "--id", raw}, crash: crashC1, errorLine: "Error: no message with id " + strings.ToValidUTF8(raw, "�")}))
+			h.compareUnknownMessageID(t, mailboxCase{args: []string{"ack", "--id", raw}, seed: seedProjectDir(".orchestrator")}, strings.ToValidUTF8(raw, "�"))
 		})
 	}
 	post := []string{"post", "--from", "a", "--subject", "s"}

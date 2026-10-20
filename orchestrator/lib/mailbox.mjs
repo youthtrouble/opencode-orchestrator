@@ -26,6 +26,9 @@ export function post(projectRoot, { from, to = "*", kind = "note", subject, body
   return msg;
 }
 
+// Thrown when no message matches an id or prefix, so a command can name the mailbox it searched.
+export class UnknownMessageError extends Error {}
+
 // Accepts a full id or any unique prefix (list prints 8-char prefixes).
 export function resolveId(projectRoot, idOrPrefix) {
   const msgs = readJsonl(path.join(mailboxDir(projectRoot), "messages.jsonl"));
@@ -33,7 +36,8 @@ export function resolveId(projectRoot, idOrPrefix) {
   if (exact) return exact.id;
   const matches = msgs.filter((m) => m.id.startsWith(idOrPrefix));
   if (matches.length === 1) return matches[0].id;
-  throw new Error(matches.length ? `ambiguous message id prefix ${idOrPrefix}` : `no message with id ${idOrPrefix}`);
+  if (matches.length) throw new Error(`ambiguous message id prefix ${idOrPrefix}`);
+  throw new UnknownMessageError(`no message with id ${idOrPrefix}`);
 }
 
 export function ack(projectRoot, { id, by, note = "" }) {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -92,5 +93,44 @@ func TestProjectPaths(t *testing.T) {
 	}
 	if got := MailboxDir("/p"); got != "/p/.orchestrator/mailbox" {
 		t.Errorf("MailboxDir = %s", got)
+	}
+}
+
+func TestRequireProjectAcceptsOnlyAnOrchestratorDirectory(t *testing.T) {
+	project := t.TempDir()
+	if err := os.Mkdir(ProjectDir(project), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequireProject(project, "--cwd"); err != nil {
+		t.Errorf("RequireProject(project) = %v, want nil", err)
+	}
+
+	stray := t.TempDir()
+	if err := os.WriteFile(ProjectDir(stray), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{t.TempDir(), stray} {
+		err := RequireProject(root, "--root")
+		want := "not an orchestrator project: " + root + " has no .orchestrator/ directory; cd into the project or pass --root <project dir>"
+		if notAProject, ok := err.(*NotAProjectError); !ok || err.Error() != want || notAProject.Root != root {
+			t.Errorf("RequireProject(%s) = %v, want %q", root, err, want)
+		}
+	}
+}
+
+func TestRequireProjectSurfacesAStatFailureThatIsNotAbsence(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory this user cannot search")
+	}
+	locked := t.TempDir()
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+
+	err := RequireProject(locked, "--cwd")
+	want := "EACCES: permission denied, stat '" + ProjectDir(locked) + "'"
+	if _, refused := err.(*NotAProjectError); refused || err == nil || err.Error() != want {
+		t.Errorf("RequireProject(locked) = %v, want %q", err, want)
 	}
 }

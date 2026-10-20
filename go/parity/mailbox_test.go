@@ -180,7 +180,7 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "post/no-subject", args: []string{"post", "--from", "a", "--subject", ""}, crash: crashC1},
 		{name: "post/bare-from", args: []string{"post", "--from", "--subject", "s", "--body", "-"}, stdin: "read first", crash: crashC1},
 
-		{name: "list/empty", args: []string{"list"}},
+		{name: "list/empty", args: []string{"list"}, seed: seedProjectDir(".orchestrator")},
 		{name: "list/text", args: []string{"list"}, seed: seeded},
 		{name: "list/json", args: []string{"list", "--json"}, seed: seeded},
 		{name: "list/json-value-is-text", args: []string{"list", "--json", "x"}, seed: seeded},
@@ -204,8 +204,6 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "ack/exact-beats-prefix", args: []string{"ack", "--id", idNote, "--by", "me"}, seed: seeded},
 		{name: "ack/ambiguous", args: []string{"ack", "--id", "aaaaaaaa", "--by", "me"}, seed: seeded, crash: crashC1},
 		{name: "ack/ambiguous-duplicate-id", args: []string{"ack", "--id", "dddd", "--by", "me"}, seed: seeded, crash: crashC1},
-		{name: "ack/unknown", args: []string{"ack", "--id", "zz", "--by", "me"}, seed: seeded, crash: crashC1},
-		{name: "ack/missing-id", args: []string{"ack", "--by", "me"}, seed: seeded, crash: crashC1},
 		{name: "ack/missing-id-matches-idless", args: []string{"ack", "--by", "me"}, seed: malformed},
 		{name: "ack/empty-id-one-message", args: []string{"ack", "--id", "", "--by", "me"}, seed: seedMailbox(lines(`{"id":"only"}`), "")},
 		{name: "ack/prefix-hits-idless", args: []string{"ack", "--id", "zz"}, seed: malformed, crash: crashC2},
@@ -217,10 +215,9 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "reply/missing-id", args: []string{"reply"}, seed: seeded},
 		{name: "reply/missing-body", args: []string{"reply", "bbbb"}, seed: seeded},
 		{name: "reply/empty-words", args: []string{"reply", "bbbb", ""}, stdin: "from stdin", seed: seeded},
-		{name: "reply/unknown", args: []string{"reply", "zz", "hi"}, seed: seeded, crash: crashC1},
 		{name: "reply/subject-140", args: []string{"reply", "eeee", "ok"}, seed: seedMailbox(lines(`{"id":"eeeeeeee-0000-0000-0000-000000000007","from":"p","subject":"`+strings.Repeat("s", 150)+`"}`), "")},
 
-		{name: "inbox/none", args: []string{"inbox"}},
+		{name: "inbox/none", args: []string{"inbox"}, seed: seedProjectDir(".orchestrator")},
 		{name: "inbox/several", args: []string{"inbox"}, seed: seedMailbox(mailboxMessages+inboxExtras, mailboxAcks+`{"id":"eeeeeeee-0000-0000-0000-00000000000a","by":"human"}`+"\n")},
 		{name: "inbox/limit-before-filter", args: []string{"inbox"}, seed: seedMailbox(manyQuestions(), "")},
 		{name: "inbox/all-hidden-by-limit", args: []string{"inbox"}, seed: seedMailbox(hiddenQuestions(), "")},
@@ -239,12 +236,22 @@ func (h *harness) testMailbox(t *testing.T) {
 				"post/bare-from":             "Error: post needs from and subject",
 				"ack/ambiguous":              "Error: ambiguous message id prefix aaaaaaaa",
 				"ack/ambiguous-duplicate-id": "Error: ambiguous message id prefix dddd",
-				"ack/unknown":                "Error: no message with id zz",
-				"ack/missing-id":             "Error: no message with id undefined",
-				"reply/unknown":              "Error: no message with id zz",
 			}[c.name]
 		}
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.mailboxInvocation(c)) })
+	}
+	for _, c := range []struct {
+		name, id string
+		args     []string
+	}{
+		{"ack/unknown", "zz", []string{"ack", "--id", "zz", "--by", "me"}},
+		{"ack/missing-id", "undefined", []string{"ack", "--by", "me"}},
+		{"reply/unknown-id-in-project", "zz", []string{"reply", "zz", "hi"}},
+	} {
+		t.Run(c.name, func(t *testing.T) { h.compareUnknownMessageID(t, mailboxCase{args: c.args, seed: seeded}, c.id) })
+	}
+	for _, args := range [][]string{{"list"}, {"ack", "--id", "zz", "--by", "me"}, {"reply", "zz", "hi"}, {"inbox"}} {
+		t.Run(args[0]+"/outside-project", func(t *testing.T) { h.compareOutsideProject(t, h.mailboxInvocation(mailboxCase{args: args}), "--root") })
 	}
 	t.Run("post/json-PE-3", h.testMailboxPostJSON)
 	t.Run("reply/subject-split-surrogate-PE-1", h.testMailboxReplySplitSurrogate)
@@ -255,6 +262,22 @@ func (h *harness) testMailbox(t *testing.T) {
 	})
 	t.Run("list/astral-spread-PE-1", h.testMailboxAstralSpread)
 	h.testMailboxRegressions(t)
+}
+
+// compareUnknownMessageID compares an ack or reply whose id matches no message in the project:
+// both runtimes name the mailbox they searched on stderr and exit 1.
+func (h *harness) compareUnknownMessageID(t *testing.T, c mailboxCase, id string) {
+	t.Helper()
+	inv := h.mailboxInvocation(c)
+	inv.projectPaths = true
+	js, orch := h.runPair(t, inv)
+	want := "no message with id " + id + " in $PROJECT/.orchestrator/mailbox; if it belongs to another project, cd there or pass --root <project dir>\n"
+	for name, o := range map[string]outcome{"js": js, "orch": orch} {
+		if o.exitCode != 1 || o.stdout != "" || o.stderr != want {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want exit 1 and %q", name, o.exitCode, o.stdout, o.stderr, want)
+		}
+	}
+	compareOutcomes(t, js, orch)
 }
 
 // Questions for the several-questions inbox: long bodies with newlines and an emoji across

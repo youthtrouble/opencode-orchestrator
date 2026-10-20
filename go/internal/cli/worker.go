@@ -40,6 +40,11 @@ func Worker(args []string, stdio Stdio) int {
 	if len(positional) > 0 {
 		command = positional[0]
 	}
+	if command == "status" || command == "stop" {
+		if code, ok := requireProject(stdio, root, "--cwd"); !ok {
+			return code
+		}
+	}
 	switch {
 	case command == "status":
 		return workerStatus(project, opts.JS("lane"), stdio)

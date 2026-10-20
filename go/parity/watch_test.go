@@ -111,17 +111,31 @@ func (h *harness) testWatch(t *testing.T) {
 			inv := invocation{
 				js:        []string{h.node, filepath.Join(h.orchJS, "bin", "watch.mjs")},
 				orch:      []string{h.orchBin, "watch"},
-				seed:      seeds(cache, codexAnswers(t), orNothing(c.seed)),
+				seed:      seeds(cache, codexAnswers(t), seedProjectDir(".orchestrator"), orNothing(c.seed)),
 				normalize: normalizeWatchHeader,
 			}
 			if c.collects {
-				inv.seed = seeds(seedCache(green, time.Now().Add(-6*time.Minute)), codexFails)
+				inv.seed = seeds(seedCache(green, time.Now().Add(-6*time.Minute)), codexFails, seedProjectDir(".orchestrator"))
 				inv.normalize = normalizeWatchCollected
 			}
 			if c.crashLine != "" {
 				inv.crash, inv.errorLine = crashC1, c.crashLine
 			}
 			h.comparePair(t, inv)
+		})
+	}
+	for _, args := range [][]string{nil, {"--follow", "--interval", "1"}} {
+		name := "outside-project"
+		if args != nil {
+			name = "follow-outside-project"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h.compareOutsideProject(t, invocation{
+				js:   append([]string{h.node, filepath.Join(h.orchJS, "bin", "watch.mjs")}, args...),
+				orch: append([]string{h.orchBin, "watch"}, args...),
+				seed: seeds(cache, codexAnswers(t)),
+			}, "--cwd")
 		})
 	}
 	t.Run("questions/orch-on-path-PE-26", func(t *testing.T) {

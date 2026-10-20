@@ -321,6 +321,11 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 |---|---|
 | [orchestrator/README.md](orchestrator/README.md) | Scripts and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
 | [go/README.md](go/README.md) | The `orch` binary: commands, building, install, plugin runtime, parity harness, release checklist |
+- `not an orchestrator project: <dir> has no .orchestrator/ directory`: you ran a command that
+  reads or stops a project's state (`orch watch`, `orch mailbox inbox|reply`, `orch flip status`,
+  `orch supervisor stop`, ...) outside the project. `cd` into it, or pass `--cwd <project dir>`
+  (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
+  usually means the id belongs to another project.
 | [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- mailbox/watch/flip/worker/supervisor: run outside a project (no `.orchestrator/`), the read and
+  stop commands say which directory they looked in and how to fix it (`cd` or `--root`/`--cwd`),
+  exit 2 and create nothing; `mailbox reply|ack` with an unknown id name the project searched.
 - flip/mailbox: clearing a human gate (`orch flip gate --clear`, or `orch mailbox reply` to the
   gate's question) now queues a relaunch; the supervisor restarts the gated door's conductor within
   a minute. Clearing when no gate is set changes nothing; `kickoff` clears with the new

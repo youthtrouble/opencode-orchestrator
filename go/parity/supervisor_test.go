@@ -69,7 +69,6 @@ const realisticSupervisorState = `{
 // the usage errors synchronously, serve and start as daemons (supervisor_serve_test.go).
 func (h *harness) testSupervisor(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
-	const orchestratorIsFile = "Error: EEXIST: file already exists, mkdir '$PROJECT/.orchestrator'"
 	const stopIsDir = "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/supervisor.stop'"
 	events := seedSupervisorState(`{"events":{"e1":{"status":"queued"},"e2":{"status":"queued"},"zero":0},"lanes":{}}`)
 	ack := func(extra ...string) []string { return append([]string{"ack"}, extra...) }
@@ -80,7 +79,7 @@ func (h *harness) testSupervisor(t *testing.T) {
 		{name: "usage/cwd-bare-with-command", args: []string{"status", "--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 		{name: "usage/cwd-relative", args: []string{"status", "--cwd", "sub"}, seed: seedProjectFile("sub/.orchestrator/supervisor-state.json", `{"status":"sub"}`)},
 
-		{name: "status/no-orchestrator", args: []string{"status"}},
+		{name: "status/empty-project", args: []string{"status"}, seed: seedProjectDir(".orchestrator")},
 		{name: "status/empty-object", args: []string{"status"}, seed: seedSupervisorState(`{}`)},
 		{name: "status/realistic", args: []string{"status"}, seed: seedSupervisorState(realisticSupervisorState)},
 		{name: "status/null", args: []string{"status"}, seed: seedSupervisorState(`null`)},
@@ -91,16 +90,15 @@ func (h *harness) testSupervisor(t *testing.T) {
 		{name: "status/bom", args: []string{"status"}, seed: seedSupervisorState("\xef\xbb\xbf{}")},
 		{name: "status/directory", args: []string{"status"}, seed: seedProjectDir(".orchestrator/supervisor-state.json")},
 
-		{name: "stop/fresh", args: []string{"stop"}},
+		{name: "stop/fresh", args: []string{"stop"}, seed: seedProjectDir(".orchestrator")},
 		{name: "stop/existing", args: []string{"stop"}, seed: seedProjectFile(".orchestrator/supervisor.stop", "")},
-		{name: "stop/orchestrator-is-file", args: []string{"stop"}, seed: seedProjectFile(".orchestrator", ""), crash: crashC1, errorLine: orchestratorIsFile},
 		{name: "stop/stop-is-directory", args: []string{"stop"}, seed: seedProjectDir(".orchestrator/supervisor.stop"), crash: crashC1, errorLine: stopIsDir},
 
 		{name: "ack/known", args: ack("--event", "e1"), seed: events},
 		{name: "ack/unknown", args: ack("--event", "nope"), seed: events},
 		{name: "ack/event-bare", args: ack("--event"), seed: events},
 		{name: "ack/no-event", args: ack(), seed: events},
-		{name: "ack/no-state", args: ack("--event", "e1")},
+		{name: "ack/no-state", args: ack("--event", "e1"), seed: seedProjectDir(".orchestrator")},
 		{name: "ack/by", args: ack("--event", "e1", "--by", "X"), seed: events},
 		{name: "ack/by-bare", args: ack("--event", "e1", "--by"), seed: events},
 		{name: "ack/existing-same-id", args: ack("--event", "e1"), seed: seeds(events, seedAcks(`{"e0":{"by":"a","at":"2026-01-01T00:00:00.000Z"},"e1":{"by":"old","at":"2026-01-02T00:00:00.000Z"},"e9":1}`))},
@@ -117,6 +115,14 @@ func (h *harness) testSupervisor(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.supervisorInvocation(c)) })
+	}
+	for _, c := range []supervisorCase{
+		{name: "status/outside-project", args: []string{"status"}},
+		{name: "stop/outside-project", args: []string{"stop"}},
+		{name: "stop/orchestrator-is-file", args: []string{"stop"}, seed: seedProjectFile(".orchestrator", "")},
+		{name: "ack/outside-project", args: ack("--event", "e1")},
+	} {
+		t.Run(c.name, func(t *testing.T) { h.compareOutsideProject(t, h.supervisorInvocation(c), "--cwd") })
 	}
 	t.Run("ack/PE-21-acks-directory", h.testSupervisorAckAcksDirectory)
 	t.Run("ack/PE-16-string-events", h.testSupervisorAckStringEvents)

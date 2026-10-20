@@ -33,6 +33,12 @@ func Supervisor(args []string, stdio Stdio) int {
 		command = positional[0]
 	}
 	switch command {
+	case "status", "stop", "ack":
+		if code, ok := requireProject(stdio, root, "--cwd"); !ok {
+			return code
+		}
+	}
+	switch command {
 	case "status":
 		return printJSON(stdio, "supervisor", project.Status(), "  ")
 	case "stop":

@@ -81,7 +81,7 @@ func (h *harness) testWorker(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 
 	cases := []workerCase{
-		{name: "status/no-orchestrator", args: []string{"status"}},
+		{name: "status/empty-project", args: []string{"status"}, seed: seedProjectDir(".orchestrator")},
 		{name: "status/empty-workers", args: []string{"status"}, seed: seedProjectDir(".orchestrator/workers")},
 		{name: "status/lane-order", args: []string{"status"}, seed: seeds(
 			seedWorkerState("b", `{"lane":"b"}`), seedWorkerState("a", `{"lane":"a"}`), seedWorkerState("1", `{"lane":"1"}`),
@@ -118,10 +118,10 @@ func (h *harness) testWorker(t *testing.T) {
 		// Sol S2/R8: a lane with a slash is refused before anything is read; ".." stays a name
 		// inside workers/ ("...json").
 		{name: "status/lane-traversal", args: []string{"status", "--lane", "../flip"}, seed: seedProjectFile(".orchestrator/flip.json", `{"lane":"w","status":"running","pid":`+dead+`}`)},
-		{name: "status/lane-absolute", args: []string{"status", "--lane", "/etc/hosts"}},
+		{name: "status/lane-absolute", args: []string{"status", "--lane", "/etc/hosts"}, seed: seedProjectDir(".orchestrator")},
 		{name: "status/lane-dot-dot", args: []string{"status", "--lane", ".."}, seed: seedWorkerState("..", `{"lane":".."}`)},
 
-		{name: "stop/no-state", args: []string{"stop", "--lane", "w"}},
+		{name: "stop/no-state", args: []string{"stop", "--lane", "w"}, seed: seedProjectDir(".orchestrator")},
 		{name: "stop/dead-pid", args: []string{"stop", "--lane", "w"}, seed: seedWorkerState("w", pidState(dead))},
 		{name: "stop/falsy-state", args: []string{"stop", "--lane", "w"}, seed: seedWorkerState("w", `0`)},
 		{name: "stop/lane-empty", args: []string{"stop", "--lane", ""}, seed: seedWorkerState("", pidState(dead))},
@@ -135,6 +135,9 @@ func (h *harness) testWorker(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.workerInvocation(c)) })
+	}
+	for _, args := range [][]string{{"status"}, {"stop", "--lane", "w"}} {
+		t.Run(args[0]+"/outside-project", func(t *testing.T) { h.compareOutsideProject(t, h.workerInvocation(workerCase{args: args}), "--cwd") })
 	}
 	h.testWorkerStopVictims(t)
 	t.Run("stop/PE-14", h.testWorkerStopGuard)

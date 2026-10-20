@@ -13,6 +13,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/manifest"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/policy"
 )
 
@@ -34,6 +35,24 @@ func decodeArgv(args []string) []string {
 		decoded[i] = jsstr.DecodeUTF8([]byte(arg))
 	}
 	return decoded
+}
+
+// requireProject guards a command that reads or stops existing state. Where root has no
+// .orchestrator/ directory it says so on stderr and returns 2; a stat failure that is not
+// absence crashes as the JS does (1). ok is true when the command may run. flag is the option
+// that names another root.
+func requireProject(stdio Stdio, root, flag string) (exitCode int, ok bool) {
+	err := paths.RequireProject(root, flag)
+	var notAProject *paths.NotAProjectError
+	switch {
+	case err == nil:
+		return 0, true
+	case errors.As(err, &notAProject):
+		fmt.Fprintln(stdio.Err, err)
+		return 2, false
+	default:
+		return crash(stdio, err), false
+	}
 }
 
 // crash reports what the JS leaves uncaught: Node prints the error class and message on a

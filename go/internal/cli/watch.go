@@ -25,6 +25,9 @@ func Watch(args []string, stdio Stdio) int {
 	if err != nil {
 		return crash(stdio, err)
 	}
+	if code, ok := requireProject(stdio, root, "--cwd"); !ok {
+		return code
+	}
 	home, err := paths.NodeHome(os.LookupEnv)
 	if err != nil {
 		return fail(stdio, "watch", err)

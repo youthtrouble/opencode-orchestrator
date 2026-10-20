@@ -21,6 +21,7 @@ import { post } from "../lib/mailbox.mjs";
 import { keepAwakeWrap } from "../lib/keepawake.mjs";
 import { record as incident } from "../lib/incident.mjs";
 import { loadRegistry } from "../lib/usage.mjs";
+import { requireProject } from "../lib/project.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { opts, positional } = parseArgs(process.argv.slice(2), { valueKeys: ["cwd", "event", "by"], flagKeys: [] });
@@ -192,6 +193,7 @@ function tickAll(state) {
   return state;
 }
 
+if (["status", "stop", "ack"].includes(cmd)) requireProject(root, "--cwd");
 if (cmd === "status") { console.log(JSON.stringify(readJson(STATE, { status: "not_started" }), null, 2)); process.exit(0); }
 if (cmd === "stop") { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(STOP, ""); console.log("stop requested; workers are unaffected"); process.exit(0); }
 if (cmd === "ack") {

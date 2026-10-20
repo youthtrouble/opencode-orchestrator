@@ -8,8 +8,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import tty from "node:tty";
-import { post, list, ack, resolveId } from "../lib/mailbox.mjs";
+import { post, list, ack, resolveId, mailboxDir, UnknownMessageError } from "../lib/mailbox.mjs";
 import { clearGate } from "../lib/flip.mjs";
+import { requireProject } from "../lib/project.mjs";
 
 // A reply to message `id` answers the human gate when the gate's question (stored as a full id or a
 // prefix) resolves to that same message, the way the reply's own id was resolved; a question that
@@ -59,6 +60,16 @@ for (let i = 0; i < rest.length; i++) {
   i++;
 }
 const root = path.resolve(opts.root || process.env.ORCHESTRATOR_PROJECT || process.cwd());
+if (["list", "ack", "reply", "inbox"].includes(cmd)) requireProject(root, "--root");
+
+// An unknown id usually means the shell is in another project: name the mailbox searched.
+function exitOnUnknownId(action) {
+  try { return action(); } catch (e) {
+    if (!(e instanceof UnknownMessageError)) throw e;
+    console.error(`${e.message} in ${mailboxDir(root)}; if it belongs to another project, cd there or pass --root <project dir>`);
+    process.exit(1);
+  }
+}
 if (cmd === "post") {
   let body = opts.body || "";
   if (body === "-") body = fs.readFileSync(0, "utf8");
@@ -73,7 +84,7 @@ if (cmd === "post") {
   // tty.isatty, not process.stdin.isTTY, which makes a stdin pipe non-blocking (see readPrompt).
   const body = words.join(" ") || (tty.isatty(0) ? "" : fs.readFileSync(0, "utf8"));
   if (!idArg || !body) { console.error('usage: mailbox.mjs reply <id-or-prefix> "your answer"'); process.exit(2); }
-  const id = resolveId(root, idArg);
+  const id = exitOnUnknownId(() => resolveId(root, idArg));
   const orig = list(root, { limit: 100000 }).find((m) => m.id === id);
   const m = post(root, { from: "human", to: orig?.from || "*", kind: "note", subject: `Re: ${orig?.subject || id}`.slice(0, 140), body, thread: id });
   ack(root, { id, by: "human", note: "replied" });
@@ -84,5 +95,5 @@ if (cmd === "post") {
   if (!qs.length) { console.log("No open questions for you."); process.exit(0); }
   for (const m of qs) console.log(`[${m.id.slice(0, 8)}] ${m.at.slice(0, 16)}Z from ${m.from}: ${m.subject}\n    ${String(m.body).slice(0, 400).replace(/\n/g, " ")}\n    reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply ${m.id.slice(0, 8)} "your answer"\n`);
 } else if (cmd === "ack") {
-  console.log(JSON.stringify(ack(root, { id: opts.id, by: opts.by, note: opts.note || "" })));
+  console.log(JSON.stringify(exitOnUnknownId(() => ack(root, { id: opts.id, by: opts.by, note: opts.note || "" }))));
 } else { console.error("commands: post | list | ack | reply | inbox"); process.exit(2); }

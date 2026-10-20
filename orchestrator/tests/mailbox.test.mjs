@@ -88,3 +88,31 @@ test("mailbox reply to a message that only shares the gate question's short pref
   assert.equal(r.stderr, `could not match the human gate's question: ambiguous message id prefix ${question.id.slice(0, 2)}\n`);
   assert.equal(readFlipJson(project).awaiting_human.door, "claude");
 });
+
+test("mailbox reply outside a project names the directory, exits 2 and creates nothing", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mailbox-outside-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const r = reply(dir, "abc");
+
+  assert.equal(r.status, 2);
+  assert.equal(r.stdout, "");
+  assert.equal(r.stderr, `not an orchestrator project: ${dir} has no .orchestrator/ directory; cd into the project or pass --root <project dir>\n`);
+  assert.equal(fs.existsSync(path.join(dir, ".orchestrator")), false);
+});
+
+test("mailbox reply and ack with an unknown id name the mailbox searched and exit 1", (t) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mailbox-unknown-"));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  post(project, { from: "conductor", to: "human", kind: "question", subject: "ship it?" });
+  const want = `no message with id zzz in ${path.join(project, ".orchestrator", "mailbox")}; if it belongs to another project, cd there or pass --root <project dir>\n`;
+
+  const replied = reply(project, "zzz");
+  const acked = spawnSync(process.execPath, [mailboxCli, "ack", "--id", "zzz", "--by", "human", "--root", project], { encoding: "utf8" });
+
+  for (const r of [replied, acked]) {
+    assert.equal(r.status, 1);
+    assert.equal(r.stdout, "");
+    assert.equal(r.stderr, want);
+  }
+});

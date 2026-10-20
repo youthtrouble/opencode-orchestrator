@@ -3,9 +3,15 @@
 package paths
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/user"
 	"path/filepath"
+	"syscall"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
 // Paths are the per-user locations, resolved once from the environment.
@@ -93,6 +99,34 @@ func absOrDefault(value, fallback string) (string, error) {
 // ProjectDir is <project>/.orchestrator, the per-project state both runtimes share.
 func ProjectDir(projectRoot string) string {
 	return filepath.Join(projectRoot, ".orchestrator")
+}
+
+// NotAProjectError refuses a command that reads or stops a project's existing state where the
+// root has no .orchestrator/ directory (lib/project.mjs requireProject). Flag is the option
+// that names another root: --root for mailbox, --cwd elsewhere.
+type NotAProjectError struct {
+	Root string
+	Flag string
+}
+
+func (e *NotAProjectError) Error() string {
+	return fmt.Sprintf("not an orchestrator project: %s has no .orchestrator/ directory; cd into the project or pass %s <project dir>", e.Root, e.Flag)
+}
+
+// RequireProject returns nil when <projectRoot>/.orchestrator is a directory (following
+// symlinks), a *NotAProjectError when it is not or nothing is there (ENOENT, ENOTDIR), and any
+// other stat failure (EACCES, ELOOP, ...) worded as Node's fs.statSync throws it.
+func RequireProject(projectRoot, flag string) error {
+	dir := ProjectDir(projectRoot)
+	info, err := os.Stat(dir)
+	switch {
+	case err == nil && info.IsDir():
+		return nil
+	case err == nil, errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		return &NotAProjectError{Root: projectRoot, Flag: flag}
+	default:
+		return nodefs.FileError(err, "stat", dir)
+	}
 }
 
 // RunsDir is where bridge run records go (lib/run-record.mjs runsDir).

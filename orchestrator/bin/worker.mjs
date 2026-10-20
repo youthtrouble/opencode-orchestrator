@@ -19,6 +19,7 @@ import { post } from "../lib/mailbox.mjs";
 import { keepAwakeWrap } from "../lib/keepawake.mjs";
 import { record as incident } from "../lib/incident.mjs";
 import { loadRegistry } from "../lib/usage.mjs";
+import { requireProject } from "../lib/project.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const { opts, positional } = parseArgs(process.argv.slice(2), {
@@ -43,6 +44,7 @@ function publish(state, changes) {
   catch (err) { state.state_storage = "unavailable"; state.last_state_write_error = err.code || String(err); } // never kill the author on ENOSPC
 }
 
+if (cmd === "status" || cmd === "stop") requireProject(root, "--cwd");
 if (cmd === "status") {
   refuseUnsafeLane(opts.lane);
   const lanes = opts.lane ? [opts.lane] : fs.existsSync(workersDir) ? fs.readdirSync(workersDir).filter((f) => f.endsWith(".json")).map((f) => f.replace(/\.json$/, "")) : [];

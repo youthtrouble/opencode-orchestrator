@@ -9,26 +9,45 @@ import (
 	"testing"
 )
 
+// emptyProject is a temp project root whose .orchestrator/ directory exists and is empty.
+func emptyProject(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".orchestrator"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 // Every case passes a temp --cwd: no test may reach a real project's supervisor files.
 func TestSupervisorDispatch(t *testing.T) {
+	notAProject := "not an orchestrator project: %s has no .orchestrator/ directory; cd into the project or pass --cwd <project dir>\n"
 	for _, tc := range []struct {
 		name           string
 		args           []string
+		project        bool
 		code           int
 		stdout, stderr string
 	}{
-		{"no command is the usage line", nil, 2, "", "commands: start | serve | status | stop | ack --event ID\n"},
-		{"an unknown command prints nothing", []string{"foo"}, 0, "", ""},
-		{"status of a fresh project", []string{"status"}, 0, "{\n  \"status\": \"not_started\"\n}\n", ""},
-		{"ack without an event", []string{"ack"}, 1, "", "unknown event id\n"},
+		{"no command is the usage line", nil, false, 2, "", "commands: start | serve | status | stop | ack --event ID\n"},
+		{"an unknown command prints nothing", []string{"foo"}, false, 0, "", ""},
+		{"status of a fresh project", []string{"status"}, true, 0, "{\n  \"status\": \"not_started\"\n}\n", ""},
+		{"ack without an event", []string{"ack"}, true, 1, "", "unknown event id\n"},
+		{"status outside a project", []string{"status"}, false, 2, "", notAProject},
+		{"stop outside a project", []string{"stop"}, false, 2, "", notAProject},
+		{"ack outside a project", []string{"ack", "--event", "e1"}, false, 2, "", notAProject},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root, written := t.TempDir(), ""
+			if tc.project {
+				root = emptyProject(t)
+				written = ".orchestrator"
+			}
 			code, stdout, stderr := run(t, Supervisor, append(tc.args, "--cwd", root), "")
-			if code != tc.code || stdout != tc.stdout || stderr != tc.stderr {
+			if want := strings.ReplaceAll(tc.stderr, "%s", root); code != tc.code || stdout != tc.stdout || stderr != want {
 				t.Errorf("code %d, stdout %q, stderr %q", code, stdout, stderr)
 			}
-			if entries, _ := os.ReadDir(root); len(entries) != 0 {
+			if entries, _ := os.ReadDir(filepath.Join(root, written)); len(entries) != 0 {
 				t.Errorf("wrote %v", entries)
 			}
 		})
@@ -36,7 +55,7 @@ func TestSupervisorDispatch(t *testing.T) {
 }
 
 func TestSupervisorStopAndAckCrashLines(t *testing.T) {
-	root := t.TempDir()
+	root := emptyProject(t)
 	if code, stdout, _ := run(t, Supervisor, []string{"stop", "--cwd", root}, ""); code != 0 || stdout != "stop requested; workers are unaffected\n" {
 		t.Fatalf("stop: code %d, stdout %q", code, stdout)
 	}
@@ -79,7 +98,7 @@ func TestSupervisorServeAndStartOverALiveLock(t *testing.T) {
 // A stop file present at serve's first loop stops it before any tick: the state records the
 // stop and the lock is released.
 func TestSupervisorServeStopsBeforeTheFirstTick(t *testing.T) {
-	root := t.TempDir()
+	root := emptyProject(t)
 	if code, _, _ := run(t, Supervisor, []string{"stop", "--cwd", root}, ""); code != 0 {
 		t.Fatal("stop failed")
 	}

@@ -7,9 +7,11 @@ import { parseArgs } from "../lib/run-record.mjs";
 import { getRouting } from "../lib/usage.mjs";
 import { list as mailboxList } from "../lib/mailbox.mjs";
 import { read as incidents } from "../lib/incident.mjs";
+import { requireProject } from "../lib/project.mjs";
 
 const { opts } = parseArgs(process.argv.slice(2), { valueKeys: ["cwd", "interval"], flagKeys: ["follow"] });
 const root = path.resolve(opts.cwd || process.cwd());
+requireProject(root, "--cwd");
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return null; } };
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 

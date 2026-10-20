@@ -127,3 +127,29 @@ func TestMailboxReplyReportsAnUnreadableFlipJSONButSucceeds(t *testing.T) {
 		t.Errorf("stderr = %q, want %q", stderr, want)
 	}
 }
+
+func TestMailboxReplyOutsideAProjectRefusesAndCreatesNothing(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ORCHESTRATOR_PROJECT", root)
+	code, stdout, stderr := run(t, Mailbox, []string{"reply", "abc", "yes"}, "")
+	want := "not an orchestrator project: " + root + " has no .orchestrator/ directory; cd into the project or pass --root <project dir>\n"
+	if code != 2 || stdout != "" || stderr != want {
+		t.Errorf("code %d stdout %q stderr %q; want 2 and %q", code, stdout, stderr, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".orchestrator")); !os.IsNotExist(err) {
+		t.Errorf(".orchestrator/ exists after a refused reply (stat: %v)", err)
+	}
+}
+
+func TestMailboxReplyAndAckWithAnUnknownIDNameTheMailboxSearched(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("ORCHESTRATOR_PROJECT", root)
+	postQuestion(t, root, "ship it?")
+	want := "no message with id zzz in " + filepath.Join(root, ".orchestrator", "mailbox") + "; if it belongs to another project, cd there or pass --root <project dir>\n"
+	for _, argv := range [][]string{{"reply", "zzz", "yes"}, {"ack", "--id", "zzz", "--by", "human"}} {
+		code, stdout, stderr := run(t, Mailbox, argv, "")
+		if code != 1 || stdout != "" || stderr != want {
+			t.Errorf("%v: code %d stdout %q stderr %q; want 1 and %q", argv, code, stdout, stderr, want)
+		}
+	}
+}

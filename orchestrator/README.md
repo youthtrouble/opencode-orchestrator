@@ -307,6 +307,9 @@ node $ORCH/mailbox.mjs reply <id-or-prefix> "answer"  # threaded note from "huma
 ```
 
 `--root DIR` or `ORCHESTRATOR_PROJECT` selects the project; the default is the current directory.
+`list`, `ack`, `reply` and `inbox` refuse to run where that directory has no `.orchestrator/`
+(exit 2, nothing written); `post` creates it. An `ack` or `reply` id that matches no message names
+the mailbox it searched (exit 1).
 
 Manifests are sha256 fingerprints of the files a slice released:
 
@@ -457,6 +460,7 @@ reversal or a long unattended run.
 | Installer refusal | Keep the receipt/backup, reconcile, follow [recovery](#install-update-uninstall-and-recovery) |
 | Doctor unit-test row fails | `node --test orchestrator/tests/*.test.mjs` in the checkout (the doctor has a 20 s limit) |
 | Codex bridge argument error | See [limitations](#tests-verification-and-limitations) |
+| `not an orchestrator project: <dir> has no .orchestrator/ directory` | A read or stop command (`mailbox list\|ack\|reply\|inbox`, `watch`, `flip status`, `flip gate --clear`, `worker status\|stop`, `supervisor status\|stop\|ack`) ran outside the project: `cd` there or pass `--cwd` (`--root` for the mailbox). Exit 2, nothing written |
 
 `/audit-orchestrator` (skill `orchestrator-audit`) re-verifies model ids, prices, limits and CLI
 flags against official sources and live catalogs, updates `models.json`, and calls for tests and
