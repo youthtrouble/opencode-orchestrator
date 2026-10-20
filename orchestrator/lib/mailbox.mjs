@@ -19,9 +19,20 @@ function readJsonl(file) {
   return fs.readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 
-export function post(projectRoot, { from, to = "*", kind = "note", subject, body = "", refs = [], thread = null }) {
+// Thrown when a question carries no recommended answer: the human must be able to accept one as it stands.
+export class QuestionNeedsRecommendationError extends Error {
+  constructor() { super("a question needs a recommended answer"); }
+}
+
+// A question also records the answer its poster recommends and whether it blocks the poster (default true).
+// Other kinds ignore both, so their lines stay as they were.
+export function post(projectRoot, { from, to = "*", kind = "note", subject, body = "", refs = [], thread = null, recommended, blocking = true }) {
   if (!from || !subject) throw new Error("post needs from and subject");
   const msg = { id: crypto.randomUUID(), at: new Date().toISOString(), from, to, kind, subject, body, refs, thread };
+  if (kind === "question") {
+    if (typeof recommended !== "string" || !recommended) throw new QuestionNeedsRecommendationError();
+    Object.assign(msg, { recommended, blocking });
+  }
   appendJsonl(path.join(mailboxDir(projectRoot), "messages.jsonl"), msg);
   return msg;
 }

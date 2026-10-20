@@ -71,8 +71,10 @@ and for each other, and where your answers go. Questions come in two kinds:
   `STATE.md` and the report, asks, and carries on. Answer when you can; it reads your reply on its
   next turn.
 
+Every question carries the answer the conductor recommends and whether it blocks the conductor.
 `orch watch` lists them under "QUESTIONS FOR YOU"; `orch mailbox inbox` prints each with its reply
-command.
+command, marks blocking ones `(blocking)` and shows the recommended answer, so you can reply with
+it or with your own.
 
 **...leave it running while I'm away?** From a terminal in the repo, with a brief written to
 `.orchestrator/briefs/<idea>.md`:
@@ -230,7 +232,7 @@ pause is not recorded, it exits 1 instead, since nothing would relaunch.
 
 ```sh
 orch watch --follow                    # live screen; "QUESTIONS FOR YOU" is listed at the top
-orch mailbox inbox                     # the open questions, each with its reply command
+orch mailbox inbox                     # the open questions: (blocking), the recommended answer, the reply command
 orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"   # the id or its first 8 characters
 ```
 

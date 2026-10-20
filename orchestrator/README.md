@@ -308,6 +308,7 @@ The mailbox is append-only JSONL under `.orchestrator/mailbox/`. Kinds in use in
 
 ```sh
 node $ORCH/mailbox.mjs post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
+                           [--recommended TEXT] [--blocking true|false]   # question only
 node $ORCH/mailbox.mjs list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
 node $ORCH/mailbox.mjs ack --id ID --by B [--note text]
 node $ORCH/mailbox.mjs inbox                       # open questions for you, each with its reply command
@@ -318,6 +319,15 @@ node $ORCH/mailbox.mjs reply <id-or-prefix> "answer"  # threaded note from "huma
 `list`, `ack`, `reply` and `inbox` refuse to run where that directory has no `.orchestrator/`
 (exit 2, nothing written); `post` creates it. An `ack` or `reply` id that matches no message names
 the mailbox it searched (exit 1).
+
+A question must carry `--recommended "<the answer you recommend>"`; `--blocking` (default `true`;
+bare means `true`) says whether it blocks the poster. The message line gains `"recommended"` and
+`"blocking"` after `"thread"`; other kinds take neither option. A question without a non-empty
+`--recommended`, a `--blocking` other than `true` or `false`, or either option on another kind is
+refused with a usage line (exit 2, nothing written). `lib/mailbox.mjs` `post()` throws
+`QuestionNeedsRecommendationError` for a question without one. `inbox` ends the header of a blocking
+question with ` (blocking)` and prints `recommended: <first 200 UTF-16 units, newlines as spaces>` under its body; older
+questions without these keys print as before.
 
 Manifests are sha256 fingerprints of the files a slice released:
 

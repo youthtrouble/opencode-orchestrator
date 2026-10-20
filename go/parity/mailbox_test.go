@@ -179,6 +179,15 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "post/no-from", args: []string{"post", "--subject", "s"}, crash: crashC1},
 		{name: "post/no-subject", args: []string{"post", "--from", "a", "--subject", ""}, crash: crashC1},
 		{name: "post/bare-from", args: []string{"post", "--from", "--subject", "s", "--body", "-"}, stdin: "read first", crash: crashC1},
+		{name: "post/question-both-options", args: append(postQuestion, "--recommended", "ship it 😀", "--blocking", "true")},
+		{name: "post/question-bare-blocking", args: append(postQuestion, "--recommended", "r", "--blocking")},
+		{name: "post/question-blocking-false", args: append(postQuestion, "--blocking", "false", "--recommended", "r")},
+		{name: "post/question-blocking-maybe", args: append(postQuestion, "--recommended", "r", "--blocking", "maybe")},
+		{name: "post/question-no-recommended", args: append(postQuestion, "--body", "-"), stdin: "never read"},
+		{name: "post/question-bare-recommended", args: append(postQuestion, "--recommended", "--blocking")},
+		{name: "post/question-empty-recommended", args: append(postQuestion, "--recommended", "")},
+		{name: "post/note-with-recommended", args: []string{"post", "--from", "a", "--subject", "s", "--recommended", "r"}},
+		{name: "post/note-with-bare-blocking", args: []string{"post", "--from", "a", "--kind", "review", "--subject", "s", "--blocking"}},
 
 		{name: "list/empty", args: []string{"list"}, seed: seedProjectDir(".orchestrator")},
 		{name: "list/text", args: []string{"list"}, seed: seeded},
@@ -186,6 +195,7 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "list/json-value-is-text", args: []string{"list", "--json", "x"}, seed: seeded},
 		{name: "list/to", args: []string{"list", "--to", "reviewer", "--json"}, seed: seeded},
 		{name: "list/kind", args: []string{"list", "--kind", "question"}, seed: seeded},
+		{name: "list/json-question-keys", args: []string{"list", "--json"}, seed: seedMailbox(mailboxMessages+recommendedQuestions, mailboxAcks)},
 		{name: "list/since", args: []string{"list", "--since", "2026-10-18T12:00:00.000Z"}, seed: seeded},
 		{name: "list/unacked-by", args: []string{"list", "--unacked-by", "reviewer"}, seed: seeded},
 		{name: "list/bare-filters", args: []string{"list", "--since", "--to", "--kind", "--limit", "--json"}, seed: seeded},
@@ -221,6 +231,7 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "inbox/several", args: []string{"inbox"}, seed: seedMailbox(mailboxMessages+inboxExtras, mailboxAcks+`{"id":"eeeeeeee-0000-0000-0000-00000000000a","by":"human"}`+"\n")},
 		{name: "inbox/limit-before-filter", args: []string{"inbox"}, seed: seedMailbox(manyQuestions(), "")},
 		{name: "inbox/all-hidden-by-limit", args: []string{"inbox"}, seed: seedMailbox(hiddenQuestions(), "")},
+		{name: "inbox/blocking-recommended-legacy", args: []string{"inbox"}, seed: seedMailbox(mailboxMessages+recommendedQuestions, mailboxAcks)},
 
 		{name: "unknown-command", args: []string{"frob"}},
 		{name: "no-command", args: nil},
@@ -279,6 +290,19 @@ func (h *harness) compareUnknownMessageID(t *testing.T, c mailboxCase, id string
 	}
 	compareOutcomes(t, js, orch)
 }
+
+// postQuestion starts a question post. Cases append their own options; the literal has no
+// spare capacity, so each append copies it.
+var postQuestion = []string{"post", "--from", "conductor", "--to", "human", "--kind", "question", "--subject", "ship?"}
+
+// Questions that carry a recommended answer: blocking, not blocking, a blocking value that is
+// not a boolean, a recommendation that is not a string, and one whose newlines and an emoji
+// sit across the 200-unit cut. The seeded legacy questions have neither key.
+var recommendedQuestions = lines(
+	`{"id":"12121212-0000-0000-0000-000000000001","at":"2026-10-18T17:00:00.000Z","from":"conductor","to":"human","kind":"question","subject":"push?","body":"b","refs":[],"thread":null,"recommended":"yes","blocking":true}`,
+	`{"id":"12121212-0000-0000-0000-000000000002","at":"2026-10-18T17:01:00.000Z","from":"conductor","to":"*","kind":"question","subject":"name?","body":"","refs":[],"thread":null,"recommended":"`+strings.Repeat("a\\n", 99)+`x😀tail","blocking":false}`,
+	`{"id":"12121212-0000-0000-0000-000000000003","at":"2026-10-18T17:02:00.000Z","from":"conductor","to":"human","kind":"question","subject":"odd","body":"b","refs":[],"recommended":7,"blocking":"true"}`,
+)
 
 // Questions for the several-questions inbox: long bodies with newlines and an emoji across
 // the 400-unit cut (stdout is identical: Node prints the lone surrogate as U+FFFD), no body,

@@ -51,6 +51,12 @@ func Mailbox(args []string, stdio Stdio) int {
 // mailboxPost prints {id, at}, or with --json the whole message (an orch addition; the JS
 // ignores --json). As in list, only a bare --json counts.
 func mailboxPost(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) int {
+	kind := valueOr(parsed.Values["kind"], "note")
+	recommended, blocking, usage := questionOptions(parsed, kind)
+	if usage != "" {
+		fmt.Fprintf(stdio.Err, "mailbox post: %s\n", usage)
+		return 2
+	}
 	body := parsed.Values["body"]
 	if body == "-" {
 		var err error
@@ -59,13 +65,15 @@ func mailboxPost(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) 
 		}
 	}
 	msg, err := box.Post(mailbox.Draft{
-		From:    parsed.Values["from"],
-		To:      valueOr(parsed.Values["to"], "*"),
-		Kind:    valueOr(parsed.Values["kind"], "note"),
-		Subject: parsed.Values["subject"],
-		Body:    body,
-		Refs:    parsed.Refs,
-		Thread:  parsed.Values["thread"],
+		From:        parsed.Values["from"],
+		To:          valueOr(parsed.Values["to"], "*"),
+		Kind:        kind,
+		Subject:     parsed.Values["subject"],
+		Body:        body,
+		Refs:        parsed.Refs,
+		Thread:      parsed.Values["thread"],
+		Recommended: recommended,
+		Blocking:    blocking,
 	})
 	if err != nil {
 		return crash(stdio, err)
@@ -77,6 +85,35 @@ func mailboxPost(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) 
 	receipt.Set("id", jsjson.Path(msg, "id"))
 	receipt.Set("at", jsjson.Path(msg, "at"))
 	return printLine(stdio, receipt)
+}
+
+// questionOptions is the recommended answer and blocking state of a question, checked before
+// anything is read or written, or the usage line that refuses the post. A bare --blocking
+// means true; other kinds take neither option.
+func questionOptions(parsed cliargs.MailboxArgs, kind string) (recommended *string, blocking *bool, usage string) {
+	given := func(key string) bool {
+		_, hasValue := parsed.Values[key]
+		return hasValue || parsed.Flags[key]
+	}
+	if kind != "question" {
+		if given("recommended") || given("blocking") {
+			return nil, nil, "--recommended and --blocking are only for --kind question"
+		}
+		return nil, nil, ""
+	}
+	isBlocking := true
+	switch value, hasValue := parsed.Values["blocking"]; {
+	case !hasValue || value == "true":
+	case value == "false":
+		isBlocking = false
+	default:
+		return nil, nil, "--blocking must be true or false"
+	}
+	answer := parsed.Values["recommended"]
+	if answer == "" {
+		return nil, nil, `a question needs --recommended "<the answer you recommend>"`
+	}
+	return &answer, &isBlocking, ""
 }
 
 func mailboxList(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) int {
@@ -306,10 +343,29 @@ func mailboxInbox(box *mailbox.Mailbox, stdio Stdio) int {
 			return crash(stdio, err)
 		}
 		body := strings.ReplaceAll(jsstr.Slice(text(m, "body"), 0, 400), "\n", " ")
-		fmt.Fprintf(stdio.Out, "[%s] %sZ from %s: %s\n    %s\n    reply: %s %s \"your answer\"\n\n",
-			id8, at16, text(m, "from"), text(m, "subject"), body, reply, id8)
+		fmt.Fprintf(stdio.Out, "[%s] %sZ from %s: %s%s\n    %s%s\n    reply: %s %s \"your answer\"\n\n",
+			id8, at16, text(m, "from"), text(m, "subject"), blockingMark(m), body, recommendedLine(m), reply, id8)
 	}
 	return 0
+}
+
+// blockingMark ends the header of a question that blocks its poster. Older questions carry
+// neither `blocking` nor `recommended` and print as they always did.
+func blockingMark(m *jsjson.Object) string {
+	if jsjson.Path(m, "blocking") == true {
+		return " (blocking)"
+	}
+	return ""
+}
+
+// recommendedLine shows the first 200 UTF-16 units of the answer a question's poster
+// recommends, on one line.
+func recommendedLine(m *jsjson.Object) string {
+	answer, isString := jsjson.Path(m, "recommended").(string)
+	if !isString {
+		return ""
+	}
+	return "\n    recommended: " + strings.ReplaceAll(jsstr.Slice(answer, 0, 200), "\n", " ")
 }
 
 func mailboxAck(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) int {

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { post, list } from "../lib/mailbox.mjs";
+import { post, list, QuestionNeedsRecommendationError } from "../lib/mailbox.mjs";
 import { runWithLateStdin } from "./late-stdin.mjs";
 
 const mailboxCli = fileURLToPath(new URL("../bin/mailbox.mjs", import.meta.url));
@@ -16,7 +16,7 @@ const flipCli = fileURLToPath(new URL("../bin/flip.mjs", import.meta.url));
 test("mailbox reply waits for an answer piped on stdin late", async (t) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "mailbox-reply-"));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
-  const question = post(project, { from: "conductor", to: "human", kind: "question", subject: "ship it?" });
+  const question = post(project, { from: "conductor", to: "human", kind: "question", subject: "ship it?", recommended: "yes" });
 
   const { code, stderr } = await runWithLateStdin([mailboxCli, "reply", question.id], "yes", { env: { ...process.env, ORCHESTRATOR_PROJECT: project } });
 
@@ -30,7 +30,7 @@ test("mailbox reply waits for an answer piped on stdin late", async (t) => {
 function gatedProject(t, questionRef = (id) => id) {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "mailbox-gate-"));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
-  const question = post(project, { from: "conductor-claude", to: "human", kind: "question", subject: "push to main?" });
+  const question = post(project, { from: "conductor-claude", to: "human", kind: "question", subject: "push to main?", recommended: "yes" });
   const gate = spawnSync(process.execPath, [flipCli, "gate", "--active", "claude", "--question", questionRef(question.id), "--cwd", project], { encoding: "utf8" });
   assert.equal(gate.status, 0, gate.stderr);
   return { project, question };
@@ -61,7 +61,7 @@ for (const [name, questionRef, replyRef] of [
 
 test("mailbox reply to another message keeps the gate", (t) => {
   const { project } = gatedProject(t);
-  const other = post(project, { from: "conductor-claude", to: "human", kind: "question", subject: "naming?" });
+  const other = post(project, { from: "conductor-claude", to: "human", kind: "question", subject: "naming?", recommended: "keep it" });
 
   const r = reply(project, other.id);
 
@@ -76,7 +76,7 @@ test("mailbox reply to another message keeps the gate", (t) => {
 // that other message must not clear the gate (the prefix no longer names one message).
 test("mailbox reply to a message that only shares the gate question's short prefix keeps the gate", (t) => {
   const { project, question } = gatedProject(t, (id) => id.slice(0, 2));
-  const other = post(project, { from: "conductor-claude", to: "human", kind: "question", subject: "naming?" });
+  const other = post(project, { from: "conductor-claude", to: "human", kind: "question", subject: "naming?", recommended: "keep it" });
   const messagesFile = path.join(project, ".orchestrator", "mailbox", "messages.jsonl");
   const otherId = question.id.slice(0, 2) + other.id.slice(2);
   fs.writeFileSync(messagesFile, fs.readFileSync(messagesFile, "utf8").replace(other.id, otherId));
@@ -104,7 +104,7 @@ test("mailbox reply outside a project names the directory, exits 2 and creates n
 test("mailbox reply and ack with an unknown id name the mailbox searched and exit 1", (t) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "mailbox-unknown-"));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
-  post(project, { from: "conductor", to: "human", kind: "question", subject: "ship it?" });
+  post(project, { from: "conductor", to: "human", kind: "question", subject: "ship it?", recommended: "yes" });
   const want = `no message with id zzz in ${path.join(project, ".orchestrator", "mailbox")}; if it belongs to another project, cd there or pass --root <project dir>\n`;
 
   const replied = reply(project, "zzz");
@@ -115,4 +115,73 @@ test("mailbox reply and ack with an unknown id name the mailbox searched and exi
     assert.equal(r.stdout, "");
     assert.equal(r.stderr, want);
   }
+});
+
+function tempProject(t) {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "mailbox-question-"));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  return project;
+}
+const messagesFile = (project) => path.join(project, ".orchestrator", "mailbox", "messages.jsonl");
+function mailbox(project, ...args) {
+  return spawnSync(process.execPath, [mailboxCli, ...args], { encoding: "utf8", env: { ...process.env, ORCHESTRATOR_PROJECT: project } });
+}
+const postQuestion = (project, ...args) => mailbox(project, "post", "--from", "conductor", "--to", "human", "--kind", "question", "--subject", "ship?", ...args);
+
+test("post() refuses a question without a recommended answer and writes nothing", (t) => {
+  const project = tempProject(t);
+  for (const recommended of [undefined, ""]) {
+    assert.throws(() => post(project, { from: "conductor", kind: "question", subject: "ship?", recommended }), QuestionNeedsRecommendationError);
+  }
+  assert.equal(fs.existsSync(messagesFile(project)), false);
+});
+
+test("mailbox post records a question's recommended answer and blocking state after thread", (t) => {
+  for (const [args, tail] of [
+    [["--recommended", "ship it"], '"thread":null,"recommended":"ship it","blocking":true}'],
+    [["--recommended", "ship it", "--blocking"], '"thread":null,"recommended":"ship it","blocking":true}'],
+    [["--blocking", "false", "--recommended", "ship it"], '"thread":null,"recommended":"ship it","blocking":false}'],
+  ]) {
+    const project = tempProject(t);
+    const r = postQuestion(project, ...args);
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(fs.readFileSync(messagesFile(project), "utf8").endsWith(tail + "\n"), args.join(" "));
+  }
+});
+
+test("mailbox post refuses misused question options, exits 2 and writes nothing", (t) => {
+  const needsRecommendation = 'mailbox post: a question needs --recommended "<the answer you recommend>"\n';
+  const onlyForQuestions = "mailbox post: --recommended and --blocking are only for --kind question\n";
+  for (const [args, stderr] of [
+    [["--kind", "question"], needsRecommendation],
+    [["--kind", "question", "--recommended"], needsRecommendation],
+    [["--kind", "question", "--recommended", ""], needsRecommendation],
+    [["--kind", "question", "--recommended", "r", "--blocking", "maybe"], "mailbox post: --blocking must be true or false\n"],
+    [["--recommended", "r"], onlyForQuestions],
+    [["--kind", "note", "--blocking"], onlyForQuestions],
+  ]) {
+    const project = tempProject(t);
+    const r = mailbox(project, "post", "--from", "conductor", "--subject", "s", ...args);
+    assert.deepEqual([r.status, r.stdout, r.stderr], [2, "", stderr], args.join(" "));
+    assert.equal(fs.existsSync(path.join(project, ".orchestrator")), false);
+  }
+});
+
+test("mailbox inbox marks blocking questions and shows the recommended answer; older questions print as before", (t) => {
+  const project = tempProject(t);
+  fs.mkdirSync(path.dirname(messagesFile(project)), { recursive: true });
+  fs.writeFileSync(messagesFile(project), [
+    { id: "q1000000", at: "2026-10-18T12:00:00.000Z", from: "c", to: "human", kind: "question", subject: "ship?", body: "b", recommended: "yes\nnow", blocking: true },
+    { id: "q2000000", at: "2026-10-18T13:00:00.000Z", from: "c", to: "human", kind: "question", subject: "name?", body: "b", recommended: "r".repeat(205), blocking: false },
+    { id: "q3000000", at: "2026-10-18T14:00:00.000Z", from: "c", to: "human", kind: "question", subject: "legacy", body: "b" },
+  ].map((m) => JSON.stringify(m) + "\n").join(""));
+
+  const r = mailbox(project, "inbox");
+
+  const hint = (id) => `    reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply ${id} "your answer"\n\n`;
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout,
+    "[q1000000] 2026-10-18T12:00Z from c: ship? (blocking)\n    b\n    recommended: yes now\n" + hint("q1000000") +
+    `[q2000000] 2026-10-18T13:00Z from c: name?\n    b\n    recommended: ${"r".repeat(200)}\n` + hint("q2000000") +
+    "[q3000000] 2026-10-18T14:00Z from c: legacy\n    b\n" + hint("q3000000"));
 });

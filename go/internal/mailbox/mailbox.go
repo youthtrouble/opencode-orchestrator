@@ -22,10 +22,12 @@ import (
 
 // The errors the JS throws, with its messages. ErrAmbiguousID and ErrNoMessage are wrapped
 // with the id or prefix asked for, so err.Error() is the full JS message.
+// ErrQuestionNeedsRecommendation is the JS QuestionNeedsRecommendationError.
 var (
-	ErrIncompletePost = errors.New("post needs from and subject")
-	ErrAmbiguousID    = errors.New("ambiguous message id prefix")
-	ErrNoMessage      = errors.New("no message with id")
+	ErrIncompletePost              = errors.New("post needs from and subject")
+	ErrQuestionNeedsRecommendation = errors.New("a question needs a recommended answer")
+	ErrAmbiguousID                 = errors.New("ambiguous message id prefix")
+	ErrNoMessage                   = errors.New("no message with id")
 )
 
 // ShapeError reports a hand-edited value whose shape makes the JS throw a TypeError. The
@@ -65,21 +67,30 @@ func NewUUID() string {
 // except that a reply addresses whatever the original's `from` holds, a worker posts from its
 // lane, which is true for a bare --lane, and a flip's body is its --reason, true when bare. A
 // nil Body is the JS default "". An empty Thread is written as null.
+//
+// A question also records Recommended, the answer its poster recommends, and Blocking, whether
+// it blocks the poster (nil is true). Other kinds ignore both, so their lines stay as they were.
 type Draft struct {
-	From    any
-	To      any
-	Kind    string
-	Subject string
-	Body    any
-	Refs    []string
-	Thread  string
+	From        any
+	To          any
+	Kind        string
+	Subject     string
+	Body        any
+	Refs        []string
+	Thread      string
+	Recommended *string
+	Blocking    *bool
 }
 
 // Post appends a message with a fresh id and timestamp and returns it. A falsy From (JS
-// `!from`) or an empty Subject is refused.
+// `!from`) or an empty Subject is refused, then a question without a non-empty Recommended.
 func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	if !jsjson.Truthy(d.From) || d.Subject == "" {
 		return nil, ErrIncompletePost
+	}
+	isQuestion := d.Kind == "question"
+	if isQuestion && (d.Recommended == nil || *d.Recommended == "") {
+		return nil, ErrQuestionNeedsRecommendation
 	}
 	refs := make([]any, len(d.Refs))
 	for i, ref := range d.Refs {
@@ -103,6 +114,10 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	msg.Set("body", body)
 	msg.Set("refs", refs)
 	msg.Set("thread", thread)
+	if isQuestion {
+		msg.Set("recommended", *d.Recommended)
+		msg.Set("blocking", d.Blocking == nil || *d.Blocking)
+	}
 	if err := jsonl.Append(filepath.Join(b.Dir, "messages.jsonl"), msg); err != nil {
 		return nil, err
 	}

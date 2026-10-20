@@ -45,6 +45,47 @@ func TestPostAppendsTheMessageInJSKeyOrder(t *testing.T) {
 	}
 }
 
+// A question records the recommended answer and whether it blocks after thread, blocking by
+// default; other kinds ignore both.
+func TestPostRecordsAQuestionsRecommendationAndBlocking(t *testing.T) {
+	answer, notBlocking := "ship it", false
+	head := `{"id":"id-1","at":"2026-10-18T12:00:00.500Z","from":"a","to":"human","kind":"`
+	for _, c := range []struct {
+		name  string
+		draft Draft
+		want  string
+	}{
+		{"blocking by default", Draft{Kind: "question", Recommended: &answer}, head + `question","subject":"s","body":"","refs":[],"thread":null,"recommended":"ship it","blocking":true}`},
+		{"not blocking", Draft{Kind: "question", Recommended: &answer, Blocking: &notBlocking}, head + `question","subject":"s","body":"","refs":[],"thread":null,"recommended":"ship it","blocking":false}`},
+		{"other kinds ignore both", Draft{Kind: "note", Recommended: &answer, Blocking: &notBlocking}, head + `note","subject":"s","body":"","refs":[],"thread":null}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			draft := c.draft
+			draft.From, draft.To, draft.Subject, draft.Refs = "a", "human", "s", []string{}
+			msg, err := testMailbox(t).Post(draft)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := marshal(t, msg); got != c.want {
+				t.Errorf("Post returned %s\nwant %s", got, c.want)
+			}
+		})
+	}
+}
+
+func TestPostRefusesAQuestionWithoutARecommendation(t *testing.T) {
+	box := testMailbox(t)
+	empty := ""
+	for _, recommended := range []*string{nil, &empty} {
+		if _, err := box.Post(Draft{From: "a", Kind: "question", Subject: "s", Recommended: recommended}); !errors.Is(err, ErrQuestionNeedsRecommendation) {
+			t.Errorf("Post(recommended %v) error = %v, want ErrQuestionNeedsRecommendation", recommended, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(box.Dir, "messages.jsonl")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("messages.jsonl exists after refused posts (stat: %v)", err)
+	}
+}
+
 // A worker posts from its lane, which is the JS true for a bare --lane: any truthy from is
 // accepted and written as given, as `!from` is the JS test.
 func TestPostAcceptsAnyTruthyFrom(t *testing.T) {

@@ -110,6 +110,14 @@
   while a headless conductor runs takes effect at its next brief boundary; the continue brief
   `flip run` writes tells the conductor to update `STATE.md` and stop on `gate`. An interactive
   conductor reports the gate and keeps working with the human (JS and Go, WT4).
+- mailbox (JS, Go): `post --kind question` needs `--recommended "<the answer you recommend>"` and takes
+  `--blocking true|false` (default true; bare means true). The line gains `"recommended"` and `"blocking"`
+  after `"thread"`; other kinds are unchanged and refuse both options. A question without a non-empty
+  recommendation, a bad `--blocking` or either option on another kind exits 2 with a usage line and writes
+  nothing; `post()` / `Mailbox.Post` refuse a question without one (`QuestionNeedsRecommendationError`,
+  `ErrQuestionNeedsRecommendation`). `inbox` marks blocking questions ` (blocking)` and shows the
+  recommended answer; older questions print as before. Callers that post questions without a
+  recommendation (the plugin's `mailbox_post`, the conductor docs) are now refused until they pass one.
 - flip/kickoff: `.orchestrator/` is excluded in linked worktrees (the common dir's `info/exclude`)
   and submodules (the git dir's) instead of failing with ENOTDIR; a `.git` file that is malformed or
   names a missing git dir, or whose `commondir` names a missing directory, counts as no repository

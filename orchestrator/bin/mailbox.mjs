@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 // mailbox.mjs post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
+//                  [--recommended TEXT] [--blocking true|false]
+//                                                    (a question needs --recommended, the answer you recommend;
+//                                                     --blocking, default true, says whether it blocks you)
 // mailbox.mjs list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
 // mailbox.mjs ack --id ID --by B [--note text]
 // mailbox.mjs reply ID-or-prefix "your answer"      (posts a threaded note from "human" and acks the message;
@@ -70,10 +73,37 @@ function exitOnUnknownId(action) {
     process.exit(1);
   }
 }
+
+function exitWithUsage(line) {
+  console.error(`mailbox post: ${line}`);
+  process.exit(2);
+}
+
+// The recommended answer and blocking state of a question, checked before anything is read or written.
+// A bare --blocking means true; other kinds take neither option.
+function questionOptions(kind) {
+  const given = (key) => Object.hasOwn(opts, key) || flags.has(key);
+  if (kind !== "question") {
+    if (given("recommended") || given("blocking")) exitWithUsage("--recommended and --blocking are only for --kind question");
+    return {};
+  }
+  const blocking = blockingOption();
+  if (!opts.recommended) exitWithUsage('a question needs --recommended "<the answer you recommend>"');
+  return { recommended: opts.recommended, blocking };
+}
+
+function blockingOption() {
+  if (!Object.hasOwn(opts, "blocking") || opts.blocking === "true") return true;
+  if (opts.blocking === "false") return false;
+  exitWithUsage("--blocking must be true or false");
+}
+
 if (cmd === "post") {
+  const kind = opts.kind || "note";
+  const question = questionOptions(kind);
   let body = opts.body || "";
   if (body === "-") body = fs.readFileSync(0, "utf8");
-  const m = post(root, { from: opts.from, to: opts.to || "*", kind: opts.kind || "note", subject: opts.subject, body, refs: opts.ref, thread: opts.thread || null });
+  const m = post(root, { from: opts.from, to: opts.to || "*", kind, subject: opts.subject, body, refs: opts.ref, thread: opts.thread || null, ...question });
   console.log(JSON.stringify({ id: m.id, at: m.at }));
 } else if (cmd === "list") {
   const msgs = list(root, { to: opts.to || null, unackedBy: opts["unacked-by"] || null, kind: opts.kind || null, since: opts.since || null, limit: Number(opts.limit || 50) });
@@ -93,7 +123,12 @@ if (cmd === "post") {
 } else if (cmd === "inbox") {
   const qs = list(root, { kind: "question", unackedBy: "human", limit: 50 }).filter((m) => m.to === "human" || m.to === "*");
   if (!qs.length) { console.log("No open questions for you."); process.exit(0); }
-  for (const m of qs) console.log(`[${m.id.slice(0, 8)}] ${m.at.slice(0, 16)}Z from ${m.from}: ${m.subject}\n    ${String(m.body).slice(0, 400).replace(/\n/g, " ")}\n    reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply ${m.id.slice(0, 8)} "your answer"\n`);
+  // Older questions carry neither `blocking` nor `recommended` and print as they always did.
+  for (const m of qs) {
+    const blocking = m.blocking === true ? " (blocking)" : "";
+    const recommended = typeof m.recommended === "string" ? `\n    recommended: ${m.recommended.slice(0, 200).replace(/\n/g, " ")}` : "";
+    console.log(`[${m.id.slice(0, 8)}] ${m.at.slice(0, 16)}Z from ${m.from}: ${m.subject}${blocking}\n    ${String(m.body).slice(0, 400).replace(/\n/g, " ")}${recommended}\n    reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply ${m.id.slice(0, 8)} "your answer"\n`);
+  }
 } else if (cmd === "ack") {
   console.log(JSON.stringify(exitOnUnknownId(() => ack(root, { id: opts.id, by: opts.by, note: opts.note || "" }))));
 } else { console.error("commands: post | list | ack | reply | inbox"); process.exit(2); }
