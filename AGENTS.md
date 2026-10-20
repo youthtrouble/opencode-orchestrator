@@ -65,6 +65,18 @@ independent slice; record a human gate (`flip.mjs gate`) only when nothing indep
 `product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
 post the question, continue.
 
+## Keeping the live checkout current
+<!-- Word-identical in AGENTS.md and claude/agents/conductor.md (Claude Code does not load AGENTS.md): change both. -->
+The live install (the `~/.config/opencode` symlinks) runs from the MAIN checkout, so a push made from a
+slice worktree is not live until the main checkout moves. After each push to main, fetch, then
+fast-forward the main checkout (`git -C <main checkout> merge --ff-only origin/main`) when its tree is
+clean and it is on main; if it is dirty or diverged, post a mailbox note instead of touching it. After a
+fast-forward that touched `plugins/` or `opencode.jsonc`, run `opencode reload`. If `go/` changed, rebuild
+`~/.local/bin/orch` only once the human has approved it (if not yet, ask with a mailbox `question`): in
+the main checkout's `go/`, run `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new
+./cmd/orch`, `mv` it over `~/.local/bin/orch`, then check `orch version`. Never run `install.sh` or
+`uninstall.sh` for this.
+
 ## Going away (`/away`)
 <!-- Word-identical in AGENTS.md and claude/agents/conductor.md (Claude Code does not load AGENTS.md): change both. -->
 `/away`, or the human saying "I'm away", "keep going without me" or "I'm leaving", hands this

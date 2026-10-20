@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- AGENTS.md and the Claude Code conductor: a standing rule keeps the live checkout current. After
+  each push to main the conductor fast-forwards the main checkout when it is clean and on main (else
+  posts a mailbox note) and runs `opencode reload` when `plugins/` or `opencode.jsonc` changed.
 - docs: the READMEs document parity exceptions PE-20 to PE-26 (PE-19 stays reserved for S12),
   including owner-only state files under `orch`.
 - mailbox/watch/flip/worker/supervisor: run outside a project (no `.orchestrator/`), the read and

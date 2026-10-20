@@ -51,7 +51,7 @@ func (p Project) makeStateDir() error {
 
 // writeFlip replaces flip.json with value as JSON (indent 2) and a newline, atomically and
 // owner-only (PE-21), so a supervisor tick never reads an empty or partial gate. The JS
-// truncates and writes in place.
+// also writes a temp file and renames it, but leaves the file mode to the umask.
 func (p Project) writeFlip(value any) error {
 	data, err := jsjson.MarshalIndent(value, "  ")
 	if err != nil {
