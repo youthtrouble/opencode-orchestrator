@@ -216,9 +216,15 @@ func (h *harness) runDetached(t *testing.T, inv invocation, worker, argv []strin
 }
 
 // settle waits until the runner is gone: its launcher has exited, so it was reparented to init,
-// which reaps it. Past settleTimeout it kills the runner's process group and fails the case.
+// which reaps it. Past settleTimeout it kills the runner's process group and fails the case. A
+// pid below 2 fails the case unsignalled: -1 or -0 would reach every process the user owns or
+// the test's own group (S3/R13).
 func settle(t *testing.T, pid int) {
 	t.Helper()
+	if pid < 2 {
+		t.Errorf("refusing to settle runner pid %d", pid)
+		return
+	}
 	deadline := time.Now().Add(settleTimeout)
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {

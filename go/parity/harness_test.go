@@ -69,6 +69,7 @@ type harness struct {
 	node      string
 	nodeMajor int // major version of node, for the cases whose JS output depends on it (PE-5)
 	fakesDir  string
+	toolsDir  string // links to node and sqlite3, the only real tools on path
 	path      string
 }
 
@@ -90,12 +91,11 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Fakes come first so no case can reach a real claude, codex or opencode; node and
-	// sqlite3 are the only real tools either runtime may use.
-	searchPath := []string{fakesDir, filepath.Dir(node)}
-	if sqlite, err := exec.LookPath("sqlite3"); err == nil {
-		searchPath = append(searchPath, filepath.Dir(sqlite))
+	toolsDir, err := linkRealTools(node)
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { os.RemoveAll(toolsDir) })
 	version, err := exec.Command(node, "-p", "process.versions.node").Output()
 	if err != nil {
 		t.Fatal("node version:", err)
@@ -104,7 +104,30 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("node version %q: %v", version, err)
 	}
-	return &harness{orchBin: orchBin, orchJS: orchJS, node: node, nodeMajor: major, fakesDir: fakesDir, path: strings.Join(searchPath, ":")}
+	// Fakes come first so no case can reach a real claude, codex or opencode. node and sqlite3
+	// are the only real tools either runtime may use, linked into a private directory rather
+	// than putting their host directories on PATH, where an installed orch (or anything else)
+	// beside them could change a case (S4/R10).
+	return &harness{orchBin: orchBin, orchJS: orchJS, node: node, nodeMajor: major, fakesDir: fakesDir, toolsDir: toolsDir, path: fakesDir + ":" + toolsDir}
+}
+
+// linkRealTools makes a temporary directory holding a symlink named node to node and, when
+// sqlite3 is installed, one named sqlite3 to it. newHarness removes it when the test ends.
+func linkRealTools(node string) (string, error) {
+	dir, err := os.MkdirTemp("", "orch-parity-tools-")
+	if err != nil {
+		return "", err
+	}
+	links := map[string]string{"node": node}
+	if sqlite, err := exec.LookPath("sqlite3"); err == nil {
+		links["sqlite3"] = sqlite
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			return "", errors.Join(err, os.RemoveAll(dir))
+		}
+	}
+	return dir, nil
 }
 
 // invocation is one parity case: the same input given to each runtime. seed, when set,

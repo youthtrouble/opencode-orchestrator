@@ -124,6 +124,15 @@ func (h *harness) testWatch(t *testing.T) {
 			h.comparePair(t, inv)
 		})
 	}
+	t.Run("questions/orch-on-path-PE-26", func(t *testing.T) {
+		t.Parallel()
+		h.compareReplyHintWithOrchOnPath(t, invocation{
+			js:        []string{h.node, filepath.Join(h.orchJS, "bin", "watch.mjs")},
+			orch:      []string{h.orchBin, "watch"},
+			seed:      seeds(cache, codexAnswers(t), watchProject("mailbox/messages.jsonl", message("to-human-1", iso(0), "human", "question", "for the human")+"\n")),
+			normalize: normalizeWatchHeader,
+		})
+	})
 	t.Run("follow", func(t *testing.T) {
 		t.Parallel()
 		h.compareWatchFollow(t, seeds(cache, codexAnswers(t), watchProject("STATE.md", "## Next action\nfollow\n")), false)

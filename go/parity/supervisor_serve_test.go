@@ -512,8 +512,8 @@ func (h *harness) runStart(t *testing.T, s seed, argv []string) outcome {
 		t.Fatalf("start output %q: %v", o.stdout, err)
 	}
 	if launched.Started {
-		if launched.Pid <= 0 {
-			t.Fatalf("start launched no pid: %q", o.stdout)
+		if launched.Pid < 2 {
+			t.Fatalf("start launched no usable pid: %q", o.stdout)
 		}
 		h.stopLaunched(t, sb, launched.Pid)
 		o.stdout = strings.Replace(o.stdout, `"supervisor_pid":`+strconv.Itoa(launched.Pid), `"supervisor_pid":<pid>`, 1)
@@ -523,9 +523,13 @@ func (h *harness) runStart(t *testing.T, s seed, argv []string) outcome {
 }
 
 // stopLaunched waits for the launched serve to hold its lock and tick, writes the stop file
-// and waits for pid to exit; on timeout it kills pid and fails.
+// and waits for pid to exit; on timeout it kills pid and fails. It refuses pids below 2, which
+// would signal init or every process the user owns (S3/R13).
 func (h *harness) stopLaunched(t *testing.T, sb sandbox, pid int) {
 	t.Helper()
+	if pid < 2 {
+		t.Fatalf("refusing to stop pid %d", pid)
+	}
 	dir := filepath.Join(sb.project, ".orchestrator")
 	never := make(chan error)
 	waitForLock(filepath.Join(dir, "supervisor.lock"), pid, never)
@@ -830,6 +834,10 @@ func reapClaudeExec(t *testing.T, side string, sb sandbox) {
 		}
 		if time.Now().After(deadline) {
 			for _, pid := range pids {
+				if pid < 2 { // -1 or 0 would signal far beyond this sandbox (S3/R13)
+					t.Errorf("%s: refusing to kill claude-exec pid %d", side, pid)
+					continue
+				}
 				_ = syscall.Kill(-pid, syscall.SIGKILL) // ESRCH when pid leads no group
 				_ = syscall.Kill(pid, syscall.SIGKILL)
 			}

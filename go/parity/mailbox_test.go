@@ -247,6 +247,10 @@ func (h *harness) testMailbox(t *testing.T) {
 	}
 	t.Run("post/json-PE-3", h.testMailboxPostJSON)
 	t.Run("reply/subject-split-surrogate-PE-1", h.testMailboxReplySplitSurrogate)
+	t.Run("inbox/orch-on-path-PE-26", func(t *testing.T) {
+		seed := seedMailbox(mailboxMessages+inboxExtras, mailboxAcks)
+		h.compareReplyHintWithOrchOnPath(t, h.mailboxInvocation(mailboxCase{args: []string{"inbox"}, seed: seed}))
+	})
 	t.Run("list/astral-spread-PE-1", h.testMailboxAstralSpread)
 	h.testMailboxRegressions(t)
 }
@@ -315,6 +319,32 @@ func (h *harness) testMailboxPostJSON(t *testing.T) {
 	}
 	js, orch = js.normalized(normalizeFresh), orch.normalized(normalizeFresh)
 	js.stdout, orch.stdout = "", ""
+	compareOutcomes(t, js, orch)
+}
+
+const (
+	jsReplyHint   = "node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply "
+	orchReplyHint = "orch mailbox reply "
+)
+
+// compareReplyHintWithOrchOnPath runs inv with a stub orch on PATH for this case only and
+// asserts PE-26: orch's reply hints name orch where the JS names mailbox.mjs. With the hints
+// normalized to the JS text, everything else must match.
+func (h *harness) compareReplyHintWithOrchOnPath(t *testing.T, inv invocation) {
+	t.Helper()
+	stubDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stubDir, "orch"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inv.env = append(append([]string{}, inv.env...), "PATH="+h.path+":"+stubDir)
+	js, orch := h.runPair(t, inv)
+	if !strings.Contains(js.stdout, jsReplyHint) || strings.Contains(js.stdout, orchReplyHint) {
+		t.Errorf("js stdout should hint only %q:\n%s", jsReplyHint, js.stdout)
+	}
+	if !strings.Contains(orch.stdout, orchReplyHint) || strings.Contains(orch.stdout, jsReplyHint) {
+		t.Errorf("orch stdout should hint only %q:\n%s", orchReplyHint, orch.stdout)
+	}
+	orch.stdout = strings.ReplaceAll(orch.stdout, orchReplyHint, jsReplyHint)
 	compareOutcomes(t, js, orch)
 }
 

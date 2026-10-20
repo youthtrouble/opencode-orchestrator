@@ -15,11 +15,33 @@ func TestScriptIsTheInstalledNodeCommand(t *testing.T) {
 	}
 }
 
-// bin/mailbox.mjs inbox prints this exact command before each question's id prefix.
-func TestMailboxReplyIsTheInboxHint(t *testing.T) {
+// Without orch on PATH, bin/mailbox.mjs inbox's exact command precedes each question's id prefix.
+func TestMailboxReplyWithoutOrchIsTheJSInboxHint(t *testing.T) {
 	const want = "node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply"
-	if got := MailboxReply(); got != want {
-		t.Errorf("MailboxReply() = %q, want %q", got, want)
+	if got := MailboxReply(false); got != want {
+		t.Errorf("MailboxReply(false) = %q, want %q", got, want)
+	}
+}
+
+// PE-26: with orch on PATH the hint names orch itself.
+func TestMailboxReplyWithOrchNamesOrch(t *testing.T) {
+	const want = "orch mailbox reply"
+	if got := MailboxReply(true); got != want {
+		t.Errorf("MailboxReply(true) = %q, want %q", got, want)
+	}
+}
+
+func TestOrchOnPathFollowsPATH(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if OrchOnPath() {
+		t.Fatal("OrchOnPath() = true with an empty PATH directory")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "orch"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !OrchOnPath() {
+		t.Error("OrchOnPath() = false with an executable orch on PATH")
 	}
 }
 

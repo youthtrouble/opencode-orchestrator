@@ -4,7 +4,10 @@
 // happens in one place, here.
 package cmdref
 
-import "strings"
+import (
+	"os/exec"
+	"strings"
+)
 
 // Script is the command line that runs the named orchestrator script, e.g.
 // Script("mailbox") is "node ~/.config/opencode/orchestrator/bin/mailbox.mjs".
@@ -19,10 +22,22 @@ func ScriptFile(name string) string {
 	return name + ".mjs"
 }
 
-// MailboxReply is the command line `mailbox inbox` tells the human to answer a question with,
-// followed by the message id prefix and the answer.
-func MailboxReply() string {
+// MailboxReply is the command line `mailbox inbox` and `watch` tell the human to answer a
+// question with, followed by the message id prefix and the answer. PE-26: when orch resolves
+// on PATH the hint names it; otherwise it keeps the JS text so a node-only install still gets
+// a working command. PE-19 (S12) makes the orch form unconditional.
+func MailboxReply(orchOnPath bool) string {
+	if orchOnPath {
+		return "orch mailbox reply"
+	}
 	return Script("mailbox") + " reply"
+}
+
+// OrchOnPath reports whether `orch` resolves on this process's PATH, the condition for
+// MailboxReply's orch form.
+func OrchOnPath() bool {
+	_, err := exec.LookPath("orch")
+	return err == nil
 }
 
 // FlipGateClear is the command line that clears a human gate, which `flip gate` tells the

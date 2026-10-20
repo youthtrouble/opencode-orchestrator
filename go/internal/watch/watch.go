@@ -31,6 +31,8 @@ type Deps struct {
 	Now     func() time.Time
 	Routing func() (*usage.Routing, error) // getRouting({})
 	Alive   func(pid any) bool
+	// OrchOnPath picks the reply hint's form (cmdref.MailboxReply, PE-26); nil means false.
+	OrchOnPath func() bool
 }
 
 // RoutingError is a failed getRouting, which the CLI reports as `orch watch: <error>` (PE-2)
@@ -196,6 +198,7 @@ func questions(d Deps) ([]string, error) {
 	if len(forHuman) == 0 {
 		return nil, nil
 	}
+	reply := cmdref.MailboxReply(d.OrchOnPath != nil && d.OrchOnPath())
 	out := []string{fmt.Sprintf("QUESTIONS FOR YOU (%d):", len(forHuman))}
 	for _, q := range forHuman {
 		idValue, idPresent := jsjson.Lookup(q, "id")
@@ -208,7 +211,7 @@ func questions(d Deps) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, "  ["+id+"] "+subject+"\n     reply: "+cmdref.MailboxReply()+" "+id+` "..."`)
+		out = append(out, "  ["+id+"] "+subject+"\n     reply: "+reply+" "+id+` "..."`)
 	}
 	return out, nil
 }

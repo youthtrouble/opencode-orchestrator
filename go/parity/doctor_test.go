@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +29,7 @@ const doctorAgentsLoaded = `[{"id":"conductor"},{"id":"architect-oai"},{"id":"co
 // PE-18 (orch's self-test row and its Go unit-test row) and compares the rest.
 func (h *harness) testDoctor(t *testing.T) {
 	green, _ := readCacheFixtures(t).Get("green")
-	pathEnv := "PATH=" + h.pathWithoutGo(t)
+	pathEnv := "PATH=" + h.pathWithoutGoOrOrch(t)
 	orchBinEnv := "ORCH_BIN=" + h.orchBin
 	healthyWithoutLog := seeds(
 		doctorAnswer("opencode", "--version", "1.2.3"),
@@ -127,14 +126,9 @@ func (h *harness) testDoctorLogRedacted(t *testing.T, healthyWithoutLog seed, pa
 const jsNoBinaryRow = `WARN orch binary  —  not found (runtime js only; see README "Go runtime")` + "\n"
 
 // testDoctorNoBinary runs the JS without ORCH_BIN, with no ~/.local/bin/orch in the sandbox HOME
-// and no orch on the harness PATH (fakes, node's and sqlite3's directories), so it warns; orch is
-// always its own binary (PE-18), so its OK row is masked against that warning.
+// and no orch on pathEnv (see pathWithoutGoOrOrch), so it warns; orch is always its own binary
+// (PE-18), so its OK row is masked against that warning.
 func (h *harness) testDoctorNoBinary(t *testing.T, healthy seed, pathEnv string) {
-	for _, dir := range filepath.SplitList(strings.TrimPrefix(pathEnv, "PATH=")) {
-		if _, err := os.Stat(filepath.Join(dir, "orch")); err == nil {
-			t.Fatalf("harness PATH directory %s holds an orch; the JS would find it", dir)
-		}
-	}
 	inv := invocation{
 		js:        []string{h.node, filepath.Join(h.orchJS, "bin", "doctor.mjs")},
 		orch:      []string{h.orchBin, "doctor"},
@@ -179,53 +173,20 @@ func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed, pathEnv,
 	compareOutcomes(t, js, orch)
 }
 
-// pathWithoutGo is the harness PATH with every directory that holds a go toolchain binary
-// (a system go on Linux CI, Homebrew's bin on macOS) replaced by a temporary directory of
-// symlinks to all of its other entries, so the fakes and both runtimes keep the same system
-// tools but cannot find go. With a go, orch's unit tests row would run `go test` in the
-// checkout under the sandbox HOME, its result, and whether a toolchain is downloaded into a
-// read-only module cache, depending on the machine.
-func (h *harness) pathWithoutGo(t *testing.T) string {
+// pathWithoutGoOrOrch is the harness PATH, asserted to resolve neither a go toolchain nor an
+// orch. It holds only the fakes and links to node and sqlite3 (S4/R10), so this is a cheap
+// guard: with a go, orch's unit tests row would run `go test` under the sandbox HOME, its
+// result depending on the machine; with an orch, the JS would find it and print its OK row.
+func (h *harness) pathWithoutGoOrOrch(t *testing.T) string {
 	t.Helper()
-	var search []string
-	for _, dir := range strings.Split(h.path, ":") {
-		if holdsGoToolchain(dir) {
-			dir = linkAllExceptGo(t, dir)
-		}
-		search = append(search, dir)
-	}
-	return strings.Join(search, ":")
-}
-
-var goToolchainBinaries = []string{"go", "gofmt"}
-
-func holdsGoToolchain(dir string) bool {
-	for _, name := range goToolchainBinaries {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return true
+	for _, dir := range filepath.SplitList(h.path) {
+		for _, name := range []string{"go", "gofmt", "orch"} {
+			if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+				t.Fatalf("harness PATH directory %s holds %s", dir, name)
+			}
 		}
 	}
-	return false
-}
-
-// linkAllExceptGo returns a fresh directory of symlinks to every entry of dir but the go
-// toolchain binaries.
-func linkAllExceptGo(t *testing.T, dir string) string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	links := t.TempDir()
-	for _, entry := range entries {
-		if slices.Contains(goToolchainBinaries, entry.Name()) {
-			continue
-		}
-		if err := os.Symlink(filepath.Join(dir, entry.Name()), filepath.Join(links, entry.Name())); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return links
+	return h.path
 }
 
 var (
@@ -245,7 +206,7 @@ func maskJSUnitTests(t *testing.T, stdout string) string {
 }
 
 // maskOrchRows requires orch's rows (its binary, which compareOutcomes then compares, and PE-18's
-// selfTestRow and Go unit-test row not run, there being no go on pathWithoutGo), removes
+// selfTestRow and Go unit-test row not run, there being no go on pathWithoutGoOrOrch), removes
 // selfTestRow and masks the unit-test row.
 func maskOrchRows(t *testing.T, stdout, repo, selfTestRow string) string {
 	t.Helper()

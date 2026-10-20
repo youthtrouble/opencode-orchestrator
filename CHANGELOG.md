@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- mailbox/watch: the reply hint says `orch mailbox reply <id> "..."` when `orch` is on PATH
+  (PE-26).
+- parity: the harness PATH holds only links to node and sqlite3, and destructive cleanup refuses
+  pids below 2 (Sol S4/R10, S3/R13).
 - worker: a lane name containing `/` is refused, and a detached runner gets the absolute project
   root as `--cwd` (both runtimes; Sol S2/R8, S2/R6).
 - worker (Go): `stop` signals only a worker whose lane lock holds the state's pid; a lock left by

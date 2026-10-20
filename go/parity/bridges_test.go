@@ -252,8 +252,8 @@ func anthropicRed(t *testing.T, caches *jsjson.Object) *jsjson.Object {
 	return copied
 }
 
-// pathWithout is a PATH of the fakes except name, then the sqlite3 directory, so a lookup of
-// name fails. It never holds a real claude, codex or opencode.
+// pathWithout is a PATH of the fakes except name, then the harness's node and sqlite3 links, so
+// a lookup of name fails. It never holds a real claude, codex or opencode.
 func (h *harness) pathWithout(t *testing.T, name string, before ...string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -268,12 +268,7 @@ func (h *harness) pathWithout(t *testing.T, name string, before ...string) strin
 			}
 		}
 	}
-	search := append(append([]string{}, before...), dir)
-	for _, entry := range strings.Split(h.path, ":")[1:] {
-		if entry != filepath.Dir(h.node) {
-			search = append(search, entry)
-		}
-	}
+	search := append(append([]string{}, before...), dir, h.toolsDir)
 	for _, entry := range search[len(before):] {
 		for _, cli := range []string{"claude", "codex", "opencode"} {
 			if _, err := os.Stat(filepath.Join(entry, cli)); err == nil && entry != dir {

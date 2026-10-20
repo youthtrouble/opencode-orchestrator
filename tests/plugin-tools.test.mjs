@@ -411,10 +411,33 @@ describe("process runner", { skip }, () => {
   const isAlive = (pid) => {
     try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; }
   };
-  /** Kill every logged fake process (and `sleep` holder) of a test that is still running when it ends. */
+  /**
+   * Kill every logged fake process (and `sleep` holder) of a test that is still running when it ends.
+   * ESRCH means it is already gone. EPERM means the pid was reused by another user's process: it is
+   * not ours, so it is reported, never counted as reaped. A pid below 2 would signal init or our
+   * whole process group, so it is refused. Refusals and EPERMs are collected so the remaining
+   * pids are still reaped, then reported together.
+   */
   const reapLoggedProcesses = (sandbox) => {
     if (!fs.existsSync(sandbox.log)) return;
-    for (const { pid } of calls(sandbox)) if (isAlive(pid)) process.kill(pid, "SIGKILL");
+    const refused = [];
+    const notOurs = [];
+    for (const { pid } of calls(sandbox)) {
+      if (!Number.isInteger(pid) || pid < 2) {
+        refused.push(pid);
+        continue;
+      }
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code === "EPERM") notOurs.push(pid);
+        else if (error.code !== "ESRCH") throw error;
+      }
+    }
+    const problems = [];
+    if (refused.length > 0) problems.push(`refused to kill logged pids ${refused.join(", ")}`);
+    if (notOurs.length > 0) problems.push(`logged pids now belong to another user, left alone: ${notOurs.join(", ")}`);
+    if (problems.length > 0) throw new Error(problems.join("; "));
   };
   // Without the fixes these cases wait forever (or for the 30 s sleep): fail them instead.
   const bounded = { timeout: 20000 };

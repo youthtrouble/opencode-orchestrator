@@ -235,6 +235,7 @@ func mailboxInbox(box *mailbox.Mailbox, stdio Stdio) int {
 		fmt.Fprintln(stdio.Out, "No open questions for you.")
 		return 0
 	}
+	reply := cmdref.MailboxReply(cmdref.OrchOnPath())
 	for _, m := range questions {
 		id8, err := sliceText(m, "id", 8)
 		if err != nil {
@@ -246,7 +247,7 @@ func mailboxInbox(box *mailbox.Mailbox, stdio Stdio) int {
 		}
 		body := strings.ReplaceAll(jsstr.Slice(text(m, "body"), 0, 400), "\n", " ")
 		fmt.Fprintf(stdio.Out, "[%s] %sZ from %s: %s\n    %s\n    reply: %s %s \"your answer\"\n\n",
-			id8, at16, text(m, "from"), text(m, "subject"), body, cmdref.MailboxReply(), id8)
+			id8, at16, text(m, "from"), text(m, "subject"), body, reply, id8)
 	}
 	return 0
 }

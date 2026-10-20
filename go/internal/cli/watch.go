@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/watch"
@@ -29,10 +30,11 @@ func Watch(args []string, stdio Stdio) int {
 		return fail(stdio, "watch", err)
 	}
 	deps := watch.Deps{
-		Root:  root,
-		Home:  home,
-		Now:   time.Now,
-		Alive: worker.Signalable, // watch.mjs's alive() has no falsy guard
+		Root:       root,
+		Home:       home,
+		Now:        time.Now,
+		Alive:      worker.Signalable, // watch.mjs's alive() has no falsy guard
+		OrchOnPath: cmdref.OrchOnPath,
 		Routing: func() (*usage.Routing, error) {
 			cfg, err := usageConfig()
 			if err != nil {
