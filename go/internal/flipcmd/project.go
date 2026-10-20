@@ -49,14 +49,15 @@ func (p Project) makeStateDir() error {
 	return nodefs.MkdirAll(filepath.Dir(p.FlipPath))
 }
 
-// writeFlip replaces flip.json with value as JSON (indent 2) and a newline, truncating and
-// writing in place as writeFileSync does (not atomic, as in the JS).
+// writeFlip replaces flip.json with value as JSON (indent 2) and a newline, atomically and
+// owner-only (PE-21), so a supervisor tick never reads an empty or partial gate. The JS
+// truncates and writes in place.
 func (p Project) writeFlip(value any) error {
 	data, err := jsjson.MarshalIndent(value, "  ")
 	if err != nil {
 		return err
 	}
-	return nodefs.WriteFile(p.FlipPath, append(data, '\n'))
+	return nodefs.WritePrivateFile(p.FlipPath, append(data, '\n'))
 }
 
 // postIgnoringErrors posts d to the project mailbox. The JS wraps each post in a try/catch

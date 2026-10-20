@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
@@ -152,6 +154,43 @@ func TestStartLogDirectoryErrors(t *testing.T) {
 	mustWrite(t, p.Dir, "a file")
 	if _, err := p.Start(s.Starter()); err == nil {
 		t.Error(".orchestrator a file must fail the mkdir")
+	}
+}
+
+// The log holds what serve and the conductors print: owner-only under a permissive umask (PE-21).
+func TestStartLogIsOwnerOnly(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	p, _, err := startIn(t, &starter{pid: 1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{p.LogPath: 0o600, filepath.Dir(p.LogPath): 0o700} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode %v, want %v", path, got, want)
+		}
+	}
+}
+
+// A symlink planted at the log is refused, not followed (PE-21: the JS appends to its target).
+func TestStartRefusesASymlinkedLog(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	mustWrite(t, target, "untouched\n")
+	s := &starter{}
+	_, _, err := startIn(t, s, func(p Project) {
+		if err := os.Symlink(target, p.LogPath); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err == nil || !strings.HasPrefix(err.Error(), "ELOOP: ") || len(s.launched) != 0 {
+		t.Fatalf("a symlinked log: %v, launched %d", err, len(s.launched))
+	}
+	if data, _ := os.ReadFile(target); string(data) != "untouched\n" {
+		t.Errorf("symlink target %q", data)
 	}
 }
 

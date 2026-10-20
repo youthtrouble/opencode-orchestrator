@@ -64,15 +64,17 @@ func (s *Supervisor) claimLock() (claimed bool, err error) {
 	if s.Alive(s.lockHolder()) {
 		return false, nil
 	}
-	if err := nodefs.WriteFile(s.LockPath, pid); err != nil {
+	// Replaced atomically and owner-only, never written through a symlink (PE-21).
+	if err := nodefs.WritePrivateFile(s.LockPath, pid); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// createExclusive is writeFileSync(path, data, {flag: "wx"}): mode 0666 less the umask.
+// createExclusive is writeFileSync(path, data, {flag: "wx"}), owner-only (0600) where the JS
+// creates it 0666 less the umask (PE-21).
 func createExclusive(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}

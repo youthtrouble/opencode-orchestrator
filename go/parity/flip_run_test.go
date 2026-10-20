@@ -108,7 +108,9 @@ func (h *harness) testFlipRun(t *testing.T) {
 		{"exclude/bare-name", claude, seedExclude("a\n.orchestrator\n")},
 		{"exclude/name-with-slash", claude, seedExclude(".orchestrator/")},
 		{"exclude/crlf", claude, seedExclude("a\r\n.orchestrator/\r\n")},
+		// Git ends lines only at \n: both runtimes append after a CR or U+2028 "line".
 		{"exclude/line-separator", claude, seedExclude("a\u2028.orchestrator/\u2028b")},
+		{"exclude/lone-carriage-return", claude, seedExclude("a\r.orchestrator/\rb")},
 		{"exclude/leading-space", claude, seedExclude(" .orchestrator/\n")},
 		{"exclude/double-slash", claude, seedExclude(".orchestrator//")},
 		{"exclude/invalid-utf8-at-the-end", claude, seedExclude("foo\xff")},
@@ -122,17 +124,22 @@ func (h *harness) testFlipRun(t *testing.T) {
 		name, errorLine string
 		seed            seed
 		blocksExclude   bool // the exclude is a directory or lies under a file
+		pe21            bool // errorLine is the JS's open failure; orch fails at its rename
 	}{
-		{"crash/git-is-a-file", "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", withGit(text("gitdir: elsewhere\n")), true},
-		{"crash/exclude-is-a-directory", "Error: EISDIR: illegal operation on a directory, read", seedProjectDir(".git/info/exclude"), true},
-		{"crash/brief-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/briefs/conductor-continue.md'",
-			seedProjectDir(".orchestrator/briefs/conductor-continue.md"), false},
-		{"crash/flip-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/flip.json'", seedProjectDir(".orchestrator/flip.json"), false},
+		{"crash/git-is-a-file", "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", withGit(text("gitdir: elsewhere\n")), true, false},
+		{"crash/exclude-is-a-directory", "Error: EISDIR: illegal operation on a directory, read", seedProjectDir(".git/info/exclude"), true, false},
+		{"crash/PE-21-brief-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/briefs/conductor-continue.md'",
+			seedProjectDir(".orchestrator/briefs/conductor-continue.md"), false, true},
+		{"crash/PE-21-flip-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/flip.json'", seedProjectDir(".orchestrator/flip.json"), false, true},
 	}
 	for _, c := range crashes {
 		t.Run(c.name, func(t *testing.T) {
 			inv := h.flipRunInvocation(claude, c.seed, crashC1, c.errorLine)
 			inv.extraFilesMayBeBlocked = c.blocksExclude
+			if c.pe21 {
+				h.comparePE21OpenVsRename(t, inv)
+				return
+			}
 			h.comparePair(t, inv)
 		})
 	}

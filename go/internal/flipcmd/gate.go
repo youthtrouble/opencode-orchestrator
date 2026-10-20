@@ -27,6 +27,9 @@ func (p Project) Gate(opts cliargs.Opts) (*jsjson.Object, error) {
 		return p.clearGate(prev)
 	}
 	active := opts.Or("active", flip.DoorOpencode)
+	if _, isArray := prev.([]any); isArray {
+		prev = jsjson.NewObject() // an array would lose the gate when written back as JSON
+	}
 	if err := markAwaitingHuman(prev, p.awaitingHuman(opts, active)); err != nil {
 		return nil, err
 	}
@@ -72,16 +75,14 @@ func (p Project) awaitingHuman(opts cliargs.Opts, active any) *jsjson.Object {
 	return gate
 }
 
-// markAwaitingHuman is `prev.awaiting_human = gate; delete prev.paused` on a truthy prev: an
-// object takes the gate (an existing key keeps its position) and loses paused; an array
-// takes it as a non-index property JSON.stringify drops, so it is written back unchanged; a
+// markAwaitingHuman is `prev.awaiting_human = gate; delete prev.paused` on a truthy non-array
+// prev: an object takes the gate (an existing key keeps its position) and loses paused; a
 // primitive throws.
 func markAwaitingHuman(prev any, gate *jsjson.Object) error {
 	switch record := prev.(type) {
 	case *jsjson.Object:
 		record.Set("awaiting_human", gate)
 		record.Delete("paused")
-	case []any:
 	default:
 		return jsjson.CannotAssign(prev, "awaiting_human")
 	}

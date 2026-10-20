@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
@@ -237,6 +238,38 @@ func TestHeadlessStartsADetachedConductorLane(t *testing.T) {
 		if brief, _ := os.ReadFile(filepath.Join(k.root, ".orchestrator", "briefs", "conductor-kickoff.md")); string(brief) != cmdref.KickoffPrompt("a.md", nil)+"\n" {
 			t.Errorf("%s: brief %q", c.door, brief)
 		}
+	}
+}
+
+// The brief is owner-only and replaces a planted symlink instead of writing through it
+// (PE-21: the JS writes the symlink's target).
+func TestHeadlessBriefIsPrivateAndReplacesASymlink(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	k := newRun(t, "green", "green")
+	brief := filepath.Join(k.root, ".orchestrator", "briefs", "conductor-kickoff.md")
+	target := filepath.Join(k.root, "elsewhere")
+	if err := os.WriteFile(target, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(brief), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, brief); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.run("--brief", "a.md", "--headless"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(brief)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Errorf("brief %v, want a regular 0600 file", info.Mode())
+	}
+	if data, _ := os.ReadFile(target); string(data) != "untouched" {
+		t.Errorf("symlink target %q", data)
 	}
 }
 

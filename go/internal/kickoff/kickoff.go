@@ -224,13 +224,14 @@ func doorLine(door, home string, headless bool, postures *routing.Postures) (str
 
 // launchHeadless writes the prompt as the conductor's brief and starts a detached conductor
 // lane through `orch worker start`, printing its answer and the watch hint. The exit code is
-// the worker's, or 1 when it gave none.
+// the worker's, or 1 when it gave none. The brief is replaced atomically and owner-only, never
+// written through a symlink (PE-21).
 func launchHeadless(door, prompt string, d Deps) (int, error) {
 	path := filepath.Join(d.Root, conductorBrief)
 	if err := nodefs.MkdirAll(filepath.Dir(path)); err != nil {
 		return 0, err
 	}
-	if err := nodefs.WriteFile(path, []byte(prompt+"\n")); err != nil {
+	if err := nodefs.WritePrivateFile(path, []byte(prompt+"\n")); err != nil {
 		return 0, err
 	}
 	args := []string{"worker", "start", "--brief", conductorBrief, "--lane", "conductor", "--harness", door, "--agent", "conductor", "--breadth", "broad", "--cwd", d.Root, "--detach"}

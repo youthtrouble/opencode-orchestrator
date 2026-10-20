@@ -317,7 +317,7 @@ func outputText(r SyncResult, units int) string {
 
 // log appends `<iso(now)> <text>` to the supervisor log; without logs/ it throws ENOENT.
 func (s *Supervisor) log(t *tick, text string) error {
-	return nodefs.AppendFile(s.LogPath, []byte(t.nowISO+" "+text+"\n"))
+	return nodefs.AppendPrivateFile(s.LogPath, []byte(t.nowISO+" "+text+"\n"))
 }
 
 // elapsed is `now - (last || 0) >= seconds` in JS arithmetic: a last that is not a number

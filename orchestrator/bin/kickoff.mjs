@@ -36,7 +36,7 @@ spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "gate", "--clear", "--
 const sup = spawnSync(process.execPath, [path.join(HERE, "supervisor.mjs"), "start", "--cwd", root], { encoding: "utf8" });
 console.log(`supervisor: ${(sup.stdout || sup.stderr).trim().slice(0, 120)}`);
 const info = path.join(root, ".git", "info");
-if (fs.existsSync(path.join(root, ".git"))) { fs.mkdirSync(info, { recursive: true }); const f = path.join(info, "exclude"); const cur = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""; if (!/^\.orchestrator\/?$/m.test(cur)) fs.appendFileSync(f, (cur && !cur.endsWith("\n") ? "\n" : "") + ".orchestrator/\n"); }
+if (fs.existsSync(path.join(root, ".git"))) { fs.mkdirSync(info, { recursive: true }); const f = path.join(info, "exclude"); const cur = fs.existsSync(f) ? fs.readFileSync(f, "utf8") : ""; if (!cur.split("\n").some((l) => /^\.orchestrator\/?\r?$/.test(l))) fs.appendFileSync(f, (cur && !cur.endsWith("\n") ? "\n" : "") + ".orchestrator/\n"); }
 const [main, ...side] = briefs;
 const prompt = `Ship ${main}. Plan first with the architect (size per the brief), then one slice at a time; flip or hand back per the contract at each brief boundary.${side.length ? ` When budget allows, also run ${side.join(", ")} as side brief(s) with the cheapest adequate role.` : ""} Record orchestrator defects as incidents.`;
 console.log(`door: ${door} (${DOOR_VENDOR[door]} ${r.resolved.postures[DOOR_VENDOR[door]].overall}; home ${home})${opts.headless ? " headless" : " interactive"}`);

@@ -2,6 +2,7 @@ package flipcmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -22,9 +23,13 @@ func TestEnsureGitExcludeAddsTheLineUnlessALineNamesIt(t *testing.T) {
 		{"bare name", text(".orchestrator"), ".orchestrator"},
 		{"name with slash", text("a\n.orchestrator/\nb\n"), "a\n.orchestrator/\nb\n"},
 		{"CRLF lines", text("a\r\n.orchestrator/\r\n"), "a\r\n.orchestrator/\r\n"},
-		{"carriage return lines", text("a\r.orchestrator\rb"), "a\r.orchestrator\rb"},
-		{"U+2028 lines", text("a\u2028.orchestrator/\u2028b"), "a\u2028.orchestrator/\u2028b"},
-		{"U+2029 lines", text("a\u2029.orchestrator/"), "a\u2029.orchestrator/"},
+		{"CRLF bare name last", text("a\r\n.orchestrator\r"), "a\r\n.orchestrator\r"},
+		// Git ends lines only at \n, so a lone \r, U+2028 or U+2029 is inside a line.
+		{"carriage return lines", text("a\r.orchestrator\rb"), "a\r.orchestrator\rb\n" + added},
+		{"U+2028 lines", text("a\u2028.orchestrator/\u2028b"), "a\u2028.orchestrator/\u2028b\n" + added},
+		{"U+2029 lines", text("a\u2029.orchestrator/"), "a\u2029.orchestrator/\n" + added},
+		{"two carriage returns", text(".orchestrator/\r\r\n"), ".orchestrator/\r\r\n" + added},
+		{"trailing space", text(".orchestrator/ \n"), ".orchestrator/ \n" + added},
 		{"leading space", text(" .orchestrator/"), " .orchestrator/\n" + added},
 		{"double slash", text(".orchestrator//\n"), ".orchestrator//\n" + added},
 		{"other case", text(".Orchestrator/\n"), ".Orchestrator/\n" + added},
@@ -46,6 +51,31 @@ func TestEnsureGitExcludeAddsTheLineUnlessALineNamesIt(t *testing.T) {
 				t.Errorf("exclude = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// Whatever EnsureGitExclude accepts as already excluding .orchestrator/, Git ignores: a line
+// it counts but Git does not would let orchestrator state into commits.
+func TestEnsureGitExcludeAgreesWithGit(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is not installed")
+	}
+	for _, current := range []string{
+		".orchestrator/\n", ".orchestrator\r\n", "a\r.orchestrator/\rb", "a\u2028.orchestrator/\u2028b", "a .orchestrator/ b\n",
+	} {
+		root := t.TempDir()
+		if out, err := exec.Command(git, "init", "-q", root).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v %s", err, out)
+		}
+		writeFile(t, filepath.Join(root, ".git", "info", "exclude"), current)
+		if _, err := EnsureGitExclude(root); err != nil {
+			t.Fatal(err)
+		}
+		checkIgnore := exec.Command(git, "-C", root, "check-ignore", "-q", ".orchestrator/x")
+		if err := checkIgnore.Run(); err != nil {
+			t.Errorf("exclude %q: git check-ignore .orchestrator/x = %v, want ignored", readFile(t, filepath.Join(root, ".git", "info", "exclude")), err)
+		}
 	}
 }
 

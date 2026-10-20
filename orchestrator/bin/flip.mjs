@@ -27,7 +27,7 @@ export function ensureGitExclude(projectRoot) {
   fs.mkdirSync(info, { recursive: true });
   const file = path.join(info, "exclude");
   const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  if (!/^\.orchestrator\/?$/m.test(current)) fs.appendFileSync(file, (current.endsWith("\n") || !current ? "" : "\n") + ".orchestrator/\n");
+  if (!current.split("\n").some((l) => /^\.orchestrator\/?\r?$/.test(l))) fs.appendFileSync(file, (current.endsWith("\n") || !current ? "" : "\n") + ".orchestrator/\n");
   return true;
 }
 
@@ -45,10 +45,11 @@ if (cmd === "pause") {
 if (cmd === "gate") {
   // A headless conductor stopped at a HUMAN gate (push, deploy, spend, product question). Unlike `pause`
   // (budget), the supervisor must NOT relaunch until a human clears it (kickoff, `gate --clear`, or `run`).
-  const prev = readFlip() || {};
+  let prev = readFlip() || {};
   fs.mkdirSync(path.dirname(FLIP), { recursive: true });
   if (opts.clear) { delete prev.awaiting_human; fs.writeFileSync(FLIP, JSON.stringify(prev, null, 2) + "\n"); console.log(JSON.stringify({ awaiting_human: false })); process.exit(0); }
   const active = opts.active || "opencode";
+  if (Array.isArray(prev)) prev = {}; // an array would drop the gate when stringified
   prev.awaiting_human = { at: new Date().toISOString(), door: active, reason: opts.reason || "human approval required", question: opts.question || null };
   delete prev.paused;
   fs.writeFileSync(FLIP, JSON.stringify(prev, null, 2) + "\n");

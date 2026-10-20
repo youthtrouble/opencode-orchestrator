@@ -255,7 +255,7 @@ func (s *Supervisor) emit(state *jsjson.Object, t *tick, lane string, obs superv
 		return err
 	}
 	line := fmt.Sprintf("%s %s %s %s\n", t.nowISO, ev.ID, outcome, resultsJSON)
-	if err := nodefs.AppendFile(s.LogPath, []byte(line)); err != nil {
+	if err := nodefs.AppendPrivateFile(s.LogPath, []byte(line)); err != nil {
 		return err
 	}
 	if outcome == "delivery_failed" {

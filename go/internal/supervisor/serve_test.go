@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -156,8 +157,39 @@ func TestServeLockClaim(t *testing.T) {
 		if got.code != 1 {
 			t.Errorf("code %d", got.code)
 		}
-		wantError(t, got.err, "EISDIR: illegal operation on a directory, open '"+f.path("supervisor.lock")+"'")
+		// PE-21: a stale lock is replaced through a private temp, so the rename fails.
+		wantRenameOntoDirError(t, got.err, f.path("supervisor.lock"))
 	})
+}
+
+// The lock is owner-only under a permissive umask, whether created or taken over (PE-21).
+func TestServeLockIsOwnerOnly(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	for name, stale := range map[string]bool{"created": false, "taken over": true} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			if stale {
+				f.write("supervisor.lock", "77") // 0644 under this umask
+			}
+			f.write("supervisor.stop", "")
+			// Serve removes the lock when it stops, so the mode is sampled inside the injected
+			// Now, which stopServing calls (for stopped_at) before it unlinks the lock.
+			mode := os.FileMode(0)
+			f.sup.Now = func() time.Time {
+				if info, err := os.Stat(f.path("supervisor.lock")); err == nil {
+					mode = info.Mode().Perm()
+				}
+				return f.now
+			}
+			if code, err := f.sup.Serve(&bytes.Buffer{}); code != 0 || err != nil {
+				t.Fatalf("serve = %d, %v", code, err)
+			}
+			if mode != 0o600 {
+				t.Errorf("lock mode while serving %v, want 0600", mode)
+			}
+		})
+	}
 }
 
 // A state that is no object fails where the JS assigns to it, leaving the lock; an array is

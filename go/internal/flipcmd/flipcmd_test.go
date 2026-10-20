@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flip"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
 )
@@ -50,6 +52,11 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+// tempNamesSpelledOut replaces the random suffix of private temp names in message by "*".
+func tempNamesSpelledOut(message string) string {
+	return regexp.MustCompile(`\.tmp-[0-9]+`).ReplaceAllString(message, ".tmp-*")
 }
 
 func compact(t *testing.T, v any) string {
@@ -235,7 +242,8 @@ func TestPauseFailsWithNodesMkdirAndOpenErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = p.Pause(opts("pause"))
-	if want := "EISDIR: illegal operation on a directory, open '" + p.FlipPath + "'"; err == nil || err.Error() != want {
+	// PE-21: flip.json is replaced through a private temp, so the rename fails, not the open.
+	if want := "EISDIR: illegal operation on a directory, rename '" + p.FlipPath + ".tmp-*' -> '" + p.FlipPath + "'"; err == nil || tempNamesSpelledOut(err.Error()) != want {
 		t.Errorf("Pause() = %v, want %s", err, want)
 	}
 	if got := p.messages(t); got != "" {
@@ -252,7 +260,7 @@ func TestGateAppendsKeepsPositionAndDeletesPaused(t *testing.T) {
 		{"appended, paused deleted", `{"to":"claude","paused":{"door":"x"},"z":1}`, `{"to":"claude","z":1,"awaiting_human":` + gate + `}`},
 		{"existing gate keeps its position", `{"awaiting_human":{"door":"y"},"to":"claude"}`, `{"awaiting_human":` + gate + `,"to":"claude"}`},
 		{"falsy is an object", `0`, `{"awaiting_human":` + gate + `}`},
-		{"array written back", `[1,2]`, `[1,2]`},
+		{"array replaced by an object", `[1,2]`, `{"awaiting_human":` + gate + `}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newTestProject(t)
@@ -468,5 +476,44 @@ func TestDecideReturnsRoutingFailures(t *testing.T) {
 	_, err := newTestProject(t).Decide(opts("decide", "--active", "claude"), func() (*usage.Routing, error) { return nil, failure })
 	if !errors.Is(err, failure) {
 		t.Errorf("Decide() = %v, want the routing failure", err)
+	}
+}
+
+// A supervisor tick reading flip.json while gate and pause rewrite it sees the old or the new
+// record, never an empty or partial file (PE-21; the JS truncates and writes in place).
+func TestFlipJSONIsReplacedAtomically(t *testing.T) {
+	p := newTestProject(t)
+	if _, err := p.Pause(opts("pause")); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	torn := make(chan string, 1)
+	go func() {
+		defer close(torn)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if _, ok := nodefs.ReadJSON(p.FlipPath); !ok {
+				data, _ := os.ReadFile(p.FlipPath)
+				torn <- string(data)
+				return
+			}
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		write := p.Pause
+		if i%2 == 0 {
+			write = p.Gate
+		}
+		if _, err := write(opts("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(done)
+	if data, seen := <-torn; seen {
+		t.Errorf("a reader saw flip.json = %q", data)
 	}
 }

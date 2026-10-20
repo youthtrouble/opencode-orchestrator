@@ -94,7 +94,8 @@ func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, e
 }
 
 // writeContinueBrief creates .orchestrator/briefs/ and writes the brief the launched
-// conductor starts from, returning its path relative to the project (path.relative).
+// conductor starts from, returning its path relative to the project (path.relative). The brief
+// is replaced atomically and owner-only, never written through a symlink (PE-21).
 func (p Project) writeContinueBrief(to string, from, reason any) (string, error) {
 	dir := filepath.Join(p.Root, ".orchestrator", "briefs")
 	if err := nodefs.MkdirAll(dir); err != nil {
@@ -102,7 +103,7 @@ func (p Project) writeContinueBrief(to string, from, reason any) (string, error)
 	}
 	brief := filepath.Join(dir, "conductor-continue.md")
 	text := cmdref.ConductorContinueBrief(to, jsjson.TemplateString(from), jsjson.TemplateString(reason))
-	if err := nodefs.WriteFile(brief, []byte(text)); err != nil {
+	if err := nodefs.WritePrivateFile(brief, []byte(text)); err != nil {
 		return "", err
 	}
 	return nodefs.Relative(p.Root, brief)

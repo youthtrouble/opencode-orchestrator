@@ -2,7 +2,6 @@ package supervisor
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"syscall"
 
@@ -25,7 +24,7 @@ type Starter struct {
 // its output appended to the supervisor log. The result is the JSON line start prints (exit
 // 0); the error is the one the JS dies of (exit 1).
 func (p Project) Start(st Starter) (*jsjson.Object, error) {
-	if err := nodefs.MkdirAll(filepath.Dir(p.LogPath)); err != nil {
+	if err := nodefs.MkdirPrivate(filepath.Dir(p.LogPath)); err != nil {
 		return nil, err
 	}
 	if holder := p.lockHolder(); st.Alive(holder) {
@@ -36,9 +35,10 @@ func (p Project) Start(st Starter) (*jsjson.Object, error) {
 		return running, nil
 	}
 	_ = syscall.Unlink(p.StopPath)
-	log, err := os.OpenFile(p.LogPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
+	// Owner-only and never through a planted symlink (PE-21): the JS opens it 0666 less the umask.
+	log, err := nodefs.OpenPrivateAppend(p.LogPath)
 	if err != nil {
-		return nil, nodefs.FileError(err, "open", p.LogPath)
+		return nil, err
 	}
 	defer log.Close() // serve holds its own copy of the descriptor
 	cmd, args := st.KeepAwake(st.Self, []string{"supervisor", "serve", "--cwd", p.Root})

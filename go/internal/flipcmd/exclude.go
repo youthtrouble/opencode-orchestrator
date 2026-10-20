@@ -47,14 +47,16 @@ func EnsureGitExclude(root string) (bool, error) {
 	return true, nodefs.AppendFile(file, []byte(separator+excludeLine+"\n"))
 }
 
-// excludesOrchestrator is /^\.orchestrator\/?$/m.test(current): some line is exactly
-// ".orchestrator" or ".orchestrator/", where a JS multiline ^ and $ match at every line
-// terminator (\n, \r, U+2028, U+2029), not only at \n.
+// excludesOrchestrator reports whether some line of current is exactly ".orchestrator" or
+// ".orchestrator/" as Git reads the file: lines end only at \n, and one trailing \r is
+// dropped. A lone \r, U+2028 or U+2029 is part of a line, so "a\r.orchestrator/" excludes
+// nothing; counting it would leak .orchestrator/ into commits, while missing a line only
+// appends a harmless duplicate. Git also ignores trailing unescaped spaces, so it reads
+// ".orchestrator/ " as the pattern; that line is deliberately not recognised, the duplicate
+// append being the safe direction (the JS regexes match exactly as this does).
 func excludesOrchestrator(current string) bool {
-	lines := strings.FieldsFunc(current, func(r rune) bool {
-		return r == '\n' || r == '\r' || r == '\u2028' || r == '\u2029'
-	})
-	for _, line := range lines {
+	for _, line := range strings.Split(current, "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		if line == ".orchestrator" || line == excludeLine {
 			return true
 		}

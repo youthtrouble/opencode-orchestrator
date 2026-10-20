@@ -6,6 +6,11 @@
   split between two reads is no longer turned into U+FFFD by the JS (Sol S1/R7, S2/R15). The
   worker relays and counts as progress only stderr chunks that decode to text, as Node does.
 
+- go: the supervisor's log and lock are owner-only (an existing log keeps its mode). `flip.json`
+  and the conductor briefs are replaced atomically, so a supervisor never reads a half-written
+  gate (PE-21; Sol S3/R9, S2/R5, S2/R4).
+- flip: `gate` on an array `flip.json` now records the gate, and the `.git/info/exclude` check
+  splits lines as Git does (both runtimes; Sol S2/R12, S2/R14).
 - worker: a signal that arrives while `worker start` is still starting its bridge is passed to
   the bridge once it runs (Go; Sol S2/R7). Both runtimes read the brief before claiming the lane, so
   an unreadable brief no longer leaves a permanent lock (Sol S2/R11).

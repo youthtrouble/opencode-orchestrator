@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,7 @@ type flipCase struct {
 	seed      seed
 	crash     crashClass
 	errorLine string
+	pe21      bool // errorLine is the JS's open failure; orch fails at its rename (PE-21)
 }
 
 // flipInvocation runs bin/flip.mjs and `orch flip` in the sandbox project, never with a --cwd
@@ -105,7 +107,7 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "pause/number", args: []string{"pause"}, seed: seedFlip(`5`)},
 		{name: "pause/prototype-keys", args: []string{"pause"}, seed: seedFlip(`{"__proto__":{"a":1},"constructor":2}`)},
 		{name: "pause/orchestrator-is-file", args: []string{"pause"}, seed: seedProjectFile(".orchestrator", ""), crash: crashC1, errorLine: orchestratorIsFile},
-		{name: "pause/flip-is-directory", args: []string{"pause"}, seed: seedProjectDir(".orchestrator/flip.json"), crash: crashC1, errorLine: flipIsDir},
+		{name: "pause/PE-21-flip-is-directory", args: []string{"pause"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, pe21: true},
 		{name: "pause/mailbox-is-file", args: []string{"pause"}, seed: seedProjectFile(".orchestrator/mailbox", "x")},
 
 		{name: "gate/fresh", args: []string{"gate"}},
@@ -121,7 +123,6 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "gate/fraction", args: []string{"gate"}, seed: seedFlip(`1.5`), crash: crashC1, errorLine: typeError("number '1.5'")},
 		{name: "gate/string", args: []string{"gate"}, seed: seedFlip(`"abc"`), crash: crashC1, errorLine: typeError("string 'abc'")},
 		{name: "gate/true", args: []string{"gate"}, seed: seedFlip(`true`), crash: crashC1, errorLine: typeError("boolean 'true'")},
-		{name: "gate/array", args: []string{"gate"}, seed: seedFlip(`[1,2]`)},
 		{name: "gate/orchestrator-is-file", args: []string{"gate"}, seed: seedProjectFile(".orchestrator", ""), crash: crashC1, errorLine: orchestratorIsFile},
 		{name: "gate/clear", args: []string{"gate", "--clear"}, seed: seedFlip(seeded)},
 		{name: "gate/clear-without-gate", args: []string{"gate", "--clear"}, seed: seedFlip(`{"to":"claude"}`)},
@@ -130,15 +131,61 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "gate/clear-number", args: []string{"gate", "--clear"}, seed: seedFlip(`5`)},
 		{name: "gate/clear-array", args: []string{"gate", "--clear"}, seed: seedFlip(`[1]`)},
 		{name: "gate/clear-null", args: []string{"gate", "--clear"}, seed: seedFlip(`null`)},
-		{name: "gate/clear-directory", args: []string{"gate", "--clear"}, seed: seedProjectDir(".orchestrator/flip.json"), crash: crashC1, errorLine: flipIsDir},
+		{name: "gate/clear-PE-21-directory", args: []string{"gate", "--clear"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, pe21: true},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.flipInvocation(c)) })
+		t.Run(c.name, func(t *testing.T) {
+			if c.pe21 {
+				h.comparePE21OpenVsRename(t, h.flipInvocation(c))
+				return
+			}
+			h.comparePair(t, h.flipInvocation(c))
+		})
 	}
+	t.Run("gate/array", h.testFlipGateArray)
 	t.Run("gate/PE-1", h.testFlipGateSubjectCut)
 	t.Run("decide", h.testFlipDecide)
 	t.Run("cross-runtime", h.testFlipCrossRuntime)
 	t.Run("run", h.testFlipRun)
+}
+
+// testFlipGateArray asserts that gate over an array flip.json records the gate in both
+// runtimes: the array is replaced by an object, which JSON keeps the gate in.
+func (h *harness) testFlipGateArray(t *testing.T) {
+	const flipJSON = "project/flip.json"
+	js, orch := h.runPair(t, h.flipInvocation(flipCase{args: []string{"gate"}, seed: seedFlip(`[1,2]`)}))
+	if !strings.HasPrefix(js.files[flipJSON], "{\n  \"awaiting_human\": {") {
+		t.Errorf("js flip.json = %q, want the gate", js.files[flipJSON])
+	}
+	compareOutcomes(t, js, orch)
+}
+
+// comparePE21OpenVsRename asserts PE-21 for a private write onto a directory: the JS dies of
+// the EISDIR of its open (inv.errorLine names '<file>'), orch of the rename of its own
+// `<file>.tmp-<random>` onto the directory, leaving no temp. The rest is compared.
+func (h *harness) comparePE21OpenVsRename(t *testing.T, inv invocation) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	openPrefix := "Error: EISDIR: illegal operation on a directory, open '"
+	file, isOpen := strings.CutPrefix(inv.errorLine, openPrefix)
+	if !isOpen {
+		t.Fatalf("errorLine %q is no EISDIR open", inv.errorLine)
+	}
+	file = strings.TrimSuffix(file, "'")
+	renameLine := "Error: EISDIR: illegal operation on a directory, rename '" + file + ".tmp' -> '" + file + "'\n"
+	if js.exitCode != 1 || !slices.Contains(strings.Split(js.stderr, "\n"), inv.errorLine) {
+		t.Errorf("js: exit %d, stderr %q; want %q", js.exitCode, js.stderr, inv.errorLine)
+	}
+	if orch.exitCode != 1 || privateTempSuffix.ReplaceAllString(orch.stderr, ".tmp") != renameLine || !privateTempSuffix.MatchString(orch.stderr) {
+		t.Errorf("orch: exit %d, stderr %q; want %q with orch's temp name", orch.exitCode, orch.stderr, renameLine)
+	}
+	for name := range orch.files {
+		if strings.Contains(name, ".tmp") {
+			t.Errorf("orch left %s", name)
+		}
+	}
+	js.stderr, orch.stderr = "", ""
+	compareOutcomes(t, js, orch)
 }
 
 // testFlipGateSubjectCut asserts PE-1 in the human's message: the 80-unit cut splits an emoji,

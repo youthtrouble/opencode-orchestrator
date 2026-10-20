@@ -280,16 +280,18 @@ func TestRunStopsAtTheFirstFailingStep(t *testing.T) {
 		{".orchestrator is a file", func(t *testing.T, p Project) { writeFile(t, filepath.Join(p.Root, ".orchestrator"), "") },
 			"ENOTDIR: not a directory, mkdir '$ROOT/.orchestrator/briefs'", []string{"exclude"}},
 		{"brief is a directory", func(t *testing.T, p Project) { mkdir(t, p.briefPath()) },
-			"EISDIR: illegal operation on a directory, open '$ROOT/.orchestrator/briefs/conductor-continue.md'", []string{"exclude"}},
+			"EISDIR: illegal operation on a directory, rename '$ROOT/.orchestrator/briefs/conductor-continue.md.tmp-*' -> '$ROOT/.orchestrator/briefs/conductor-continue.md'", []string{"exclude"}},
 		{"flip.json is a directory", func(t *testing.T, p Project) { mkdir(t, p.FlipPath) },
-			"EISDIR: illegal operation on a directory, open '$ROOT/.orchestrator/flip.json'", []string{"exclude", "brief"}},
+			"EISDIR: illegal operation on a directory, rename '$ROOT/.orchestrator/flip.json.tmp-*' -> '$ROOT/.orchestrator/flip.json'", []string{"exclude", "brief"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newGitProject(t)
 			c.prepare(t, p)
 			launcher := launched()
 			_, _, err := p.Run(opts("run", "--to", "claude"), launcher.launch)
-			if want := strings.ReplaceAll(c.want, "$ROOT", p.Root); err == nil || err.Error() != want {
+			// PE-21: the brief and flip.json are replaced through a private temp, so a
+			// directory there fails at the rename, not the open.
+			if want := strings.ReplaceAll(c.want, "$ROOT", p.Root); err == nil || tempNamesSpelledOut(err.Error()) != want {
 				t.Fatalf("err = %v, want %q", err, want)
 			}
 			if len(launcher.calls) != 0 {
