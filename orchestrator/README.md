@@ -363,7 +363,7 @@ runtime expects `~/.config/opencode`; a nondefault `XDG_CONFIG_HOME` is rejected
 Code 2.1.287 and codex-cli 0.162.1; Linux and Node 22 are supported assumptions, not exercised
 release environments. No npm install is needed to run the orchestrator.
 
-**Install.** `./install.sh [--copy] [--force] [--skip-binary]`. The default creates a real
+**Install.** `./install.sh [--copy] [--force] [--skip-binary] [--no-reload]`. The default creates a real
 `~/.config/opencode` and links `AGENTS.md`, `opencode.jsonc`, `agents`, `commands`, `skills`,
 `plugins`, `orchestrator`, `install.sh` and `uninstall.sh` to the checkout, so runtime files such
 as `service.json` stay out of the checkout; keep the checkout at a stable path. `--copy` copies the
@@ -372,8 +372,14 @@ symlinks inside them). Any existing target is refused without `--force`. Force d
 moves the old target, with its custom config, runtime files and `node_modules`, into private backup
 storage. Stop opencode sessions, the background service, supervisors and workers first. The
 installer then runs `opencode reload` and the installed doctor; a reload or doctor failure exits
-nonzero and keeps the target, receipt and backup for recovery. The `orch` binary step is described
-in [go/README.md](../go/README.md#install).
+nonzero and keeps the target, receipt and backup for recovery. `--no-reload` skips both (for
+hermetic tests and scripted installs) and says so; the receipt still becomes active although
+neither reload nor doctor ran, so run `opencode reload` and the doctor yourself afterwards.
+The `orch` binary step is described in [go/README.md](../go/README.md#install). A release download
+gives up after 20 s without a connection, 60 s below 1 KiB/s or 15 min in total, and fails with
+`Download failed` and the usual recoverable state. The 15-minute cap holds even while bytes flow,
+so a healthy link slower than about 20 KB/s can hit it; build `orch` locally with Go instead, or
+retry on a faster link.
 
 Installer state lives in `$XDG_STATE_HOME/opencode-orchestrator` (default
 `~/.local/state/opencode-orchestrator`), private (0700, receipts 0600); state inside the checkout or

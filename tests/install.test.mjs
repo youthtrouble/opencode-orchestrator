@@ -161,6 +161,7 @@ const releasedOrch = '#!/bin/sh\necho "0.5.0 (release)"\n';
 const sha256 = (content) => crypto.createHash("sha256").update(content).digest("hex");
 
 // Removes go and serves a release from a local directory through a fake curl (no network).
+// Each request logs ["curl", url, bounds], bounds being the transfer-limit flags curl received.
 function downloadOnly(f) {
   fs.unlinkSync(path.join(f.bin, "go"));
   fs.writeFileSync(
@@ -168,12 +169,17 @@ function downloadOnly(f) {
     `#!/bin/sh
 if [ "$1" = "--version" ]; then exit 0; fi
 out=""
+bounds=""
 previous=""
 for arg in "$@"; do
-  if [ "$previous" = "--output" ]; then out=$arg; fi
+  case "$previous" in
+    --output) out=$arg ;;
+    --connect-timeout|--speed-limit|--speed-time|--max-time) bounds="$bounds $previous $arg" ;;
+  esac
   previous=$arg
 done
-printf '["curl","%s"]\\n' "$previous" >> "$TEST_LOG"
+printf '["curl","%s","%s"]\\n' "$previous" "\${bounds# }" >> "$TEST_LOG"
+if [ "\${STALL_CURL:-0}" = "1" ]; then exit 28; fi
 served="$TEST_RELEASE_DIR/\${previous##*/}"
 [ -f "$served" ] || exit 22
 /bin/cp "$served" "$out"
@@ -189,6 +195,8 @@ served="$TEST_RELEASE_DIR/\${previous##*/}"
     env: { TEST_RELEASE_DIR: releaseDirectory, ORCH_RELEASE_BASE_URL: "https://example.invalid/rel" },
   };
 }
+
+const downloadBounds = "--connect-timeout 20 --speed-limit 1024 --speed-time 60 --max-time 900";
 
 const logged = (f) => fs.readFileSync(f.log, "utf8").trim().split("\n").map(JSON.parse);
 
@@ -399,6 +407,28 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
     assertOriginal(f, original);
   });
 
+  test("--no-reload installs without running opencode reload or doctor", async (t) => {
+    const f = fixture(t);
+    const installed = await f.run("install.sh", ["--no-reload"]);
+    success(installed);
+    assert.match(
+      installed.stdout,
+      /Skipped opencode reload and doctor \(--no-reload\): run them yourself to load the plugin\./,
+    );
+    assert.deepEqual(logged(f), [["go", "build", path.join(f.checkout, "go"), path.join(f.state, "active", "orch")]]);
+    assert.equal(f.receipt().phase, "active");
+    success(await f.run("uninstall.sh"));
+    assert.equal(present(f.target), false);
+  });
+
+  test("--help prints the install usage line", async (t) => {
+    const f = fixture(t);
+    const help = await f.run("install.sh", ["--help"]);
+    success(help);
+    assert.equal(help.stdout, "Usage: ./install.sh [--copy] [--force] [--skip-binary] [--no-reload]\n");
+    assertNothingChanged(f);
+  });
+
   test("--skip-binary installs without go and records no binary", async (t) => {
     const f = fixture(t);
     fs.rmSync(path.join(f.checkout, "go"), { recursive: true });
@@ -434,8 +464,8 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
     fs.unlinkSync(path.join(f.checkout, "go", "go.mod"));
     success(await f.run("install.sh", [], release.env));
     assert.deepEqual(logged(f).slice(0, 2), [
-      ["curl", "https://example.invalid/rel/checksums.txt"],
-      ["curl", `https://example.invalid/rel/${releaseAsset}`],
+      ["curl", "https://example.invalid/rel/checksums.txt", downloadBounds],
+      ["curl", `https://example.invalid/rel/${releaseAsset}`, downloadBounds],
     ]);
     assert.equal(f.receipt().binary, f.binary);
     assert.equal(fs.readFileSync(f.binary, "utf8"), releasedOrch);
@@ -484,6 +514,19 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
       assertOriginal(f, original);
     });
   }
+
+  test("download: a stalled transfer times out, installs nothing and leaves no lock", async (t) => {
+    const f = fixture(t);
+    const release = downloadOnly(f);
+    const original = previousTarget(f, "directory");
+    const stalled = await f.run("install.sh", ["--force"], { ...release.env, STALL_CURL: "1" });
+    failure(stalled, /Download failed: https:\/\/example\.invalid\/rel\/checksums\.txt\./);
+    assert.equal(f.receipt().phase, "preparing");
+    assert.equal(present(path.join(f.state, "operation.lock")), false);
+    assertOriginal(f, original);
+    success(await f.run("uninstall.sh"));
+    assertOriginal(f, original);
+  });
 
   test("download: a shasum-format entry is accepted", async (t) => {
     const f = fixture(t);

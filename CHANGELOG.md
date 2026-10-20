@@ -6,6 +6,10 @@
   (PE-26).
 - parity: the harness PATH holds only links to node and sqlite3, and destructive cleanup refuses
   pids below 2 (Sol S4/R10, S3/R13).
+- install: `--no-reload` skips the final `opencode reload` and doctor (for hermetic tests and
+  scripted installs).
+- install: release downloads give up after 20 s without a connection, 60 s below 1 KiB/s or 15 min
+  in total, instead of holding the operation lock forever (Sol S4/R8).
 - worker: a lane name containing `/` is refused, and a detached runner gets the absolute project
   root as `--cwd` (both runtimes; Sol S2/R8, S2/R6).
 - worker (Go): `stop` signals only a worker whose lane lock holds the state's pid; a lock left by

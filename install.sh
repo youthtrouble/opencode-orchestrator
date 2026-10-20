@@ -203,9 +203,12 @@ function buildOrch(file) {
 }
 
 function download(url, file) {
+  // A stalled transfer would otherwise hold operation.lock forever; give up after 20 s without a
+  // connection, 60 s below 1 KiB/s, or 15 min overall, and leave the usual recoverable state.
+  const bounds = ["--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "60", "--max-time", "900"];
   const result = spawnSync(
     "curl",
-    ["--fail", "--location", "--silent", "--show-error", "--proto", "=https", "--output", file, url],
+    ["--fail", "--location", "--silent", "--show-error", "--proto", "=https", ...bounds, "--output", file, url],
     { stdio: ["ignore", "ignore", "inherit"] },
   );
   requireCondition(!result.error && result.status === 0, `Download failed: ${url}.`);
@@ -367,8 +370,12 @@ function install(orch) {
   fs.renameSync(staged, target);
   record.phase = "installed";
   writeRecord(record);
-  command("opencode", ["reload"]);
-  command("node", [path.join(target, "orchestrator", "bin", "doctor.mjs")]);
+  if (args.includes("--no-reload"))
+    console.log("Skipped opencode reload and doctor (--no-reload): run them yourself to load the plugin.");
+  else {
+    command("opencode", ["reload"]);
+    command("node", [path.join(target, "orchestrator", "bin", "doctor.mjs")]);
+  }
   record.phase = "active";
   writeRecord(record);
   console.log(`Installed (${mode}). Private receipt: ${receipt}`);
@@ -432,14 +439,16 @@ let stateRoot, active, receipt, backup, target;
 try {
   requireCondition(Number(process.versions.node.split(".")[0]) >= 22, "Node 22+ is required.");
   requireCondition(["darwin", "linux"].includes(process.platform), "Supported platforms: macOS and Linux.");
-  const allowed = action === "install" ? ["--force", "--copy", "--skip-binary", "--help"] : ["--help"];
+  const allowed = action === "install" ? ["--force", "--copy", "--skip-binary", "--no-reload", "--help"] : ["--help"];
   requireCondition(
     ["install", "uninstall"].includes(action) && args.every((arg) => allowed.includes(arg)),
     "Unknown argument; use --help.",
   );
   if (args.includes("--help")) {
     console.log(
-      action === "install" ? "Usage: ./install.sh [--copy] [--force] [--skip-binary]" : "Usage: ./uninstall.sh",
+      action === "install"
+        ? "Usage: ./install.sh [--copy] [--force] [--skip-binary] [--no-reload]"
+        : "Usage: ./uninstall.sh",
     );
     process.exit(0);
   }

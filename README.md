@@ -190,7 +190,7 @@ orch doctor            # expect OK rows; WARN means look closer, FAIL exits nonz
 
 If the shell cannot find `orch`, add `~/.local/bin` to your `PATH`. Keep the checkout where it is:
 `~/.config/opencode` links back to it. `./install.sh --help` lists
-`--copy`, `--force` and `--skip-binary`; `./uninstall.sh` restores your previous config. Details,
+`--copy`, `--force`, `--skip-binary` and `--no-reload`; `./uninstall.sh` restores your previous config. Details,
 updates and recovery are in [orchestrator/README.md](orchestrator/README.md#install-update-uninstall-and-recovery).
 
 ### 2. Start a project
