@@ -310,6 +310,9 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "channel/codex-queue-1", seed: seeds(finishedLane("a"), seedWake(`[{"type": "codex-queue", "thread": "th-1"}]`), seedCodexQueue(1))},
 		{name: "channel/codex-queue-unscripted", seed: seeds(finishedLane("a"), seedWake(`[{"type": "codex-queue", "thread": "th-1"}]`))},
 		{name: "channel/opencode-run", seed: seeds(finishedLane("a"), seedWake(`[{"type": "opencode-run", "session": "ses-1"}]`), seedFile("fake-opencode-run/case", "ok\n"))},
+		// spawnSync's ENOBUFS (PE-20): both runtimes stop the channel at 1 MiB of output and
+		// record a failed delivery, exit null.
+		{name: "channel/command-overflow", seed: seeds(finishedLane("a"), seedWake(`[{"type": "command", "argv": ["/bin/sh", "-c", "exec cat /dev/zero"]}]`))},
 		{name: "channel/unknown-type", seed: seeds(finishedLane("a"), seedWake(`[{"type": "pager"}]`))},
 		{name: "channel/no-type", seed: seeds(finishedLane("a"), seedWake(`[{}]`))},
 		{name: "channel/null", seed: seeds(finishedLane("a"), seedWake(`[null]`))},

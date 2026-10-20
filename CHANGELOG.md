@@ -9,6 +9,9 @@
   is killed 15 s later, the plugin stops waiting 10 s after a child exits even if a descendant holds
   its output, output is decoded as a UTF-8 stream, and `orch routing`/`budget gate` get 90 s
   (Sol S4/R1, S4/R2, S4/R6).
+- go: `orch`'s synchronous children (the supervisor's channels, `flip run`'s launcher, kickoff,
+  doctor probes, usage feeds) stop at Node's 1 MiB combined output limit instead of buffering
+  without bound (PE-20; Sol S3/R3).
 - docs: the root README now tells the story (why, benefits and costs, daily commands, how it works,
   using it on a project, the mailbox in plain words, away mode) with `orch` commands throughout.
   The technical reference moves to `orchestrator/README.md` (scripts, routing, budgets, flips,

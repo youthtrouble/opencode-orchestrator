@@ -817,6 +817,19 @@ The other documented differences, each asserted by its own parity case:
   at <dir>)`. With the registry missing both runtimes FAIL their test row (the JS unit tests
   need `models.json`; orch's self-test fails `routing: ENOENT: ...`). Asserted by every
   `doctor` parity case and by `internal/doctor` unit tests.
+- PE-20: `procs.RunSync` (every spawnSync orch mirrors: `flip run`'s launcher, kickoff's
+  children, the supervisor's channels and `flip`/`worker start` children, the doctor's probes;
+  orch also captures kickoff's `policy unattended` and `flip gate --clear`, which the JS runs
+  with stdio ignore and so without a limit, but both print a few bytes, so the cap is
+  unreachable there) and the usage feeds' execFileSync stand-in stop a child whose stdout and
+  stderr together exceed 1 MiB (Node's default maxBuffer, counted over both streams as Node 26 counts it). orch
+  sends SIGTERM (SIGKILL after the PE-10 grace), reports `status null` for a child the signal
+  killed and marks the result overflowed (ENOBUFS). orch keeps the first 1 MiB and discards the
+  rest while draining; Node keeps every whole read made before it noticed (1,114,112 bytes in a
+  probe), then closes the pipes. A TERM-ignoring child ends by SIGKILL in orch, by EPIPE/SIGPIPE
+  in Node, `status null` in both. The usage feeds count stdout only (their stderr is ignored),
+  as execFileSync does, and an overflow is a failed feed. Asserted by `internal/procs` and
+  `internal/usage` unit tests and the `supervisor/serve/channel/command-overflow` parity case.
 - PE-21: private state is written owner-only and atomically: run records, worker state and the
   supervisor's state, acks, lane and conductor files. Each is written to `<name>.tmp-<random>`
   (created exclusively, mode 0600, in the same directory), then renamed over the target, so a

@@ -164,3 +164,65 @@ func TestADeadlinePastTheReapIsNoTimeout(t *testing.T) {
 		t.Error("a deadline after the reap reported a timeout")
 	}
 }
+
+// runOverflowing runs a child that passes NodeMaxBuffer and checks what spawnSync's ENOBUFS
+// gives (PE-20): the child is stopped, so it has no status, the result is marked overflowed,
+// not timed out, and exactly NodeMaxBuffer bytes of output are kept over both streams.
+func runOverflowing(t *testing.T, body string, grace time.Duration) SyncResult {
+	t.Helper()
+	started := time.Now()
+	got := RunSync(SyncSpec{Name: script(t, body), Grace: grace})
+	if elapsed := time.Since(started); elapsed > grace+slack {
+		t.Errorf("RunSync took %v", elapsed)
+	}
+	wantCode(t, got.Status, nil)
+	if !got.Overflowed || got.TimedOut || got.Err != nil {
+		t.Errorf("Overflowed %v, TimedOut %v, Err %v", got.Overflowed, got.TimedOut, got.Err)
+	}
+	if kept := len(got.Stdout) + len(got.Stderr); kept != NodeMaxBuffer {
+		t.Errorf("kept %d bytes, want %d", kept, NodeMaxBuffer)
+	}
+	return got
+}
+
+func TestRunSyncStopsAChildWhoseStdoutPassesNodeMaxBuffer(t *testing.T) {
+	t.Parallel()
+	got := runOverflowing(t, "exec cat /dev/zero", testGrace)
+	if len(got.Stdout) != NodeMaxBuffer {
+		t.Errorf("stdout kept %d bytes", len(got.Stdout))
+	}
+}
+
+func TestRunSyncStopsAChildWhoseStderrPassesNodeMaxBuffer(t *testing.T) {
+	t.Parallel()
+	got := runOverflowing(t, "exec cat /dev/zero >&2", testGrace)
+	if len(got.Stderr) != NodeMaxBuffer {
+		t.Errorf("stderr kept %d bytes", len(got.Stderr))
+	}
+}
+
+// TestRunSyncCountsNodeMaxBufferOverBothStreams: 600,000 bytes on each stream overflow, as in
+// Node 26.
+func TestRunSyncCountsNodeMaxBufferOverBothStreams(t *testing.T) {
+	t.Parallel()
+	runOverflowing(t, "head -c 600000 /dev/zero >&2; head -c 600000 /dev/zero; exec /bin/sleep 30", testGrace)
+}
+
+// TestRunSyncKillsAnOverflowingChildThatIgnoresTerm: PE-20, the SIGTERM is escalated to
+// SIGKILL one Grace later (PE-10).
+func TestRunSyncKillsAnOverflowingChildThatIgnoresTerm(t *testing.T) {
+	t.Parallel()
+	runOverflowing(t, "trap '' TERM; exec cat /dev/zero", killGrace)
+}
+
+func TestRunSyncKeepsExactlyNodeMaxBuffer(t *testing.T) {
+	t.Parallel()
+	got := RunSync(SyncSpec{Name: script(t, "head -c 524288 /dev/zero >&2; head -c 524288 /dev/zero"), Grace: testGrace})
+	wantCode(t, got.Status, intp(0))
+	if got.Overflowed || got.Err != nil {
+		t.Errorf("Overflowed %v, Err %v", got.Overflowed, got.Err)
+	}
+	if len(got.Stdout) != NodeMaxBuffer/2 || len(got.Stderr) != NodeMaxBuffer/2 {
+		t.Errorf("kept %d and %d bytes", len(got.Stdout), len(got.Stderr))
+	}
+}
