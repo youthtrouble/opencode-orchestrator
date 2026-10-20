@@ -60,11 +60,10 @@ func stopCatching(caught chan os.Signal) {
 }
 
 // raise sends sig, when there is one, to orch itself. With no other Notify for it in the
-// process, the Go runtime then ends orch by that signal, as node ends on a Ctrl-C; a handler
-// registered elsewhere receives it instead. The delivery is asynchronous, so orch may run on
-// for a moment. Signalling its own pid cannot fail, so the error is dropped.
+// process, the Go runtime then ends orch by that signal before raise returns, as node ends on
+// a Ctrl-C; a handler registered elsewhere receives it instead, and orch goes on.
 func raise(sig os.Signal) {
 	if sig != nil {
-		_ = syscall.Kill(os.Getpid(), sig.(syscall.Signal))
+		signalThisThread(sig.(syscall.Signal))
 	}
 }

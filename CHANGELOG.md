@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- go (Linux): after relaying a Ctrl-C (or SIGTERM/SIGHUP) to a captured child, orch now dies of
+  the signal before RunSync returns. It used to send the signal to its own pid, which Linux could
+  deliver to another thread later, so orch sometimes ran on and exited 0. That was the ubuntu CI
+  flake in `TestRunSyncRelaysSIGINTAndThenEndsByIt` (test reliability).
 - flip/kickoff: `.orchestrator/` is excluded in linked worktrees (the common dir's `info/exclude`)
   and submodules (the git dir's) instead of failing with ENOTDIR; a `.git` file that is malformed or
   names a missing git dir, or whose `commondir` names a missing directory, counts as no repository
