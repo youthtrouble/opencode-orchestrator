@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- go: Ctrl-C (or SIGTERM/SIGHUP) during a captured child (doctor probes, kickoff self-execs, flip's
+  launcher, supervisor channels, usage feeds) now stops the child's process group and then ends
+  orch by the same signal; a signal orch ignores (nohup) stays ignored. Leftover cleanup of a
+  cancelled child's group now happens before the child is reaped (waitid WNOWAIT on Linux, kqueue
+  NOTE_EXIT on macOS), so it can no longer signal a reused group id; usage feeds (`sqlite3`,
+  `opencode auth list`, `security`) stop their whole process group on timeout or overflow
+  (PE-20, PE-22; Sol R1, R6, R11).
+- go (tests): process tests no longer SIGKILL a recorded pid at cleanup; the descendants they
+  start end with the test through a FIFO lifeline, and a dead but unreaped descendant counts as
+  gone (review go-c1 F1, F3).
 - AGENTS.md and the Claude Code conductor: a standing rule keeps the live checkout current. After
   each push to main the conductor fast-forwards the main checkout when it is clean and on main (else
   posts a mailbox note) and runs `opencode reload` when `plugins/` or `opencode.jsonc` changed.

@@ -6,7 +6,9 @@
 //   - Wait reports the exit code as the "close" event does: nil (JS null) for a child killed by
 //     a signal, never Go's -1.
 //   - Lines splits a stream into lines as readline does.
-//   - RunSync runs a child to completion as spawnSync does, with its timeout option.
+//   - RunSync runs a child to completion as spawnSync does, with its timeout option; a
+//     SIGINT, SIGTERM or SIGHUP that orch receives meanwhile stops the child first and then
+//     ends orch.
 //   - StartDetached starts a fire-and-forget child in a session of its own (the bridge's
 //     post-run usage refresh, PE-12); Detached.StartReaped does the same for a long-lived
 //     caller, reaping the child when it exits.
@@ -19,11 +21,18 @@
 // still reaches it.
 //
 // A second difference is PE-22: the JS signals a child's pid only, so the tools a cancelled
-// CLI started keep running. A Spec.OwnGroup child is cancelled with its whole process group.
+// CLI started keep running. A Spec.OwnGroup child is cancelled with its whole process group,
+// and once it has exited, what is left of the group is SIGKILLed.
 //
-// The pipes to a child are this package's own, not os/exec's: exec.Cmd.Wait reaps the child
-// and then waits for its pipes, so a Child built on it would learn of the reap only after the
-// drain and could signal a pid or process group that is no longer its own meanwhile.
+// Wait watches for the exit without reaping (waitid with WNOWAIT on Linux, kqueue's NOTE_EXIT
+// on darwin), so it does that last kill, the reap and the bookkeeping that stops every later
+// signal in one step, while the exited child still holds its pid and so its group id; no
+// signal from this package can then reach a pid or a group id that the kernel has handed to
+// another process. Elsewhere, or should the watch fail, Wait reaps first and kills after, which
+// leaves the short window that reapThenCleanUp describes. The pipes to a child are this
+// package's own, not os/exec's, for the same reason: exec.Cmd.Wait reaps the child and then
+// waits for its pipes, so a Child built on it would learn of the reap only after the drain and
+// could signal a pid or process group that is no longer its own meanwhile.
 package procs
 
 import (
@@ -193,32 +202,23 @@ func (c *Child) kill() {
 }
 
 // Wait waits for the child to exit and returns its exit code: a normal exit n gives &n, a
-// death by signal gives nil (the JS close code null). The child counts as reaped, so Signal
-// and SignalGroup send nothing, from the moment its exit status is collected; only then does
-// Wait give the copies to and from its stdin, stdout and stderr at most Grace to finish
-// (PE-10) before it closes the pipes. What remains is the window between wait4 returning and
-// the flag being set, short but not bounded, since exec.Cmd.Wait does its own bookkeeping
-// after the reap: a signal sent in it finds the pid just freed (pids are handed out in
-// sequence, so one is rarely reused that soon) or the child's process group, whose id is not
-// reused while the group has members.
+// death by signal gives nil (the JS close code null). Once a cancelled OwnGroup child has
+// exited, what is left of its process group is SIGKILLed, so descendants that ignored or
+// outlived the cancellation are gone before the caller reports the run over (PE-22); that also
+// frees pipes they held, so the drain does not wait out Grace for them. Then the child counts
+// as reaped (Signal, SignalGroup and the escalation send nothing), and only then does Wait give
+// the copies to and from its stdin, stdout and stderr at most Grace to finish (PE-10) before
+// it closes the pipes.
 //
 // err is non-nil only when the child's status could not be collected, or when a child that
 // exited 0 had copying Stdin or its output to Stdout or Stderr fail (EPIPE on stdin
 // excepted), as os/exec reports it. Pipes closed after Grace are not an error: the exit
 // status is complete and the bound is a resource policy (os/exec's ErrWaitDelay rule).
 func (c *Child) Wait() (code *int, err error) {
-	// Every descriptor the child got is an *os.File, so exec copies nothing and returns at the
-	// reap.
-	err = c.cmd.Wait()
-	c.mu.Lock()
-	c.reaped = true
-	if c.killTimer != nil {
-		c.killTimer.Stop()
-	}
-	cancelled := c.cancelled
-	c.mu.Unlock()
-	if c.ownGroup && cancelled {
-		c.killLeftovers()
+	if waitExited(c.Pid()) == nil {
+		err = c.cleanUpThenReap()
+	} else {
+		err = c.reapThenCleanUp()
 	}
 	if drainErr := c.stdio.drain(c.grace); err == nil {
 		err = drainErr
@@ -226,14 +226,54 @@ func (c *Child) Wait() (code *int, err error) {
 	return closeCode(c.cmd.ProcessState), waitError(err)
 }
 
-// killLeftovers SIGKILLs what is left of a cancelled OwnGroup child's process group once the
-// child has been reaped, so descendants that ignored or outlived the cancellation are gone
-// before the caller reports the run over (PE-22); it also frees pipes they held, so the drain
-// does not wait out Grace for them. The group id is safe to signal: a process group's id is
-// not reused while any member is alive, so the kill reaches only leftovers of this child's
-// own tree, and with none left it fails with ESRCH. Reuse in the moments since the reap would
-// need the pid to wrap around and a new process to lead a group with it. ESRCH is the expected
-// result and there is nothing else a caller could do about a failure, so the error is dropped.
+// cleanUpThenReap finishes a child that has exited but is not yet reaped. The exited child
+// still holds its pid, and with it its process group id, so the leftover kill reaches only
+// what is left of its own group; and since the kill, the reap and the reaped flag share one
+// hold of mu, no signal can be sent between the reap and the flag.
+func (c *Child) cleanUpThenReap() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ownGroup && c.cancelled {
+		c.killLeftovers()
+	}
+	// Every descriptor the child got is an *os.File, so exec copies nothing and returns at the
+	// reap, which an exited child allows at once.
+	err := c.cmd.Wait()
+	c.markReaped()
+	return err
+}
+
+// reapThenCleanUp is the fallback where the exit cannot be watched without reaping (a system
+// other than darwin and Linux, or a watch that failed). A signal sent between wait4 returning
+// and the flag being set (short but not bounded, since exec.Cmd.Wait does its own bookkeeping
+// after the reap) finds the pid just freed, which pids handed out in sequence make unlikely to
+// be reused that soon, or the child's process group, whose id is not reused while the group has
+// members. The leftover kill comes after the reap on the same terms: with members left the id
+// is still the group's, and with none, reuse since the reap would need the pids to wrap around
+// and a new process to lead a group with that id.
+func (c *Child) reapThenCleanUp() error {
+	err := c.cmd.Wait()
+	c.mu.Lock()
+	c.markReaped()
+	cancelled := c.cancelled
+	c.mu.Unlock()
+	if c.ownGroup && cancelled {
+		c.killLeftovers()
+	}
+	return err
+}
+
+// markReaped records the reap and disarms the escalation. It must be called with mu held.
+func (c *Child) markReaped() {
+	c.reaped = true
+	if c.killTimer != nil {
+		c.killTimer.Stop()
+	}
+}
+
+// killLeftovers SIGKILLs the process group of a cancelled OwnGroup child (PE-22). ESRCH (no
+// member left) is the expected result and there is nothing else a caller could do about a
+// failure, so the error is dropped.
 func (c *Child) killLeftovers() {
 	_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
 }

@@ -69,7 +69,7 @@ func TestDeliverStringifiesChannelValues(t *testing.T) {
 		f.runResult = SyncResult{Status: status(0)}
 		f.deliverJSON(channel)
 		if len(f.runs) != 1 || f.runs[0].Args[2] != thread {
-			t.Errorf("%s: runs %q, want thread %q", channel, f.runs, thread)
+			t.Errorf("%s: runs %+v, want thread %q", channel, f.runs, thread)
 		}
 	}
 }
@@ -160,7 +160,7 @@ func TestDeliverCommandArgvShapes(t *testing.T) {
 		case c.wantName == "" && len(f.runs) != 0:
 			t.Errorf("%s: ran %+v", c.argv, f.runs)
 		case c.wantName != "" && (len(f.runs) != 1 || f.runs[0].Name != c.wantName || !reflect.DeepEqual(f.runs[0].Args, c.wantArgs)):
-			t.Errorf("%s: runs %q, want %q %q", c.argv, f.runs, c.wantName, c.wantArgs)
+			t.Errorf("%s: runs %+v, want %q %q", c.argv, f.runs, c.wantName, c.wantArgs)
 		}
 	}
 }

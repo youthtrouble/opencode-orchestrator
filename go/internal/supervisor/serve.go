@@ -24,9 +24,11 @@ const alreadyServing = "a supervisor already owns this project"
 // code and, with code 1, the error the JS dies of (nil when the lock is held by a live
 // supervisor, which Serve reports on stderr itself).
 //
-// As in the JS there are no signal handlers: a killed serve leaves its lock, which the next
-// serve or start reclaims once the pid in it is dead. The stop file is never removed here
-// (start removes it).
+// As in the JS, serve has no signal handlers of its own: a killed serve leaves its lock, which
+// the next serve or start reclaims once the pid in it is dead. While a child that a tick waits
+// for runs, procs.RunSync relays SIGINT, SIGTERM and SIGHUP to the child's process group, and
+// serve dies of the signal once the child is reaped (at most the 10 s grace later, PE-22),
+// leaving the lock all the same. The stop file is never removed here (start removes it).
 func (s *Supervisor) Serve(stderr io.Writer) (int, error) {
 	if err := nodefs.MkdirAll(s.Dir); err != nil {
 		return 1, err

@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/proctest"
 )
 
 // testGrace is the Grace of children that are expected to finish on their own.
@@ -132,46 +134,16 @@ func TestSignalledChildClosesWithNull(t *testing.T) {
 }
 
 func TestChildThatHandlesTermKeepsItsExitCode(t *testing.T) {
-	sleepPidFile := filepath.Join(t.TempDir(), "sleep.pid")
-	child := startReady(t, `trap 'kill $!; exit 5' TERM; sleep 30 >/dev/null 2>&1 & echo $! >'`+sleepPidFile+`'; echo ready; wait $!`, testGrace)
-	killSleepOnCleanup(t, sleepPidFile)
+	// The background job ends with the test even should the trap not kill it.
+	lifeline := filepath.Join(t.TempDir(), "lifeline")
+	proctest.Lifeline(t, lifeline)
+	child := startReady(t, `trap 'kill $!; exit 5' TERM; /bin/cat '`+lifeline+`' >/dev/null 2>&1 & echo ready; wait $!`, testGrace)
 	child.Signal(syscall.SIGTERM)
 	code, err := child.Wait()
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantCode(t, code, intp(5))
-}
-
-// killSleepOnCleanup kills the background sleep whose pid the child wrote to pidFile, should
-// the child's trap not have killed it. Only that pid, which this test started, is signalled.
-func killSleepOnCleanup(t *testing.T, pidFile string) {
-	t.Helper()
-	content, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(content)))
-	if err != nil {
-		t.Fatalf("sleep pid %q: %v", content, err)
-	}
-	if pid < 2 {
-		// 0 or -1 would signal our process group or every process we may signal.
-		t.Fatalf("sleep pid %d is not a single process", pid)
-	}
-	t.Cleanup(func() {
-		// The trap has usually reaped the sleep already; probing first narrows the window in
-		// which its pid could have been reused before the SIGKILL.
-		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
-			return
-		} else if err != nil {
-			t.Errorf("probe the test's sleep %d: %v", pid, err)
-			return
-		}
-		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			t.Errorf("kill the test's sleep %d: %v", pid, err)
-		}
-	})
 }
 
 func TestSignalEscalatesToKillAfterGrace(t *testing.T) {
@@ -465,6 +437,14 @@ func startUntilReady(t *testing.T, s Spec) (*Child, []string) {
 // kills when it ends.
 func grandchildPid(t *testing.T, printed []string) int {
 	t.Helper()
+	pid := printedPid(t, printed)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	return pid
+}
+
+// printedPid parses the one pid a test script printed.
+func printedPid(t *testing.T, printed []string) int {
+	t.Helper()
 	if len(printed) != 1 {
 		t.Fatalf("child printed %q, want one pid", printed)
 	}
@@ -472,18 +452,24 @@ func grandchildPid(t *testing.T, printed []string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	return pid
 }
 
-// waitGone polls until pid no longer exists (reaped by its parent, or by init for an orphan),
-// or fails.
+// waitGone polls until pid has terminated (see proctest.Gone), or fails. It is for descendants
+// that init reaps; waitReaped is for a child of the test.
 func waitGone(t *testing.T, pid int) {
+	t.Helper()
+	proctest.WaitGone(t, pid, slack)
+}
+
+// waitReaped polls until the test's child pid has been reaped: kill(pid, 0) finds no such
+// process, where a zombie still answers it.
+func waitReaped(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(slack)
 	for syscall.Kill(pid, 0) == nil {
 		if time.Now().After(deadline) {
-			t.Fatalf("process %d still exists after %v", pid, slack)
+			t.Fatalf("process %d is still not reaped after %v", pid, slack)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -566,7 +552,7 @@ func TestSignalGroupAfterTheReapSendsNothingDuringTheDrain(t *testing.T) {
 		code, err := child.Wait()
 		waited <- result{code, err}
 	}()
-	waitGone(t, child.Pid()) // reaped: a zombie still answers kill(pid, 0)
+	waitReaped(t, child.Pid())
 	child.SignalGroup(syscall.SIGTERM)
 	select {
 	case <-waited:
@@ -662,6 +648,97 @@ func TestOwnGroupEscalationKillsTheGroup(t *testing.T) {
 	}
 	wantCode(t, code, nil)
 	waitGone(t, grandchild)
+}
+
+// ignoringGrandchildUntil is ignoringGrandchild reading the lifeline (proctest.Lifeline) instead
+// of sleeping, so it ends with the test and no cleanup has to signal it.
+func ignoringGrandchildUntil(lifeline string) string {
+	return `/bin/sh -c 'trap "" TERM; echo $$; echo ready; exec /bin/cat "$0" >/dev/null 2>&1' '` + lifeline + `' &`
+}
+
+// Sol's sol-5 R6: the leftover kill and the reap share one hold of mu, after the exit. While
+// the test holds mu, a cancelled child that has exited stays unreaped, so its pid and group id
+// are still its own for any Signal that takes mu first; reaping first, unlocked, would free
+// them with Signal still able to send. The leftover kill waits for mu too.
+func TestWaitLeavesAnExitedChildUnreapedUntilItsCleanup(t *testing.T) {
+	lifeline := filepath.Join(t.TempDir(), "lifeline")
+	proctest.Lifeline(t, lifeline)
+	child, printed := startGroup(t, ignoringGrandchildUntil(lifeline)+"\nwait", testGrace)
+	grandchild := printedPid(t, printed)
+	waited := make(chan *int, 1)
+	go func() {
+		code, err := child.Wait()
+		if err != nil {
+			t.Error(err)
+		}
+		waited <- code
+	}()
+
+	// What Signal does, without its escalation, under a hold of mu that the test keeps.
+	child.mu.Lock()
+	child.cancelled = true
+	sendErr := child.send(syscall.SIGTERM)
+	var exitErr error
+	select {
+	case exitErr = <-watchExit(child.Pid()):
+	case <-time.After(slack):
+		exitErr = errors.New("the child did not exit")
+	}
+	reaped := reapedWithin(child.Pid(), 300*time.Millisecond)
+	grandchildGone, goneErr := proctest.Gone(grandchild)
+	child.mu.Unlock()
+
+	if sendErr != nil || exitErr != nil || goneErr != nil {
+		t.Fatalf("send %v, exit %v, look for the grandchild %v", sendErr, exitErr, goneErr)
+	}
+	if reaped {
+		t.Fatal("the exited child was reaped while Signal could still run; its pid and group id were free for reuse")
+	}
+	if grandchildGone {
+		t.Fatal("the leftovers were killed before Wait held mu")
+	}
+	select {
+	case code := <-waited:
+		wantCode(t, code, nil)
+	case <-time.After(slack):
+		t.Fatalf("Wait did not return within %v of the test releasing mu", slack)
+	}
+	waitGone(t, grandchild)
+	if child.Signal(syscall.SIGTERM) {
+		t.Error("Signal reached the child after Wait reaped it")
+	}
+}
+
+// reapedWithin polls for d whether the test's child pid has been reaped; a zombie still
+// answers kill(pid, 0).
+func reapedWithin(pid int, d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+	}
+	return false
+}
+
+// Within that hold the leftover kill comes before the reap. A leader that is still running
+// makes the order visible: it ignores SIGTERM, so only the kill ends it, and a reap ahead of
+// the kill would wait a Grace for the escalation (which needs mu).
+func TestCleanUpKillsTheGroupBeforeTheReap(t *testing.T) {
+	child, _ := startGroup(t, "trap '' TERM; echo ready; exec /bin/sleep 30", testGrace)
+	child.Signal(syscall.SIGTERM) // cancels the child, which ignores the signal
+	reaped := make(chan error, 1)
+	go func() { reaped <- child.cleanUpThenReap() }()
+	select {
+	case err := <-reaped:
+		if err := waitError(err); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(testGrace / 2):
+		t.Fatal("the reap waited for the escalation: it came before the leftover kill")
+	}
+	if status := child.cmd.ProcessState.Sys().(syscall.WaitStatus); !status.Signaled() || status.Signal() != syscall.SIGKILL {
+		t.Errorf("wait status %#x, want killed by the leftover SIGKILL", status)
+	}
 }
 
 // A child that was never signalled leaves its descendants running when it exits, as Node does.

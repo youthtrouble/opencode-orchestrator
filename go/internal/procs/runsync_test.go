@@ -1,14 +1,20 @@
 package procs
 
 import (
+	"bytes"
 	"errors"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/proctest"
 )
 
 func TestRunSyncCapturesBothOutputsAndTheExitStatus(t *testing.T) {
@@ -269,4 +275,214 @@ func TestRunSyncTimeoutStopsTheGroupButNotADetachedDescendant(t *testing.T) {
 	if err := syscall.Kill(detachedPid, 0); err != nil {
 		t.Errorf("the detached descendant is gone: kill(0) = %v", err)
 	}
+}
+
+// The relay tests run the test binary as TestHelperRunsSyncAndReports, signal it, and look at
+// how it ended and at what its RunSync child left behind.
+const (
+	// relayDirEnv names the directory of the helper's child script, "child", which is given
+	// the directory as its argument; without it the helper is skipped.
+	relayDirEnv = "ORCH_PROCS_TEST_RELAY_DIR"
+	// relayOwnNotifyEnv, when set, makes the helper catch SIGTERM itself before RunSync.
+	relayOwnNotifyEnv = "ORCH_PROCS_TEST_RELAY_OWN_NOTIFY"
+)
+
+// TestHelperRunsSyncAndReports is not a test: a relay test runs the test binary as this helper,
+// which runs <dir>/child through RunSync and writes the status it returned, and what its own
+// SIGTERM handler caught, to <dir>/result.
+func TestHelperRunsSyncAndReports(t *testing.T) {
+	dir := os.Getenv(relayDirEnv)
+	if dir == "" {
+		t.Skip("run only as a relay test's helper")
+	}
+	var own chan os.Signal
+	if os.Getenv(relayOwnNotifyEnv) != "" {
+		own = make(chan os.Signal, 1)
+		signal.Notify(own, syscall.SIGTERM)
+	}
+	got := RunSync(SyncSpec{Name: filepath.Join(dir, "child"), Args: []string{dir}, Grace: killGrace})
+	if got.Err != nil {
+		t.Fatal(got.Err)
+	}
+	result := "status " + show(got.Status) + "\n"
+	if own != nil {
+		select {
+		case sig := <-own:
+			result += "caught " + sig.String() + "\n"
+		case <-time.After(slack):
+			result += "caught nothing\n"
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "result"), []byte(result), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// relayChild is the helper's child: it starts a grandchild, records both pids, then waits for
+// the grandchild, which (as a background job of a shell) ignores SIGINT. The grandchild reads
+// the test's lifeline, so both end with the test whatever happened to the helper.
+const relayChild = `/bin/cat "$1/lifeline" >/dev/null 2>&1 &
+echo $! > "$1/grandchild.tmp"; mv "$1/grandchild.tmp" "$1/grandchild.pid"
+echo $$ > "$1/child.tmp"; mv "$1/child.tmp" "$1/child.pid"
+wait`
+
+// relayHelper is a running TestHelperRunsSyncAndReports and the pids of its RunSync child and
+// grandchild.
+type relayHelper struct {
+	dir               string
+	pid               int
+	exited            chan struct{} // closed once the helper is reaped
+	state             *os.ProcessState
+	output            bytes.Buffer
+	child, grandchild int
+	release           func() // ends a child's read of "$1/release"
+}
+
+// startRelayHelper starts the helper on a child running childBody, through wrapper (an argv
+// that execs its arguments) when one is given, and returns once the child has recorded its
+// pids. The helper, the test's own child, is killed at cleanup should it still run; its child
+// and grandchild are never signalled by pid, since the helper may have reaped them and freed
+// their pids, but end once the test cuts "$1/lifeline" and "$1/release" (proctest.Lifeline).
+func startRelayHelper(t *testing.T, childBody string, ownNotify bool, wrapper ...string) *relayHelper {
+	t.Helper()
+	h := &relayHelper{dir: t.TempDir(), exited: make(chan struct{})}
+	proctest.Lifeline(t, filepath.Join(h.dir, "lifeline"))
+	h.release = proctest.Lifeline(t, filepath.Join(h.dir, "release"))
+	writeExecutable(t, filepath.Join(h.dir, "child"), "#!/bin/sh\n"+childBody+"\n", 0o755)
+	argv := slices.Concat(wrapper, []string{os.Args[0], "-test.run=^TestHelperRunsSyncAndReports$"})
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), relayDirEnv+"="+h.dir)
+	if ownNotify {
+		cmd.Env = append(cmd.Env, relayOwnNotifyEnv+"=1")
+	}
+	cmd.Stdout, cmd.Stderr = &h.output, &h.output
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	h.pid = cmd.Process.Pid
+	go func() {
+		_ = cmd.Wait() // the status is read from ProcessState
+		h.state = cmd.ProcessState
+		close(h.exited)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-h.exited:
+		default:
+			_ = cmd.Process.Kill()
+			<-h.exited
+		}
+	})
+	h.grandchild = waitForPid(t, filepath.Join(h.dir, "grandchild.pid"))
+	h.child = waitForPid(t, filepath.Join(h.dir, "child.pid"))
+	return h
+}
+
+func (h *relayHelper) signal(t *testing.T, sig syscall.Signal) {
+	t.Helper()
+	if err := syscall.Kill(h.pid, sig); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// wait returns how the helper ended, failing when it runs on past a relay's Grace and slack.
+func (h *relayHelper) wait(t *testing.T) syscall.WaitStatus {
+	t.Helper()
+	select {
+	case <-h.exited:
+	case <-time.After(killGrace + slack):
+		t.Fatalf("the helper still runs %v after the signal", killGrace+slack)
+	}
+	return h.state.Sys().(syscall.WaitStatus)
+}
+
+func (h *relayHelper) result(t *testing.T) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(h.dir, "result"))
+	if err != nil {
+		t.Fatalf("the helper wrote no result (%v); output %q", err, h.output.String())
+	}
+	return string(content)
+}
+
+func wantSignalled(t *testing.T, status syscall.WaitStatus, sig syscall.Signal) {
+	t.Helper()
+	if !status.Signaled() || status.Signal() != sig {
+		t.Errorf("the helper ended with wait status %#x, want killed by %v", status, sig)
+	}
+}
+
+func wantExit0(t *testing.T, h *relayHelper, status syscall.WaitStatus) {
+	t.Helper()
+	if !status.Exited() || status.ExitStatus() != 0 {
+		t.Errorf("the helper ended with wait status %#x, want exit 0; output %q", status, h.output.String())
+	}
+}
+
+// Sol's sol-5 R1: Ctrl-C stops the child and its grandchild (which ignores SIGINT, so the
+// leftover kill ends it), then orch ends by SIGINT, as node does.
+func TestRunSyncRelaysSIGINTAndThenEndsByIt(t *testing.T) {
+	t.Parallel()
+	if signal.Ignored(syscall.SIGINT) {
+		t.Skip("SIGINT is ignored in this test process, so the helper would inherit that")
+	}
+	h := startRelayHelper(t, relayChild, false)
+	h.signal(t, syscall.SIGINT)
+	wantSignalled(t, h.wait(t), syscall.SIGINT)
+	waitGone(t, h.child)
+	waitGone(t, h.grandchild)
+}
+
+// A child that ignores the relayed SIGTERM is killed one Grace later, and only then does orch
+// end by SIGTERM.
+func TestRunSyncKillsAChildIgnoringARelayedSIGTERMBeforeEndingByIt(t *testing.T) {
+	t.Parallel()
+	h := startRelayHelper(t, "trap '' TERM\n"+relayChild, false)
+	sent := time.Now()
+	h.signal(t, syscall.SIGTERM)
+	status := h.wait(t)
+	if elapsed := time.Since(sent); elapsed < killGrace {
+		t.Errorf("the helper ended %v after SIGTERM, before the %v Grace", elapsed, killGrace)
+	}
+	wantSignalled(t, status, syscall.SIGTERM)
+	waitGone(t, h.child)
+	waitGone(t, h.grandchild)
+}
+
+// An orch that ignores SIGHUP (nohup) keeps ignoring it: nothing is relayed, so no escalation
+// kills the child after a Grace, and the child ends on its own.
+func TestRunSyncLeavesAnIgnoredSIGHUPIgnored(t *testing.T) {
+	t.Parallel()
+	untilReleased := `/bin/cat "$1/lifeline" >/dev/null 2>&1 &
+echo $! > "$1/grandchild.tmp"; mv "$1/grandchild.tmp" "$1/grandchild.pid"
+echo $$ > "$1/child.tmp"; mv "$1/child.tmp" "$1/child.pid"
+/bin/cat "$1/release" >/dev/null
+kill $!`
+	h := startRelayHelper(t, untilReleased, false, "/bin/sh", "-c", `trap "" HUP; exec "$0" "$@"`)
+	h.signal(t, syscall.SIGHUP)
+	select {
+	case <-h.exited:
+		t.Fatalf("the helper ended on an ignored SIGHUP; output %q", h.output.String())
+	case <-time.After(killGrace + 500*time.Millisecond):
+	}
+	h.release()
+	wantExit0(t, h, h.wait(t))
+	if got := h.result(t); got != "status 0\n" {
+		t.Errorf("the helper's RunSync gave %q, want the child's own exit", got)
+	}
+	waitGone(t, h.grandchild)
+}
+
+// A process with its own handler for the signal survives: the child is stopped, RunSync
+// returns, the handler has the signal, and the process goes on to its own exit.
+func TestRunSyncLeavesTheSignalToAHandlerOfTheProcess(t *testing.T) {
+	t.Parallel()
+	h := startRelayHelper(t, relayChild, true)
+	h.signal(t, syscall.SIGTERM)
+	wantExit0(t, h, h.wait(t))
+	if got := h.result(t); got != "status null\ncaught terminated\n" {
+		t.Errorf("the helper reported %q, want a stopped child and a caught SIGTERM", got)
+	}
+	waitGone(t, h.child)
+	waitGone(t, h.grandchild)
 }

@@ -2,6 +2,7 @@ package procs
 
 import (
 	"bytes"
+	"io"
 	"sync"
 	"syscall"
 	"time"
@@ -14,12 +15,15 @@ import (
 // A positive Timeout is spawnSync's timeout option. Grace (positive) bounds the wait before
 // SIGKILL once the timeout's SIGTERM was sent and the wait for pipes still held by
 // grandchildren once the child has exited; spawnSync waits forever for both (PE-10 ext.).
+// DiscardStderr gives the child /dev/null as its stderr, so the output limit counts stdout
+// alone, as execFileSync's stdio ["ignore", "pipe", "ignore"] does; the result's Stderr is "".
 type SyncSpec struct {
-	Name    string
-	Args    []string
-	Dir     string
-	Timeout time.Duration
-	Grace   time.Duration
+	Name          string
+	Args          []string
+	Dir           string
+	Timeout       time.Duration
+	Grace         time.Duration
+	DiscardStderr bool
 }
 
 // SyncResult is what spawnSync returns. Status is the exit status, nil when the child was
@@ -42,18 +46,30 @@ type SyncResult struct {
 // RunSync runs the child to completion as spawnSync does, but in a process group of its own,
 // so a timeout or an overflow stops the child's descendants with it (PE-22). Descendants in a
 // session of their own (a detached worker runner) are not in that group and keep running.
+//
+// The child's group is not the terminal's foreground group, so a Ctrl-C reaches orch alone.
+// A SIGINT, SIGTERM or SIGHUP that orch receives while the child runs is therefore relayed to
+// the child's group, with the SIGKILL one Grace later, and once the child is reaped, RunSync
+// sends the first of them to orch itself. That normally ends orch by the signal, as node ends
+// on a Ctrl-C, so a caller must not count on running after RunSync returns from a relayed
+// signal; if some other part of the process has its own Notify for the signal, that handler
+// receives it again instead, and the caller goes on. A signal that orch ignores is neither
+// relayed nor raised.
 func RunSync(s SyncSpec) SyncResult {
+	caught := catchTerminatingSignals()
 	limit := NewOutputLimit(NodeMaxBuffer)
 	stdout, stderr := limit.Stream(), limit.Stream()
-	child, err := Start(Spec{Name: s.Name, Args: s.Args, Dir: s.Dir, Stdout: stdout, Stderr: stderr, Grace: s.Grace, OwnGroup: true})
+	child, err := Start(Spec{Name: s.Name, Args: s.Args, Dir: s.Dir, Stdout: stdout, Stderr: stderrSink(s, stderr), Grace: s.Grace, OwnGroup: true})
 	if err != nil {
+		raise(firstCaught(caught))
 		return SyncResult{Err: err}
 	}
+	release := relaySignals(caught, child)
 	timeout := startTimeout(child, s.Timeout)
 	stopWatching := terminateOnOverflow(child, limit)
 	status, err := child.Wait()
 	stopWatching()
-	return SyncResult{
+	result := SyncResult{
 		Status:     status,
 		Stdout:     jsstr.DecodeUTF8(stdout.Bytes()),
 		Stderr:     jsstr.DecodeUTF8(stderr.Bytes()),
@@ -61,6 +77,17 @@ func RunSync(s SyncSpec) SyncResult {
 		Overflowed: limit.Overflowed(),
 		Err:        err,
 	}
+	raise(release())
+	return result
+}
+
+// stderrSink is where the child's stderr goes: the captured stream, or nothing (/dev/null)
+// when the spec discards it. The nil is an untyped one, which Start reads as no writer.
+func stderrSink(s SyncSpec, captured *LimitedStream) io.Writer {
+	if s.DiscardStderr {
+		return nil
+	}
+	return captured
 }
 
 // terminateOnOverflow sends the child SIGTERM once its output passes the limit, as spawnSync
