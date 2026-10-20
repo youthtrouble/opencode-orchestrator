@@ -7,6 +7,12 @@
 - worker (Go): `stop` signals only a worker whose lane lock holds the state's pid; a lock left by
   a SIGKILLed worker still matches until post-S12 (PE-23; Sol S2/R1).
 - worker (Go): `workers/` and `logs/` are created owner-only (PE-21).
+- plugin: the orch binary and `ORCH_HOME`/`ORCH_REGISTRY` are resolved to absolute paths once, so
+  every tool runs the same binary and registry from any directory; a bare `ORCH_BIN=orch` now means
+  `./orch` in the plugin's working directory, with no `PATH` lookup. Incidents go to `orch` on stdin
+  (`--request -`), so summaries never appear in process arguments; go mode therefore needs an `orch`
+  from this release. `manifest_create` refuses a task that is not a single file name (Sol S4/R3,
+  S4/R4, S4/R5, S4/R7).
 - worker (Go): a failed run's errors and its blocked message no longer carry token-shaped text
   (PE-24; Sol S2/R10).
 - doctor: plugin error lines are redacted before they are printed (both runtimes; Sol S3/R10).

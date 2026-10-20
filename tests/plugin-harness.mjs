@@ -52,6 +52,7 @@ export function checkoutRegistry() {
  * Besides {stdout, stderr, code}, an answer can misbehave for the process-runner tests:
  * `ignoreTerm` traps SIGTERM, `hang` never answers, `holdStdout` leaves a logged `sleep 30` holding
  * stdout after the exit, and `stdoutHex` writes its hex chunks 100 ms apart instead of `stdout`.
+ * Each logged call also carries the ORCH_HOME and ORCH_REGISTRY it saw (orchHome, orchRegistry).
  */
 export function writeFakeOrch(file, self, fixedAnswer = null, keyPrefix = null) {
   const lookup = fixedAnswer ? JSON.stringify(fixedAnswer) : "answers[full] ?? answers[prefix]";
@@ -70,7 +71,7 @@ const prefix = (firstFlag === -1 ? keyArgv : keyArgv.slice(0, firstFlag)).join("
 const answer = ${lookup};
 // Trapped before the call is logged, so a test that signals a logged call always meets the trap.
 if (answer?.ignoreTerm) process.on("SIGTERM", () => {});
-log({ self: ${JSON.stringify(self)}, argv, cwd: process.cwd(), stdin, pid: process.pid });
+log({ self: ${JSON.stringify(self)}, argv, cwd: process.cwd(), stdin, pid: process.pid, orchHome: process.env.ORCH_HOME, orchRegistry: process.env.ORCH_REGISTRY });
 if (!answer) { process.stderr.write("fake orch: unscripted " + full + "\\n"); process.exit(97); }
 if (answer.hang) setInterval(() => {}, 60000);
 else if (answer.stdoutHex) writeSlowly(answer.stdoutHex.map((hex) => Buffer.from(hex, "hex")));

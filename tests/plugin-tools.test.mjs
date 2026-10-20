@@ -161,6 +161,21 @@ describe("manifest_create and manifest_verify", { skip }, () => {
     assert.deepEqual(orchCalls(sandbox, "manifest"), []);
   });
 
+  for (const runtime of ["js", "go"]) {
+    // The harness skips opencode's schema check, so a non-string task reaches the runtime as-is.
+    for (const task of ["../x", "a/b", "a\\b", "..", ".", "", "a\0b", 42]) {
+      test(`${runtime}: task ${JSON.stringify(task)} is refused and nothing is written`, async (t) => {
+        const { sandbox, plugin } = runtime === "js" ? await loadJs(t) : await loadGo(t);
+        fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
+        const r = await plugin.toolResult("manifest_create", { task, author: "coder", paths: ["a.txt"] });
+        assert.equal(r.status, "error");
+        assert.equal(r.error.message, `manifest task must be a single file name: ${JSON.stringify(task)}`);
+        assert.deepEqual(orchCalls(sandbox, "manifest"), []);
+        assert.equal(fs.existsSync(path.join(sandbox.project, ".orchestrator")), false);
+      });
+    }
+  }
+
   // The fake orch answers by the tokens before the first flag, which include the manifest path.
   const verifyKey = (sandbox, file) => `manifest verify ${path.join(sandbox.project, file)}`;
   const verifyCases = [
@@ -197,36 +212,30 @@ describe("incident", { skip }, () => {
     assert.deepEqual(entry.context, { agent: "conductor", session: "<session>" }); // ses_ ids are redacted
   });
 
-  test("go: orch incident record with the detail on stdin and the context as --ctx", async (t) => {
+  test("go: the whole incident goes to orch on stdin, none of its text in argv", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: '{"recorded":"fp123","at":"2026-10-19T00:00:00.000Z"}\n' } });
     const r = await plugin.callTool("incident", { kind: "misroute", summary: "wrong lane", detail: "--details--" });
     const [call] = orchCalls(sandbox, "incident");
-    assert.deepEqual(call.argv, ["incident", "record", "--component", "agent", "--kind", "misroute", "--summary", "wrong lane", "--detail", "-", "--cwd", sandbox.project, "--ctx", "agent=conductor", "--ctx", "session=ses_test"]);
-    assert.equal(call.stdin, "--details--");
+    assert.deepEqual(call.argv, ["incident", "record", "--request", "-"]);
+    assert.deepEqual(JSON.parse(call.stdin), { component: "agent", kind: "misroute", summary: "wrong lane", detail: "--details--", context: { agent: "conductor", session: "ses_test" }, project: sandbox.project });
     assert.equal(r.content, "recorded incident fp123");
   });
 
-  test("go: execute.after records an orch_* error without --cwd when there is no directory", async (t) => {
+  test("go: execute.after records an orch_* error with a null project when there is no directory", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: '{"recorded":"fp9"}\n' } });
     plugin.api.location = {};
     await plugin.executeAfter({ status: "error", tool: "orch_mailbox_post", error: new Error("boom"), input: { a: 1 }, agent: "build" });
     const [call] = orchCalls(sandbox, "incident");
-    assert.deepEqual(call.argv, ["incident", "record", "--component", "plugin", "--kind", "bug", "--summary", "tool orch_mailbox_post errored: boom", "--detail", "-", "--ctx", "agent=build"]);
-    assert.equal(call.stdin, '{"a":1}');
+    assert.deepEqual(call.argv, ["incident", "record", "--request", "-"]);
+    assert.deepEqual(JSON.parse(call.stdin), { component: "plugin", kind: "bug", summary: "tool orch_mailbox_post errored: boom", detail: '{"a":1}', context: { agent: "build" }, project: null });
   });
 
-  test("go: a summary beginning with \"--\" is refused before any spawn", async (t) => {
-    const { sandbox, plugin } = await loadGo(t);
-    const r = await plugin.toolResult("incident", { kind: "note", summary: "--x" });
-    assert.equal(r.error.message, 'summary may not begin with "--" in the go runtime');
-    assert.deepEqual(orchCalls(sandbox, "incident"), []);
-  });
-
-  test("go: a kind beginning with \"--\" is refused before any spawn", async (t) => {
-    const { sandbox, plugin } = await loadGo(t);
-    const r = await plugin.toolResult("incident", { kind: "--x", summary: "s" });
-    assert.equal(r.error.message, 'kind may not begin with "--" in the go runtime');
-    assert.deepEqual(orchCalls(sandbox, "incident"), []);
+  test("go: flag-like text reaches orch intact, since none of it is argv", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: '{"recorded":"fp1"}\n' } });
+    await plugin.callTool("incident", { kind: "--x", summary: "--y" });
+    const [call] = orchCalls(sandbox, "incident");
+    assert.equal(call.argv.some((a) => a.includes("--x") || a.includes("--y")), false);
+    assert.deepEqual([JSON.parse(call.stdin).kind, JSON.parse(call.stdin).summary], ["--x", "--y"]);
   });
 });
 

@@ -112,6 +112,9 @@ arguments the script gets.
   executable file is an error, never skipped. The binary is resolved once when the plugin loads, so
   reload opencode after installing or moving `orch`. In go mode `orch` reads the registry
   `ORCH_REGISTRY`, else `$ORCH_HOME/models.json`, else the installed `models.json`.
+  A relative `ORCH_BIN`, `PATH` entry, `ORCH_HOME` or `ORCH_REGISTRY` is made absolute against the
+  plugin's working directory when it loads; a bare `ORCH_BIN=orch` therefore means `./orch`, not a
+  `PATH` lookup.
 - **Failure policy:** fail loudly, never fall back to JS. With an unknown runtime or no binary the
   plugin still loads, every `orch_*` tool returns the configuration error (`orch binary not found
   (looked in: ...)`), and the hooks degrade as when usage is unavailable (no budget block, no
@@ -120,9 +123,12 @@ arguments the script gets.
   - D-S10-1: `manifest_create` with no paths is a tool error (JS writes an empty manifest).
   - D-S10-2: an `execute.after` incident without a known project directory names the plugin's
     working directory as its project (JS records none).
-  - D-S10-3: incident context values travel as `--ctx k=v` strings, cut at a second `=`.
+  - D-S10-3 (retired by H12): incident context values now travel as JSON on stdin
+    (`orch incident record --request -`), so values are no longer cut at a second `=`. Go mode
+    therefore needs an `orch` that has `incident record --request -` (this release or later).
   - D-S10-4: free text beginning with `--` that would travel as an argument is refused before
-    `orch` runs (bodies and details go on stdin and are exempt).
+    `orch` runs (mailbox and manifest text); an incident's text is exempt, since the whole
+    incident goes on stdin, as are bodies and details.
   - D-S10-5 (PE-4): an incident's `version` is the `orch` version, not the checkout's HEAD.
   - D-S10-6 (PE-11): an aborted or timed-out delegate shows the Go bridge's FAILED result instead
     of the stderr tail.

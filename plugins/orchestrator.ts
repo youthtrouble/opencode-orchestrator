@@ -17,6 +17,16 @@ const HOME = os.homedir();
 const ORCH = path.join(HOME, ".config", "opencode", "orchestrator");
 const BIN = path.join(ORCH, "bin");
 const NODE = process.execPath.includes("opencode") ? "node" : process.execPath;
+// ORCH_HOME and ORCH_REGISTRY, made absolute once against the plugin's working directory: children
+// run in a project directory, where a relative value would name another tree (S4/R4). This, the
+// binary resolved at setup and callOrch's process.cwd() assume the plugin's cwd is stable after load.
+const ORCH_PATH_ENV = absoluteOrchPaths(process.env);
+
+function absoluteOrchPaths(env: NodeJS.ProcessEnv) {
+  const paths: { ORCH_HOME?: string; ORCH_REGISTRY?: string } = {};
+  for (const key of ["ORCH_HOME", "ORCH_REGISTRY"] as const) if (env[key]) paths[key] = path.resolve(env[key]);
+  return paths;
+}
 
 type Json = Record<string, unknown>;
 
@@ -37,7 +47,7 @@ type RunResult = { code: number; stdout: string; stderr: string; timedOut: boole
 function run(cmd: string, args: string[], { cwd, input, signal, timeoutMs = 2 * 60 * 60 * 1000 }: { cwd: string; input?: string; signal?: AbortSignal; timeoutMs?: number }) {
   if (signal?.aborted) return Promise.resolve<RunResult>({ code: -1, stdout: "", stderr: "aborted before start", timedOut: false });
   return new Promise<RunResult>((resolve) => {
-    const child = spawn(cmd, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CLAUDECODE: undefined } });
+    const child = spawn(cmd, args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, CLAUDECODE: undefined, ...ORCH_PATH_ENV } });
     // Decoding as a stream keeps a multi-byte character split across chunks intact.
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -154,15 +164,16 @@ function expandHome(file: string) {
 }
 
 // Explicit configuration (option `binary`, ORCH_BIN) that does not apply is an error, never a skip.
-// A relative option `binary` resolves against the plugin's working directory.
+// Every candidate is made absolute against the plugin's working directory, so the file checked is
+// the file run from a project directory (a bare ORCH_BIN=orch is ./orch, not a PATH lookup).
 function resolveOrchBinary(options: any, env: NodeJS.ProcessEnv): string {
-  const explicit: [string, string | undefined][] = [["option binary", options.binary ? path.resolve(expandHome(String(options.binary))) : undefined], ["ORCH_BIN", env.ORCH_BIN || undefined]];
+  const explicit: [string, string | undefined][] = [["option binary", options.binary ? path.resolve(expandHome(String(options.binary))) : undefined], ["ORCH_BIN", env.ORCH_BIN ? path.resolve(env.ORCH_BIN) : undefined]];
   for (const [source, file] of explicit) {
     if (file === undefined) continue;
     if (isExecutableFile(file)) return file;
     throw new OrchConfigError(`orch binary from ${source} is not an executable file: ${file}`);
   }
-  const searched = [path.join(os.homedir(), ".local", "bin", "orch"), ...String(env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.join(dir, "orch"))];
+  const searched = [path.join(os.homedir(), ".local", "bin", "orch"), ...String(env.PATH || "").split(path.delimiter).filter(Boolean).map((dir) => path.resolve(dir, "orch"))];
   const found = searched.find(isExecutableFile);
   if (found) return found;
   throw new OrchConfigError(`orch binary not found (looked in: ${searched.join(", ")})`);
@@ -193,8 +204,8 @@ async function createJsRuntime(): Promise<OrchRuntime> {
     mailboxPost: async (root, msg) => (await lib("mailbox.mjs")).post(root, msg),
     mailboxList: async (root, query) => (await lib("mailbox.mjs")).list(root, query),
     async manifestCreate(root, { task, author, paths, baseline }) {
-      const m = (await lib("manifest.mjs")).buildManifest({ root, paths, task, author, baseline });
       const out = manifestPath(root, task);
+      const m = (await lib("manifest.mjs")).buildManifest({ root, paths, task, author, baseline });
       fs.mkdirSync(path.dirname(out), { recursive: true });
       fs.writeFileSync(out, JSON.stringify(m, null, 2) + "\n");
       return { path: out, manifest_sha256: m.manifest_sha256, file_count: m.file_count };
@@ -208,7 +219,10 @@ async function createJsRuntime(): Promise<OrchRuntime> {
   };
 }
 
+// The task names the manifest file, so it must not climb out of (or nest under) manifests/ (S4/R7).
 function manifestPath(root: string, task: string) {
+  const isFileName = typeof task === "string" && task !== "" && task !== "." && task !== ".." && !/[/\\\0]/.test(task);
+  if (!isFileName) throw new Error(`manifest task must be a single file name: ${JSON.stringify(task)}`);
   return path.join(root, ".orchestrator", "manifests", `${task}.json`);
 }
 
@@ -262,8 +276,8 @@ function createGoRuntime(bin: string): OrchRuntime {
     async budgetGate(vendor, force) {
       return JSON.parse((await callOrch(["budget", "gate", "--vendor", vendor, ...(force ? ["--force"] : [])], { timeoutMs: ORCH_COLLECTING_TIMEOUT_MS })).stdout);
     },
-    // The registry orch itself reads (orch makes ORCH_HOME and ORCH_REGISTRY absolute); no subcommand needed for a file read.
-    registry: () => JSON.parse(fs.readFileSync(process.env.ORCH_REGISTRY ? path.resolve(process.env.ORCH_REGISTRY) : path.resolve(process.env.ORCH_HOME || ORCH, "models.json"), "utf8")),
+    // The registry the spawned orch reads; no subcommand needed for a file read.
+    registry: () => JSON.parse(fs.readFileSync(ORCH_PATH_ENV.ORCH_REGISTRY ?? path.join(ORCH_PATH_ENV.ORCH_HOME ?? ORCH, "models.json"), "utf8")),
     async mailboxPost(root, { from, to, kind, subject, body, refs, thread }) {
       refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs });
       // A missing from/subject is left out so orch reports it ("post needs from and subject").
@@ -297,13 +311,10 @@ function createGoRuntime(bin: string): OrchRuntime {
       if (res.code === 1 && result === null) throw new OrchCommandError(subcommand, res.code, res.stderr);
       return result ?? JSON.parse(res.stdout);
     },
+    // The whole incident goes on stdin: process listings show argv before orch redacts it (S4/R5).
     async recordIncident({ component, kind, summary, detail, context, project }) {
-      const ctxEntries = Object.entries(context).filter(([, value]) => value !== undefined);
-      refuseFlagLike("incident record", { component, kind, summary, ...Object.fromEntries(ctxEntries.map(([key, value]) => [`context.${key}`, value])) });
-      const args = ["incident", "record", "--component", component, "--kind", kind, "--summary", summary, "--detail", "-"];
-      if (project) args.push("--cwd", project);
-      for (const [key, value] of ctxEntries) args.push("--ctx", `${key}=${value}`);
-      return { fp: JSON.parse((await callOrch(args, { input: detail })).stdout).recorded };
+      const request = JSON.stringify({ component, kind, summary, detail, context, project: project || null });
+      return { fp: JSON.parse((await callOrch(["incident", "record", "--request", "-"], { input: request })).stdout).recorded };
     },
     command: (script) => ({ cmd: bin, args: [script] }),
   };

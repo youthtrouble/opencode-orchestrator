@@ -115,6 +115,31 @@ describe("orch binary resolution", { skip }, () => {
     });
   }
 
+  // Tools spawn orch in the project directory, so a relative binary must already be absolute there.
+  test("a relative ORCH_BIN runs the absolute file it validated, from the project directory too", async (t) => {
+    const { sandbox, fakes } = await resolutionSandbox(t, ["env", "path"]);
+    setAnswers(sandbox, { ...sandbox.answers, "worker status": { stdout: "lane l1: running\n" } });
+    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ORCH_BIN: path.relative(process.cwd(), fakes.env) } });
+    assert.equal((await plugin.callTool("usage_status")).metadata.orch, fakes.env);
+    assert.equal((await plugin.callTool("worker_status")).content, "lane l1: running");
+    assert.deepEqual(selves(sandbox), ["env"]);
+  });
+
+  test("a bare ORCH_BIN=orch is the plugin directory's orch, not a PATH lookup", async (t) => {
+    const { sandbox, fakes } = await resolutionSandbox(t, ["env", "path"]);
+    const pluginCwd = process.cwd();
+    process.chdir(path.dirname(fakes.env));
+    let plugin;
+    try {
+      plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ORCH_BIN: "orch" } });
+    } finally {
+      process.chdir(pluginCwd);
+    }
+    // process.cwd() reports the real path (macOS temp dirs live under the /var symlink).
+    assert.equal((await plugin.callTool("usage_status")).metadata.orch, fs.realpathSync(fakes.env));
+    assert.deepEqual(selves(sandbox), ["env"]);
+  });
+
   test("an explicit ORCH_BIN that does not exist is an error, with no fall-through", async (t) => {
     const { sandbox } = await resolutionSandbox(t, ["home", "path"]);
     const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ORCH_BIN: "/nonexistent" }, brokenRuntime: true });
@@ -305,6 +330,20 @@ describe("model sync from the registry", { skip }, () => {
     const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ORCH_REGISTRY: file } });
     assert.deepEqual(plugin.syncedAgents()["coder-oai"], { model: { providerID: "openai", id: "gpt-test-strong", variant: "low" } });
     assert.deepEqual(poisonHits(sandbox), []);
+  });
+
+  test("go: relative ORCH_HOME and ORCH_REGISTRY are made absolute for every child and the registry read", async (t) => {
+    const { sandbox } = await goSandbox(t, { answers: { "worker status": { stdout: "\n" } } });
+    const registry = checkoutRegistry();
+    registry.vendors.openai.tiers.strong = { ...registry.vendors.openai.tiers.strong, opencode: "openai/gpt-test-relative", effort: "low" };
+    const file = path.join(sandbox.root, "models-relative.json");
+    fs.writeFileSync(file, JSON.stringify(registry));
+    const env = { ORCH_RUNTIME: "go", ORCH_HOME: path.relative(process.cwd(), sandbox.orchestrator), ORCH_REGISTRY: path.relative(process.cwd(), file) };
+    const plugin = await loadPlugin(t, sandbox, { env });
+    await plugin.callTool("worker_status");
+    assert.deepEqual(plugin.syncedAgents()["coder-oai"], { model: { providerID: "openai", id: "gpt-test-relative", variant: "low" } });
+    const seen = calls(sandbox).filter((c) => c.self === "path").map((c) => [c.argv[0], c.cwd === sandbox.project || c.cwd === fs.realpathSync(sandbox.project), c.orchHome, c.orchRegistry]);
+    assert.deepEqual(seen, [["routing", false, sandbox.orchestrator, file], ["worker", true, sandbox.orchestrator, file]]);
   });
 
   test("go: the default registry is the orchestrator tree's models.json", async (t) => {
