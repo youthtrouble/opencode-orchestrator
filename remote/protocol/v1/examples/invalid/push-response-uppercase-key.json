@@ -1,0 +1,15 @@
+{
+  "def": "PushResponse",
+  "value": {
+    "v": 1,
+    "server_time": "2026-10-20T12:00:00Z",
+    "projects": [
+      {
+        "key": "0123456789ABCDEF0123456789ABCDEF",
+        "result": "accepted",
+        "retry_after_seconds": null
+      }
+    ]
+  },
+  "expect_path": "/projects/0/key"
+}

@@ -1,0 +1,19 @@
+{
+  "def": "PushResponse",
+  "value": {
+    "v": 1,
+    "server_time": "2026-10-20T12:00:00Z",
+    "projects": [
+      {
+        "key": "0123456789abcdef0123456789abcdef",
+        "result": "deferred",
+        "retry_after_seconds": 42
+      },
+      {
+        "key": "ffffffffffffffffffffffffffffffff",
+        "result": "accepted",
+        "retry_after_seconds": null
+      }
+    ]
+  }
+}

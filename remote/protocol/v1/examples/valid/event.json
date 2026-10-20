@@ -1,0 +1,10 @@
+{
+  "def": "Event",
+  "value": {
+    "id": "m-0001",
+    "at": "2026-10-20T12:00:00Z",
+    "kind": "progress",
+    "from": "conductor",
+    "subject": "WT3 merged locally"
+  }
+}

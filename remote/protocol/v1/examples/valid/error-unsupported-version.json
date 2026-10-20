@@ -1,0 +1,10 @@
+{
+  "def": "Error",
+  "value": {
+    "error": "unsupported_version",
+    "message": "protocol v2 is not supported",
+    "supported": [
+      1
+    ]
+  }
+}

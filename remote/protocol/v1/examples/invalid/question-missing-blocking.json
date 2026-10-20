@@ -1,0 +1,12 @@
+{
+  "def": "Question",
+  "value": {
+    "id": "m-0002",
+    "at": "2026-10-20T12:00:00Z",
+    "from": "conductor",
+    "subject": "Ship the beta behind a flag?",
+    "body": "The slice is green. Shipping behind a flag keeps the old path live.",
+    "recommended": "Yes, behind a flag."
+  },
+  "expect_path": "/blocking"
+}

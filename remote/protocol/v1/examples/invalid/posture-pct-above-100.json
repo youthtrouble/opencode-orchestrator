@@ -1,0 +1,10 @@
+{
+  "def": "Posture",
+  "value": {
+    "level": "amber",
+    "five_hour_pct": 101,
+    "weekly_pct": 40,
+    "resets_at": "2026-10-20T14:00:00Z"
+  },
+  "expect_path": "/five_hour_pct"
+}

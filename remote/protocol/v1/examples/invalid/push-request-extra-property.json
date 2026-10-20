@@ -1,0 +1,15 @@
+{
+  "def": "PushRequest",
+  "value": {
+    "v": 1,
+    "machine": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "orch_version": "0.9.0",
+      "sent_at": "2026-10-20T12:00:00Z"
+    },
+    "budget": null,
+    "projects": [],
+    "debug": true
+  },
+  "expect_path": "/debug"
+}

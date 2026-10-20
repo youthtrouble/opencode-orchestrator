@@ -1,0 +1,8 @@
+{
+  "def": "Progress",
+  "value": {
+    "done": -1,
+    "total": 7
+  },
+  "expect_path": "/done"
+}

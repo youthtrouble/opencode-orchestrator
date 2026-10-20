@@ -1,0 +1,103 @@
+{
+  "def": "Summary",
+  "value": {
+    "v": 1,
+    "server_time": "2026-10-20T12:00:00Z",
+    "machine": {
+      "orch_version": "0.9.0",
+      "last_pull_at": "2026-10-20T12:00:00Z",
+      "last_push_at": null
+    },
+    "budget": {
+      "anthropic": {
+        "level": "amber",
+        "five_hour_pct": 72.5,
+        "weekly_pct": 40,
+        "resets_at": "2026-10-20T14:00:00Z"
+      },
+      "openai": {
+        "level": "amber",
+        "five_hour_pct": 72.5,
+        "weekly_pct": 40,
+        "resets_at": "2026-10-20T14:00:00Z"
+      }
+    },
+    "undo_seconds": 10,
+    "projects": [
+      {
+        "key": "0123456789abcdef0123456789abcdef",
+        "name": "example-app",
+        "hidden": false,
+        "state": "needs_you",
+        "state_reason": "1 blocking question",
+        "door": "claude",
+        "run": {
+          "kind": "headless",
+          "since": "2026-10-20T11:00:00Z",
+          "last_activity_at": "2026-10-20T11:59:30Z"
+        },
+        "slice": "WT3",
+        "now": null,
+        "progress": {
+          "done": 3,
+          "total": 7
+        },
+        "ci": [
+          {
+            "repo": "example/app",
+            "workflow": "ci",
+            "status": "completed",
+            "conclusion": "success",
+            "url": "https://ci.example.com/runs/1",
+            "at": "2026-10-20T12:00:00Z"
+          }
+        ],
+        "events": [
+          {
+            "id": "m-0001",
+            "at": "2026-10-20T12:00:00Z",
+            "kind": "progress",
+            "from": "conductor",
+            "subject": "WT3 merged locally"
+          }
+        ],
+        "received_at": "2026-10-20T12:00:00Z",
+        "sent_at": "2026-10-20T12:00:00Z",
+        "pending_action": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "kind": "resume",
+          "apply_after": "2026-10-20T12:00:10.250Z"
+        },
+        "questions": [
+          {
+            "id": "m-0002",
+            "at": "2026-10-20T12:00:00Z",
+            "from": "conductor",
+            "subject": "Ship the beta behind a flag?",
+            "body": "The slice is green. Shipping behind a flag keeps the old path live.",
+            "recommended": "Yes, behind a flag.",
+            "blocking": true,
+            "answer": {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "kind": "accept",
+              "text": "Yes, behind a flag.",
+              "status": "undo_window",
+              "apply_after": "2026-10-20T12:00:10.250Z",
+              "detail": null
+            }
+          },
+          {
+            "id": "m-0003",
+            "at": "2026-10-20T12:00:00Z",
+            "from": "conductor",
+            "subject": "Ship the beta behind a flag?",
+            "body": "The slice is green. Shipping behind a flag keeps the old path live.",
+            "recommended": "Yes, behind a flag.",
+            "blocking": true,
+            "answer": null
+          }
+        ]
+      }
+    ]
+  }
+}

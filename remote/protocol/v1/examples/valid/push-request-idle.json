@@ -1,0 +1,33 @@
+{
+  "def": "PushRequest",
+  "value": {
+    "v": 1,
+    "machine": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "orch_version": "0.9.0",
+      "sent_at": "2026-10-20T12:00:00Z"
+    },
+    "budget": null,
+    "projects": [
+      {
+        "key": "0123456789abcdef0123456789abcdef",
+        "name": "example-app",
+        "state": "idle",
+        "state_reason": "",
+        "door": null,
+        "run": {
+          "kind": "none",
+          "since": null,
+          "last_activity_at": null
+        },
+        "slice": null,
+        "now": null,
+        "progress": null,
+        "ci": [],
+        "events": [],
+        "questions": [],
+        "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  }
+}

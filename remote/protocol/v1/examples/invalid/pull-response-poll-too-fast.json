@@ -1,0 +1,11 @@
+{
+  "def": "PullResponse",
+  "value": {
+    "v": 1,
+    "server_time": "2026-10-20T12:00:00Z",
+    "poll_after_seconds": 10,
+    "answers": [],
+    "actions": []
+  },
+  "expect_path": "/poll_after_seconds"
+}

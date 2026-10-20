@@ -1,0 +1,14 @@
+{
+  "def": "AnswerResponse",
+  "value": {
+    "v": 1,
+    "answer": {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "kind": "accept",
+      "text": "Yes, behind a flag.",
+      "status": "undo_window",
+      "apply_after": "2026-10-20T12:00:10.250Z",
+      "detail": null
+    }
+  }
+}

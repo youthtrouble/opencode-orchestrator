@@ -1,0 +1,7 @@
+{
+  "def": "AckResponse",
+  "value": {
+    "v": 1,
+    "settled": 2
+  }
+}

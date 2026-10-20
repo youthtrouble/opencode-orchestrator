@@ -1,0 +1,11 @@
+{
+  "def": "CiRun",
+  "value": {
+    "repo": "example/app",
+    "workflow": "ci",
+    "status": "in_progress",
+    "conclusion": null,
+    "url": null,
+    "at": "2026-10-20T12:00:00Z"
+  }
+}

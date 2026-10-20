@@ -1,0 +1,8 @@
+{
+  "def": "AckResponse",
+  "value": {
+    "v": 2,
+    "settled": 0
+  },
+  "expect_path": "/v"
+}

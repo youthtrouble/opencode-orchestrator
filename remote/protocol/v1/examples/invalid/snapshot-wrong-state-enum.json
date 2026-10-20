@@ -1,0 +1,53 @@
+{
+  "def": "ProjectSnapshot",
+  "value": {
+    "key": "0123456789abcdef0123456789abcdef",
+    "name": "example-app",
+    "state": "busy",
+    "state_reason": "1 blocking question",
+    "door": "opencode",
+    "run": {
+      "kind": "headless",
+      "since": "2026-10-20T11:00:00Z",
+      "last_activity_at": "2026-10-20T11:59:30Z"
+    },
+    "slice": "WT3",
+    "now": "Waiting for an answer",
+    "progress": {
+      "done": 3,
+      "total": 7
+    },
+    "ci": [
+      {
+        "repo": "example/app",
+        "workflow": "ci",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://ci.example.com/runs/1",
+        "at": "2026-10-20T12:00:00Z"
+      }
+    ],
+    "events": [
+      {
+        "id": "m-0001",
+        "at": "2026-10-20T12:00:00Z",
+        "kind": "progress",
+        "from": "conductor",
+        "subject": "WT3 merged locally"
+      }
+    ],
+    "questions": [
+      {
+        "id": "m-0002",
+        "at": "2026-10-20T12:00:00Z",
+        "from": "conductor",
+        "subject": "Ship the beta behind a flag?",
+        "body": "The slice is green. Shipping behind a flag keeps the old path live.",
+        "recommended": "Yes, behind a flag.",
+        "blocking": true
+      }
+    ],
+    "snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expect_path": "/state"
+}

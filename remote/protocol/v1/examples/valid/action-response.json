@@ -1,0 +1,13 @@
+{
+  "def": "ActionResponse",
+  "value": {
+    "v": 1,
+    "action": {
+      "id": "00000000-0000-4000-8000-000000000003",
+      "kind": "pause",
+      "apply_after": "2026-10-20T12:00:10.250Z",
+      "status": "rejected",
+      "detail": "project not found on this machine"
+    }
+  }
+}

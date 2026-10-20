@@ -1,0 +1,8 @@
+{
+  "def": "ActionRequest",
+  "value": {
+    "kind": "resume",
+    "client_key": "ABCDEF00-0000-4000-8000-000000000004"
+  },
+  "expect_path": "/client_key"
+}

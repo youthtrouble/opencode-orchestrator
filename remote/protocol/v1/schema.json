@@ -1,0 +1,1046 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orch:work-trains:protocol:v1",
+  "title": "Work Trains wire protocol v1",
+  "description": "Every JSON payload between orch remote (Mac), the Worker and the browser page. See ../README.md.",
+  "$defs": {
+    "NullableIso": {
+      "description": "UTC timestamp with seconds or milliseconds precision, or null. Iso narrows it to non-null.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+    },
+    "Iso": {
+      "type": "string",
+      "$ref": "#/$defs/NullableIso"
+    },
+    "Uuid": {
+      "description": "Lowercase 8-4-4-4-12 hex.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "ProjectKey": {
+      "description": "Opaque per-project key.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "NullablePosture": {
+      "description": "One vendor's subscription budget as the Mac last saw it, or null. Posture narrows it to non-null.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "five_hour_pct",
+        "weekly_pct",
+        "resets_at"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "green",
+            "amber",
+            "red",
+            "unknown"
+          ]
+        },
+        "five_hour_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "weekly_pct": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "resets_at": {
+          "$ref": "#/$defs/NullableIso"
+        }
+      }
+    },
+    "Posture": {
+      "type": "object",
+      "$ref": "#/$defs/NullablePosture"
+    },
+    "Run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "since",
+        "last_activity_at"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "headless",
+            "interactive",
+            "none"
+          ]
+        },
+        "since": {
+          "$ref": "#/$defs/NullableIso"
+        },
+        "last_activity_at": {
+          "$ref": "#/$defs/NullableIso"
+        }
+      }
+    },
+    "NullableProgress": {
+      "description": "Slices done of total, or null. Progress narrows it to non-null.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "done",
+        "total"
+      ],
+      "properties": {
+        "done": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "Progress": {
+      "type": "object",
+      "$ref": "#/$defs/NullableProgress"
+    },
+    "CiRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "workflow",
+        "status",
+        "conclusion",
+        "url",
+        "at"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "workflow": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "status": {
+          "enum": [
+            "queued",
+            "in_progress",
+            "completed",
+            "unknown"
+          ]
+        },
+        "conclusion": {
+          "enum": [
+            "success",
+            "failure",
+            "cancelled",
+            "skipped",
+            "neutral",
+            "timed_out",
+            "action_required",
+            null
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 300,
+          "pattern": "^https://"
+        },
+        "at": {
+          "$ref": "#/$defs/Iso"
+        }
+      }
+    },
+    "Event": {
+      "description": "A recent mailbox message, reduced to its headline.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "at",
+        "kind",
+        "from",
+        "subject"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "at": {
+          "$ref": "#/$defs/Iso"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20
+        },
+        "from": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 140
+        }
+      }
+    },
+    "Question": {
+      "description": "An open question for the human, from the project mailbox.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "at",
+        "from",
+        "subject",
+        "body",
+        "recommended",
+        "blocking"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "at": {
+          "$ref": "#/$defs/Iso"
+        },
+        "from": {
+          "type": "string",
+          "maxLength": 60
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "body": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "blocking": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ProjectSnapshot": {
+      "description": "One project's state as pushed by the Mac.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "state",
+        "state_reason",
+        "door",
+        "run",
+        "slice",
+        "now",
+        "progress",
+        "ci",
+        "events",
+        "questions",
+        "snapshot_hash"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/ProjectKey"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "state": {
+          "enum": [
+            "working",
+            "needs_you",
+            "paused",
+            "failed",
+            "done",
+            "idle"
+          ]
+        },
+        "state_reason": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "door": {
+          "enum": [
+            "opencode",
+            "claude",
+            null
+          ]
+        },
+        "run": {
+          "$ref": "#/$defs/Run"
+        },
+        "slice": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 40
+        },
+        "now": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200
+        },
+        "progress": {
+          "$ref": "#/$defs/NullableProgress"
+        },
+        "ci": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "$ref": "#/$defs/CiRun"
+          }
+        },
+        "events": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "$ref": "#/$defs/Event"
+          }
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/Question"
+          }
+        },
+        "snapshot_hash": {
+          "description": "Opaque change token; an unchanged hash means nothing to write.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "PushRequest": {
+      "description": "Mac -> Worker: changed project snapshots.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "machine",
+        "budget",
+        "projects"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "machine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "orch_version",
+            "sent_at"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "orch_version": {
+              "type": "string",
+              "maxLength": 60
+            },
+            "sent_at": {
+              "$ref": "#/$defs/Iso"
+            }
+          }
+        },
+        "budget": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "anthropic",
+            "openai"
+          ],
+          "properties": {
+            "anthropic": {
+              "$ref": "#/$defs/NullablePosture"
+            },
+            "openai": {
+              "$ref": "#/$defs/NullablePosture"
+            }
+          }
+        },
+        "projects": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/ProjectSnapshot"
+          }
+        }
+      }
+    },
+    "PushResponse": {
+      "description": "Worker -> Mac: per-project result of a push.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "server_time",
+        "projects"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "server_time": {
+          "$ref": "#/$defs/Iso"
+        },
+        "projects": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "result",
+              "retry_after_seconds"
+            ],
+            "properties": {
+              "key": {
+                "$ref": "#/$defs/ProjectKey"
+              },
+              "result": {
+                "enum": [
+                  "accepted",
+                  "unchanged",
+                  "deferred"
+                ]
+              },
+              "retry_after_seconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 300
+              }
+            }
+          }
+        }
+      }
+    },
+    "PullResponse": {
+      "description": "Worker -> Mac: answers and actions past their undo window, not yet acked.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "server_time",
+        "poll_after_seconds",
+        "answers",
+        "actions"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "server_time": {
+          "$ref": "#/$defs/Iso"
+        },
+        "poll_after_seconds": {
+          "type": "integer",
+          "minimum": 15,
+          "maximum": 300
+        },
+        "answers": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "project_key",
+              "question_id",
+              "kind",
+              "text",
+              "created_at"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "project_key": {
+                "$ref": "#/$defs/ProjectKey"
+              },
+              "question_id": {
+                "$ref": "#/$defs/Question/properties/id"
+              },
+              "kind": {
+                "$ref": "#/$defs/AnswerRequest/properties/kind"
+              },
+              "text": {
+                "$ref": "#/$defs/AnswerRequest/properties/text"
+              },
+              "created_at": {
+                "$ref": "#/$defs/Iso"
+              }
+            }
+          }
+        },
+        "actions": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "project_key",
+              "kind",
+              "created_at"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "project_key": {
+                "$ref": "#/$defs/ProjectKey"
+              },
+              "kind": {
+                "$ref": "#/$defs/ActionRequest/properties/kind"
+              },
+              "created_at": {
+                "$ref": "#/$defs/Iso"
+              }
+            }
+          }
+        }
+      }
+    },
+    "AckRequest": {
+      "description": "Mac -> Worker: the outcome of applying pulled answers and actions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "results"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "results": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "type",
+              "outcome",
+              "detail"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/Uuid"
+              },
+              "type": {
+                "enum": [
+                  "answer",
+                  "action"
+                ]
+              },
+              "outcome": {
+                "enum": [
+                  "applied",
+                  "superseded",
+                  "rejected"
+                ]
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          }
+        }
+      }
+    },
+    "AckResponse": {
+      "description": "Worker -> Mac: how many ack results changed state.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "settled"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "settled": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "Summary": {
+      "description": "Worker -> browser: GET /api/v1/summary, everything the page shows.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "server_time",
+        "machine",
+        "budget",
+        "undo_seconds",
+        "projects"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "server_time": {
+          "$ref": "#/$defs/Iso"
+        },
+        "machine": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "orch_version",
+            "last_pull_at",
+            "last_push_at"
+          ],
+          "properties": {
+            "orch_version": {
+              "$ref": "#/$defs/PushRequest/properties/machine/properties/orch_version"
+            },
+            "last_pull_at": {
+              "$ref": "#/$defs/NullableIso"
+            },
+            "last_push_at": {
+              "$ref": "#/$defs/NullableIso"
+            }
+          }
+        },
+        "budget": {
+          "$ref": "#/$defs/PushRequest/properties/budget"
+        },
+        "undo_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "projects": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "name",
+              "hidden",
+              "state",
+              "state_reason",
+              "door",
+              "run",
+              "slice",
+              "now",
+              "progress",
+              "ci",
+              "events",
+              "received_at",
+              "sent_at",
+              "pending_action",
+              "questions"
+            ],
+            "properties": {
+              "key": {
+                "$ref": "#/$defs/ProjectKey"
+              },
+              "name": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/name"
+              },
+              "hidden": {
+                "type": "boolean"
+              },
+              "state": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/state"
+              },
+              "state_reason": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/state_reason"
+              },
+              "door": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/door"
+              },
+              "run": {
+                "$ref": "#/$defs/Run"
+              },
+              "slice": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/slice"
+              },
+              "now": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/now"
+              },
+              "progress": {
+                "$ref": "#/$defs/NullableProgress"
+              },
+              "ci": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/ci"
+              },
+              "events": {
+                "$ref": "#/$defs/ProjectSnapshot/properties/events"
+              },
+              "received_at": {
+                "$ref": "#/$defs/Iso"
+              },
+              "sent_at": {
+                "$ref": "#/$defs/Iso"
+              },
+              "pending_action": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "kind",
+                  "apply_after"
+                ],
+                "properties": {
+                  "id": {
+                    "$ref": "#/$defs/Uuid"
+                  },
+                  "kind": {
+                    "$ref": "#/$defs/ActionRequest/properties/kind"
+                  },
+                  "apply_after": {
+                    "$ref": "#/$defs/Iso"
+                  }
+                }
+              },
+              "questions": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "at",
+                    "from",
+                    "subject",
+                    "body",
+                    "recommended",
+                    "blocking",
+                    "answer"
+                  ],
+                  "properties": {
+                    "id": {
+                      "$ref": "#/$defs/Question/properties/id"
+                    },
+                    "at": {
+                      "$ref": "#/$defs/Iso"
+                    },
+                    "from": {
+                      "$ref": "#/$defs/Question/properties/from"
+                    },
+                    "subject": {
+                      "$ref": "#/$defs/Question/properties/subject"
+                    },
+                    "body": {
+                      "$ref": "#/$defs/Question/properties/body"
+                    },
+                    "recommended": {
+                      "$ref": "#/$defs/Question/properties/recommended"
+                    },
+                    "blocking": {
+                      "type": "boolean"
+                    },
+                    "answer": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "kind",
+                        "text",
+                        "status",
+                        "apply_after",
+                        "detail"
+                      ],
+                      "properties": {
+                        "id": {
+                          "$ref": "#/$defs/Uuid"
+                        },
+                        "kind": {
+                          "$ref": "#/$defs/AnswerRequest/properties/kind"
+                        },
+                        "text": {
+                          "$ref": "#/$defs/AnswerRequest/properties/text"
+                        },
+                        "status": {
+                          "$ref": "#/$defs/AnswerResponse/properties/answer/properties/status"
+                        },
+                        "apply_after": {
+                          "$ref": "#/$defs/Iso"
+                        },
+                        "detail": {
+                          "$ref": "#/$defs/AnswerResponse/properties/answer/properties/detail"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "AnswerRequest": {
+      "description": "Browser -> Worker: answer a question. text is present only for typed answers; the Worker enforces the pairing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "client_key"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "accept",
+            "typed"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "client_key": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "AnswerResponse": {
+      "description": "Worker -> browser: the stored answer after create or undo.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "answer"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "answer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "text",
+            "status",
+            "apply_after",
+            "detail"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "$ref": "#/$defs/AnswerRequest/properties/kind"
+            },
+            "text": {
+              "$ref": "#/$defs/AnswerRequest/properties/text"
+            },
+            "status": {
+              "enum": [
+                "undo_window",
+                "sent",
+                "applied",
+                "superseded",
+                "rejected"
+              ]
+            },
+            "apply_after": {
+              "$ref": "#/$defs/Iso"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 200
+            }
+          }
+        }
+      }
+    },
+    "ActionRequest": {
+      "description": "Browser -> Worker: pause or resume a project.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "client_key"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "pause",
+            "resume"
+          ]
+        },
+        "client_key": {
+          "$ref": "#/$defs/Uuid"
+        }
+      }
+    },
+    "ActionResponse": {
+      "description": "Worker -> browser: the stored action after create or undo.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "v",
+        "action"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "action": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "apply_after",
+            "status",
+            "detail"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Uuid"
+            },
+            "kind": {
+              "$ref": "#/$defs/ActionRequest/properties/kind"
+            },
+            "apply_after": {
+              "$ref": "#/$defs/Iso"
+            },
+            "status": {
+              "$ref": "#/$defs/AnswerResponse/properties/answer/properties/status"
+            },
+            "detail": {
+              "$ref": "#/$defs/AnswerResponse/properties/answer/properties/detail"
+            }
+          }
+        }
+      }
+    },
+    "VisibilityRequest": {
+      "description": "Browser -> Worker: hide or show a project on the page.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hidden"
+      ],
+      "properties": {
+        "hidden": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Error": {
+      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "message"
+      ],
+      "properties": {
+        "error": {
+          "enum": [
+            "forbidden",
+            "not_found",
+            "invalid_request",
+            "unsupported_version",
+            "conflict",
+            "too_late",
+            "payload_too_large",
+            "not_configured",
+            "internal"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "supported": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

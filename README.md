@@ -342,6 +342,7 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 | [orchestrator/README.md](orchestrator/README.md) | Scripts and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
 | [go/README.md](go/README.md) | The `orch` binary: commands, building, install, plugin runtime, parity harness, release checklist |
 | [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
+| [remote/protocol/README.md](remote/protocol/README.md) | The Work Trains wire protocol: the versioned v1 JSON Schema, its validator and examples; test with `node --test 'remote/protocol/test/*.test.ts'` |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |

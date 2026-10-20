@@ -1,0 +1,9 @@
+{
+  "def": "Run",
+  "value": {
+    "kind": null,
+    "since": null,
+    "last_activity_at": null
+  },
+  "expect_path": "/kind"
+}

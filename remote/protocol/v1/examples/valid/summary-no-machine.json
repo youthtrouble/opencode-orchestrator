@@ -1,0 +1,11 @@
+{
+  "def": "Summary",
+  "value": {
+    "v": 1,
+    "server_time": "2026-10-20T12:00:00Z",
+    "machine": null,
+    "budget": null,
+    "undo_seconds": 10,
+    "projects": []
+  }
+}

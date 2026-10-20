@@ -6,6 +6,9 @@
   the signal before RunSync returns. It used to send the signal to its own pid, which Linux could
   deliver to another thread later, so orch sometimes ran on and exited 0. That was the ubuntu CI
   flake in `TestRunSyncRelaysSIGINTAndThenEndsByIt` (test reliability).
+- remote: the Work Trains wire protocol (`remote/protocol/`) is versioned as a v1 JSON Schema with a
+  dependency-free validator that rejects schema keywords it does not support, valid and invalid
+  examples for every payload, and contract tests (`node --test 'remote/protocol/test/*.test.ts'`).
 - flip/kickoff: `.orchestrator/` is excluded in linked worktrees (the common dir's `info/exclude`)
   and submodules (the git dir's) instead of failing with ENOTDIR; a `.git` file that is malformed or
   names a missing git dir, or whose `commondir` names a missing directory, counts as no repository

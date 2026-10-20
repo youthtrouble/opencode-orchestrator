@@ -1,0 +1,8 @@
+{
+  "def": "AckRequest",
+  "value": {
+    "v": 1,
+    "results": []
+  },
+  "expect_path": "/results"
+}

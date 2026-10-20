@@ -1,0 +1,12 @@
+{
+  "def": "CiRun",
+  "value": {
+    "repo": "example/app",
+    "workflow": "ci",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "http://ci.example.com/runs/1",
+    "at": "2026-10-20T12:00:00Z"
+  },
+  "expect_path": "/url"
+}

@@ -1,0 +1,20 @@
+{
+  "def": "AckRequest",
+  "value": {
+    "v": 1,
+    "results": [
+      {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "type": "answer",
+        "outcome": "applied",
+        "detail": ""
+      },
+      {
+        "id": "00000000-0000-4000-8000-000000000003",
+        "type": "action",
+        "outcome": "superseded",
+        "detail": "already paused"
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "def": "Summary",
+  "value": {
+    "v": 1,
+    "server_time": "2026-10-20T12:00:00Z",
+    "machine": null,
+    "budget": null,
+    "undo_seconds": 10,
+    "projects": [
+      {
+        "key": "0123456789abcdef0123456789abcdef",
+        "name": "example-app",
+        "hidden": false,
+        "state": "working",
+        "state_reason": "",
+        "door": null,
+        "run": {
+          "kind": "headless",
+          "since": "2026-10-20T11:00:00Z",
+          "last_activity_at": "2026-10-20T11:59:30Z"
+        },
+        "slice": null,
+        "now": null,
+        "progress": null,
+        "ci": [],
+        "events": [],
+        "received_at": "2026-10-20T12:00:00Z",
+        "sent_at": "2026-10-20T12:00:00Z",
+        "pending_action": null,
+        "questions": [
+          {
+            "id": "m-0002",
+            "at": "2026-10-20T12:00:00Z",
+            "from": "conductor",
+            "subject": "Ship the beta behind a flag?",
+            "body": "The slice is green. Shipping behind a flag keeps the old path live.",
+            "recommended": "Yes, behind a flag.",
+            "blocking": true,
+            "answer": {
+              "id": "00000000-0000-4000-8000-000000000002",
+              "kind": "accept",
+              "text": "Yes, behind a flag.",
+              "status": "delivered",
+              "apply_after": "2026-10-20T12:00:10.250Z",
+              "detail": null
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect_path": "/projects/0/questions/0/answer/status"
+}
