@@ -5,11 +5,13 @@
 # Scripted mode: when $HOME/fake-claude/case names a case, each argv element is appended as
 # one line to $HOME/fake-log/claude-argv.txt, then $HOME/fake-claude/<case>.jsonl is printed
 # on stdout and <case>.stderr on stderr (each if present), and the fake exits with the code in
-# <case>.exit. Instead of exiting, <case>.signal makes it kill itself with that signal (so
-# claude-exec sees a close code of null) and <case>.sleep makes it become /bin/sleep for that
-# many seconds (so it is still running when the bridge signals it); with <case>.pid present it
-# first writes its pid to $HOME/fake-claude/pid (outside the compared logs), so a case can
-# check that the process was signalled.
+# <case>.exit. Before .stderr, the first line of <case>.stderr-head is written to stderr without
+# its newline and the fake sleeps 0.2 s, so the bridge reads it apart from what follows (a
+# character split across two pipe reads). Instead of exiting, <case>.signal makes it kill
+# itself with that signal (so claude-exec sees a close code of null) and <case>.sleep makes it
+# become /bin/sleep for that many seconds (so it is still running when the bridge signals it);
+# with <case>.pid present it first writes its pid to $HOME/fake-claude/pid (outside the
+# compared logs), so a case can check that the process was signalled.
 #
 # Shell builtins only (and /bin/sleep by its path): a fake must not depend on what else PATH
 # holds.
@@ -30,6 +32,11 @@ if [ -f "$script/case" ]; then
   for arg in "$@"; do printf '%s\n' "$arg" >> "$HOME/fake-log/claude-argv.txt"; done
   if [ -f "$script/$case.jsonl" ]; then
     while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$script/$case.jsonl"
+  fi
+  if [ -f "$script/$case.stderr-head" ]; then
+    IFS= read -r head < "$script/$case.stderr-head"
+    printf '%s' "$head" >&2
+    /bin/sleep 0.2
   fi
   if [ -f "$script/$case.stderr" ]; then
     while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line" >&2; done < "$script/$case.stderr"

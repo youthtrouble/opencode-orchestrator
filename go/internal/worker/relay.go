@@ -15,10 +15,9 @@ var (
 	progressLine = regexp.MustCompile(`tool: (\w+)|ran: `)
 )
 
-// relay decodes the bridge's stderr chunk by chunk. A character split across chunks is carried
-// into the next chunk and relayed whole (Node's StringDecoder rule), where the JS decodes each
-// chunk on its own and prints U+FFFD for each half. Chunk boundaries are up to the pipe in both
-// runtimes, so orch takes the deterministic reading; malformed bytes become U+FFFD as in Node.
+// relay decodes the bridge's stderr as a stream, as the JS's setEncoding("utf8") does with
+// Node's StringDecoder: a character split across chunks is carried into the next chunk and
+// relayed whole, and malformed bytes become U+FFFD.
 type relay struct {
 	tail []byte // the start of a character the last chunk ended in
 }
@@ -31,12 +30,26 @@ func (d *relay) decode(chunk []byte) string {
 	return jsstr.DecodeUTF8(data[:complete])
 }
 
-// flush returns what the stream ended in: an incomplete character, as U+FFFD (the JS printed it
-// as part of its last chunk), or "".
+// flush returns what the stream ended in: an incomplete character, as U+FFFD (Node's decoder
+// emits it as one last chunk before the end of the stream), or "".
 func (d *relay) flush() string {
 	text := jsstr.DecodeUTF8(d.tail)
 	d.tail = nil
 	return text
+}
+
+// relayDecoded is the JS stderr listener, which Node calls only for a chunk that decodes to some
+// text: a chunk holding just the start of a character is neither relayed nor counted as progress.
+func (r *run) relayDecoded(text string) {
+	if text != "" {
+		r.relayChunk(text)
+	}
+}
+
+// relayEnd relays the U+FFFD of a stream that ended inside a character, as the JS listener
+// receives it before the bridge's close event.
+func (r *run) relayEnd() {
+	r.relayDecoded(r.relay.flush())
 }
 
 // relayChunk is the JS stderr listener for one decoded chunk: write it to the worker's stdout,

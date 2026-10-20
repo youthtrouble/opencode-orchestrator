@@ -281,6 +281,11 @@ Groups:
     spawn ENOENT and EACCES, a missing `--cwd`, a bare `--cwd` or `--resume`, a NUL byte in a
     stdin prompt), `CLAUDECODE` reaching opencode, and PE-8 and PE-1 (`prompt_head`) as asserted
     differences.
+  - `split-utf8`: each of the three bridges with a CLI whose stderr splits a character across
+    two pipe reads (`split-character`) or ends inside one (`ends-inside-character`). The fakes
+    write the first line of `<case>.stderr-head` to stderr without its newline, sleep 0.2 s, then
+    write `<case>.stderr`; before the byte comparison the JS output, run record and incident must
+    hold the whole character or a single U+FFFD.
 
   Every bridge case seeds a fresh green usage cache unless it needs another (both vendors red,
   unknown, Fable red, or Anthropic red with OpenAI green); no codex or opencode case scripts the
@@ -358,9 +363,9 @@ Groups:
   wrapper's argv log (`<node> <ORCH_JS>/bin/worker.mjs` and `<orch> worker` become `<runner>`).
   The fakes `which`, `caffeinate` and `systemd-inhibit` (shell builtins only) keep every case off
   the real keep-awake tools: `which NAME` exits 0 only when a case created `$HOME/fake-which/NAME`.
-  The JS decodes each relayed chunk on its own, `orch` carries a character split across reads
-  into the next one; read sizes are up to the pipe in both runtimes, so each case relays at most
-  one `tool:`/`ran:` line and the unit tests pin the per-chunk rules.
+  Both runtimes decode the relayed stderr as a UTF-8 stream; read sizes are up to the pipe in
+  both, so each case relays at most one `tool:`/`ran:` line and the unit tests pin the per-chunk
+  rules.
 - `flip`: every `orch flip` command against `bin/flip.mjs`, always in the sandbox project. Usage
   errors (no or an unknown command, a bare `--cwd` with and without a command, C1) and a
   relative `--cwd`; `status` over no `.orchestrator/`, a run

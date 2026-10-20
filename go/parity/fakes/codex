@@ -10,8 +10,8 @@
 # appended as one line to $HOME/fake-log/codex-argv.txt, the physical working directory is
 # written to codex-cwd.txt and CLAUDECODE (or <unset>) to codex-env.txt. Unless
 # <case>.nostdin exists, stdin is then read to its end into codex-stdin.txt, with a
-# "<no newline at end>" line after an unterminated last line. Then <case>.jsonl, .stderr,
-# .signal, .sleep and .exit act as in the claude fake.
+# "<no newline at end>" line after an unterminated last line. Then <case>.jsonl,
+# .stderr-head, .stderr, .signal, .sleep and .exit act as in the claude fake.
 #
 # Scripted `codex queue` (the supervisor's codex-queue wake channel): when
 # $HOME/fake-codex-queue/exit exists, each argv element is appended as one line to
@@ -62,6 +62,11 @@ if [ "$1" = exec ] && [ -f "$script/case" ]; then
   fi
   if [ -f "$script/$case.jsonl" ]; then
     while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$script/$case.jsonl"
+  fi
+  if [ -f "$script/$case.stderr-head" ]; then
+    IFS= read -r head < "$script/$case.stderr-head"
+    printf '%s' "$head" >&2
+    /bin/sleep 0.2
   fi
   if [ -f "$script/$case.stderr" ]; then
     while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line" >&2; done < "$script/$case.stderr"

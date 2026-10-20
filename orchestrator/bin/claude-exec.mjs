@@ -51,7 +51,7 @@ args.push("--", prompt);
 const started = Date.now();
 log(`start model=${opts.resume ? "(resumed)" : model}${opts.effort ? " effort=" + opts.effort : ""} mode=${opts["permission-mode"] || "acceptEdits"} cwd=${cwd}`);
 const child = spawn("claude", args, { cwd, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CLAUDECODE: undefined } });
-let stderrBuf = ""; child.stderr.on("data", (c) => { stderrBuf += c; });
+let stderrBuf = ""; child.stderr.setEncoding("utf8"); child.stderr.on("data", (c) => { stderrBuf += c; });
 const timer = setTimeout(() => { log("timeout; killing"); child.kill("SIGTERM"); }, timeoutMs);
 
 const result = { ok: false, harness: "claude", session_id: opts.resume || null, model, effort: opts.effort || null, cwd, started_at: new Date(started).toISOString(), final_message: "", usage: null, model_usage: null, cost_usd: null, num_turns: null, permission_denials: [], tools_used: {}, errors: [], structured_output: null };

@@ -50,6 +50,7 @@ log(`start model=${opts.resume ? "(resumed)" : model} effort=${effort} sandbox=$
 const child = spawn("codex", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
 child.stdin.end(prompt);
 let stderrBuf = "";
+child.stderr.setEncoding("utf8");
 child.stderr.on("data", (c) => { stderrBuf += c; });
 const timer = setTimeout(() => { log("timeout; killing"); child.kill("SIGTERM"); }, timeoutMs);
 

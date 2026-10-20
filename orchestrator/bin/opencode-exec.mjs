@@ -25,6 +25,7 @@ const child = spawn("opencode", args, { cwd, stdio: ["ignore", "pipe", "pipe"] }
 const timer = setTimeout(() => child.kill("SIGTERM"), Number(opts["timeout-min"] || 120) * 60000);
 const result = { ok: false, harness: "opencode", session_id: opts.resume || null, agent: opts.agent || "conductor", cwd, started_at: new Date(started).toISOString(), final_message: "", errors: [] };
 let text = ""; let stderr = "";
+child.stderr.setEncoding("utf8");
 child.stderr.on("data", (c) => (stderr += c));
 readline.createInterface({ input: child.stdout }).on("line", (line) => {
   let ev; try { ev = JSON.parse(line); } catch { return; }

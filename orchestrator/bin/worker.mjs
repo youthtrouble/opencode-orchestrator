@@ -122,8 +122,9 @@ try {
   child = spawn(process.execPath, bridgeArgs, { cwd: root, stdio: ["pipe", "pipe", "pipe"], detached: true });
   child.stdin.end(prompt);
   publish(state, { status: "running", worker_pid: child.pid });
-  child.stderr.on("data", (chunk) => {
-    const text = String(chunk); process.stdout.write(text);
+  child.stderr.setEncoding("utf8"); child.stdout.setEncoding("utf8");
+  child.stderr.on("data", (text) => {
+    process.stdout.write(text);
     const m = text.match(/(thread|session) ([0-9a-f-]{36})/); if (m) publish(state, { session_id: m[2] });
     const t = text.match(/tool: (\w+)|ran: /); publish(state, { last_progress_at: new Date().toISOString(), ...(t && t[1] ? { last_tool: t[1] } : {}) });
   });

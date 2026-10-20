@@ -107,9 +107,9 @@ func (r *run) runBridge(prompt string, signals <-chan os.Signal) (any, error) {
 	return r.settle(child.Wait())
 }
 
-// settle is the JS from the bridge's close event to process.exit: flush the relay and take the
-// branch the result calls for. It runs under the lock and marks the run closed, so neither a
-// late pipe write nor a signal changes the state or the output after it.
+// settle is the JS from the bridge's close event to process.exit: relay what the stderr stream
+// ended in and take the branch the result calls for. It runs under the lock and marks the run
+// closed, so neither a late pipe write nor a signal changes the state or the output after it.
 //
 // In Node that whole stretch is synchronous: the close listener resolves the awaited promise,
 // the continuation runs as a microtask before control returns to libuv, and it ends in
@@ -122,7 +122,7 @@ func (r *run) settle(code *int, waitErr error) (any, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed = true
-	r.writeStdout(r.relay.flush())
+	r.relayEnd()
 	if waitErr != nil {
 		return nil, waitErr
 	}
@@ -164,7 +164,8 @@ func (r *run) writeStdout(text string) {
 	}
 }
 
-// bridgeStdout is the bridge's stdout listener: `output += chunk`.
+// bridgeStdout is the bridge's stdout listener: `output += chunk`. The JS decodes the stream
+// (setEncoding("utf8")), so the bytes are kept here and decoded whole when the run settles.
 type bridgeStdout struct{ r *run }
 
 func (w bridgeStdout) Write(p []byte) (int, error) {
@@ -176,14 +177,14 @@ func (w bridgeStdout) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// bridgeStderr is the bridge's stderr listener: each chunk is relayed (see relay.chunk).
+// bridgeStderr is the bridge's stderr listener: each chunk is decoded and relayed (see relay).
 type bridgeStderr struct{ r *run }
 
 func (w bridgeStderr) Write(p []byte) (int, error) {
 	w.r.mu.Lock()
 	defer w.r.mu.Unlock()
 	if !w.r.closed {
-		w.r.relayChunk(w.r.relay.decode(p))
+		w.r.relayDecoded(w.r.relay.decode(p))
 	}
 	return len(p), nil
 }

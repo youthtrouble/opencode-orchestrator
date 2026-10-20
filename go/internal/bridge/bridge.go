@@ -249,8 +249,8 @@ func (b *lockedBuffer) Bytes() []byte {
 }
 
 // stderrTail is `stderr.trim().split("\n").slice(-3).join(" | ")`: the last three lines of
-// the child's stderr, trimmed of JS white space. The JS decodes each chunk on its own, so a
-// character split across chunks becomes U+FFFD there; the whole buffer is decoded here.
+// the child's stderr, trimmed of JS white space. The JS decodes stderr as a stream
+// (setEncoding("utf8")), so decoding the whole buffer here gives the same text.
 func stderrTail(stderr []byte) string {
 	lines := strings.Split(strings.Trim(jsstr.DecodeUTF8(stderr), jsstr.WhiteSpace), "\n")
 	return strings.Join(lines[max(len(lines)-3, 0):], " | ")

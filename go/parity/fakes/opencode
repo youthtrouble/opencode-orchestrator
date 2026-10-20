@@ -8,7 +8,7 @@
 # Scripted `opencode run`: when $HOME/fake-opencode-run/case names a case, each argv element
 # is appended as one line to $HOME/fake-log/opencode-argv.txt, the physical working directory
 # is written to opencode-cwd.txt and CLAUDECODE (or <unset>) to opencode-env.txt. Then
-# <case>.jsonl, .stderr, .signal, .sleep and .exit act as in the claude fake.
+# <case>.jsonl, .stderr-head, .stderr, .signal, .sleep and .exit act as in the claude fake.
 #
 # Scripted `opencode --prompt` (the TUI kickoff launches): when $HOME/fake-opencode-tui/exit
 # exists, each argv element is appended as one line to $HOME/fake-log/opencode-tui-argv.txt;
@@ -50,6 +50,11 @@ if [ "$1" = run ] && [ -f "$script/case" ]; then
   printf 'CLAUDECODE=%s\n' "${CLAUDECODE-<unset>}" > "$log/opencode-env.txt"
   if [ -f "$script/$case.jsonl" ]; then
     while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done < "$script/$case.jsonl"
+  fi
+  if [ -f "$script/$case.stderr-head" ]; then
+    IFS= read -r head < "$script/$case.stderr-head"
+    printf '%s' "$head" >&2
+    /bin/sleep 0.2
   fi
   if [ -f "$script/$case.stderr" ]; then
     while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line" >&2; done < "$script/$case.stderr"

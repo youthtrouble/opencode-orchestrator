@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- bridges and worker: child output is decoded as a UTF-8 stream in both runtimes, so a character
+  split between two reads is no longer turned into U+FFFD by the JS (Sol S1/R7, S2/R15). The
+  worker relays and counts as progress only stderr chunks that decode to text, as Node does.
+
 - worker: a signal that arrives while `worker start` is still starting its bridge is passed to
   the bridge once it runs (Go; Sol S2/R7). Both runtimes read the brief before claiming the lane, so
   an unreadable brief no longer leaves a permanent lock (Sol S2/R11).

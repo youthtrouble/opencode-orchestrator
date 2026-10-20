@@ -23,6 +23,7 @@ func (h *harness) testBridges(t *testing.T) {
 	t.Run("claude", h.testClaudeExec)
 	t.Run("codex", h.testCodexExec)
 	t.Run("opencode", h.testOpencodeExec)
+	t.Run("split-utf8", h.testBridgesSplitUTF8)
 }
 
 // bridge is what the harness needs to know of one bridge. Its name is the CLI it runs and
@@ -66,9 +67,9 @@ func (b bridge) progress() string { return "[" + b.name + "] " }
 
 // bridgeCase is one bridge run. fixture names a capture in the bridge's fixtures that the fake
 // replays with its recorded exit code; script adds or overrides fake files by extension
-// (jsonl, stderr, exit, signal, sleep, and for codex nostdin). Unless usage names another
-// cache fixture ("" is green, "none" seeds no cache), the usage cache is fresh, so the budget
-// gate does not collect; only cases with codex set script the codex app-server fake.
+// (jsonl, stderr, stderr-head, exit, signal, sleep, and for codex nostdin). Unless usage names
+// another cache fixture ("" is green, "none" seeds no cache), the usage cache is fresh, so the
+// budget gate does not collect; only cases with codex set script the codex app-server fake.
 type bridgeCase struct {
 	name      string
 	args      []string
