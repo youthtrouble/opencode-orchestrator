@@ -62,7 +62,7 @@ Every script is dependency-free Node and has a Go twin, `orch <script>` (see
 
 | Script | Usage | What it does |
 |---|---|---|
-| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate without queueing a relaunch, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. Both vendors red: records a pause and exits 75. |
+| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate without queueing a relaunch, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. `--dry-run` prints the door and prompt and changes nothing (no preflight, no launch). Both vendors red: records a pause and exits 75. A missing brief names the directory searched. |
 | `watch.mjs` | `[--cwd DIR] [--follow] [--interval 20]` | One-screen dashboard: budgets, routing, supervisor, flip state, lanes, open questions with the reply command, human gate, last messages, incidents of the last 24 h, next action from `STATE.md`. |
 | `usage.mjs` | `[--refresh] [--json] [--brief]` | Live Claude + Codex usage -> posture -> role routing. |
 | `mailbox.mjs` | `post \| list \| ack \| reply \| inbox` | Durable project mailbox (see [below](#mailbox-and-manifests)). |

@@ -182,14 +182,19 @@ func (h *harness) compareKickoffInteractive(t *testing.T, door string, tui seed,
 	compareOutcomes(t, js, orch)
 }
 
-// testKickoffSupervisorStarted runs a dry-run kickoff with no supervisor lock, so each
-// runtime's `supervisor start` launches a serve in its own sandbox; each serve is stopped
-// by the pid its kickoff printed (see runKickoffSupervisorStarted).
+// testKickoffSupervisorStarted runs a kickoff with no supervisor lock, so each runtime's
+// `supervisor start` launches a serve in its own sandbox; each serve is stopped by the pid its
+// kickoff printed (see runKickoffSupervisorStarted). A dry run starts nothing, so the kickoff
+// names an unknown door: it runs the whole preflight, then dies of the door before any launch.
 func (h *harness) testKickoffSupervisorStarted(t *testing.T) {
-	args := append(append([]string{}, kickoffLaunchArgs...), "--dry-run")
+	args := append(append([]string{}, kickoffLaunchArgs...), "--door", "gemini")
 	s := kickoffRoutedGreen(t)
 	js := h.runKickoffSupervisorStarted(t, s, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, args...))
 	orch := h.runKickoffSupervisorStarted(t, s, append([]string{h.orchBin, "kickoff"}, args...))
+	if err := crashError(crashC2, "", js, orch); err != nil {
+		t.Error(err)
+	}
+	js.stderr, orch.stderr = "", ""
 	compareOutcomes(t, js, orch)
 }
 

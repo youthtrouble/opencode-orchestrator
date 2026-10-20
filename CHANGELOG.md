@@ -5,6 +5,12 @@
 - mailbox/watch/flip/worker/supervisor: run outside a project (no `.orchestrator/`), the read and
   stop commands say which directory they looked in and how to fix it (`cd` or `--root`/`--cwd`),
   exit 2 and create nothing; `mailbox reply|ack` with an unknown id name the project searched.
+- `/away` (opencode command and Claude Code skill) hands an interactive session to one headless,
+  unattended conductor and ends the interactive turn; saying "I'm away" does the same after one
+  confirmation. `/away --dry-run` shows the door and prompt without changing anything.
+- kickoff: `--dry-run` no longer sets the policy, clears gates, starts the supervisor or edits
+  `.git/info/exclude` (it prints `supervisor: not started (dry-run)`); a missing brief names the
+  directory searched; the usage line lists `--unattended`.
 - flip/mailbox: clearing a human gate (`orch flip gate --clear`, or `orch mailbox reply` to the
   gate's question) now queues a relaunch; the supervisor restarts the gated door's conductor within
   a minute. Clearing when no gate is set changes nothing; `kickoff` clears with the new

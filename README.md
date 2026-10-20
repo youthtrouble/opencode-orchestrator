@@ -85,8 +85,14 @@ orch kickoff --brief .orchestrator/briefs/<idea>.md --headless --unattended
 `--unattended` applies the away-mode policy (push verified slices, continue past product questions).
 Releases, code deletion, spending and deploys still ask; force-pushes never happen. Change a
 project's policy with `orch policy set <key>=auto|ask`, for example `release=auto` (see the
-[policy reference](orchestrator/README.md#autonomy-policy-and-human-gates)). Telling an interactive
-conductor to "go unattended" is not a defined workflow; use kickoff.
+[policy reference](orchestrator/README.md#autonomy-policy-and-human-gates)).
+
+**...leave mid-session?** Type `/away` in the conductor's chat (opencode or Claude Code), or just
+say "I'm away" or "keep going without me" (it then asks you to confirm once). The conductor writes `STATE.md` and the remaining
+briefs, runs the kickoff above (door picked by budget), confirms the background `conductor` lane is
+running, tells you how to check in, and then stops, so only one conductor drives. `/away
+<brief>` names the brief to continue with; `/away --dry-run` only shows the door and prompt
+kickoff would use, changes nothing, and keeps the session going.
 
 **...check in, answer, or unblock it?**
 
@@ -101,7 +107,7 @@ Replying to the question a gate is waiting on clears it too. Details are in
 
 | Inside opencode / Claude Code (chat) | In a terminal (`orch`) |
 |---|---|
-| Describe what you want; answer questions in the chat | `orch kickoff --brief <file> --headless --unattended` to run in the background |
+| Describe what you want; answer questions in the chat; `/away` when you leave | `orch kickoff --brief <file> --headless --unattended` to run in the background |
 | `/usage`, `/plan <idea>`, `/ship <idea>`, `/brief` (opencode) | `orch watch --follow`, `orch usage --refresh` to check in |
 | `/continue` (opencode) to resume from `STATE.md` | `orch mailbox inbox`, `orch mailbox reply <id> "..."` to answer |
 | The conductor runs the same tools for you | `orch flip run --to <door>`, `orch worker stop --lane conductor` to steer |
@@ -195,7 +201,7 @@ updates and recovery are in [orchestrator/README.md](orchestrator/README.md#inst
 **Talk to it.** In your project directory run `opencode` (the default agent is the conductor) or
 `claude --agent conductor`, and describe what you want. Useful commands inside opencode: `/usage`,
 `/plan <idea>`, `/ship <idea>`, `/continue`. In this mode the conductor asks you questions in the
-chat.
+chat. When you leave, type `/away` (either door) and it carries on in the background.
 
 **Or hand it a brief and let it run.** Write a short brief (outcome, acceptance criteria,
 constraints, rough size) to `.orchestrator/briefs/<name>.md`, or ask the conductor for one with
@@ -209,8 +215,9 @@ orch kickoff --brief .orchestrator/briefs/<name>.md --headless --unattended  # b
 Kickoff refreshes budgets, starts the supervisor, adds `.orchestrator/` to `.git/info/exclude`,
 picks the door whose vendor has headroom (home first) and launches the conductor. Extra `--brief`
 files run as side work when budget allows. `--door claude|opencode` forces a door; `--dry-run`
-shows the choice without launching (it still runs the preflight). If both vendors are red it
-records a pause, exits 75, and the supervisor starts the run at the first reset.
+shows the door and prompt and changes nothing (no policy, gate, supervisor or exclude change). If
+both vendors are red it records a pause, exits 75, and the supervisor starts the run at the first
+reset.
 
 ### 3. While it runs
 
@@ -314,6 +321,11 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 - `/audit-orchestrator` in opencode re-verifies model ids, limits and CLI flags against official
   sources, updates `models.json` and reruns the tests. `/retro` reviews recent runs.
 - Update: `git pull` in the checkout, run the tests, `opencode reload`, `orch doctor`.
+- `not an orchestrator project: <dir> has no .orchestrator/ directory`: you ran a command that
+  reads or stops a project's state (`orch watch`, `orch mailbox inbox|reply`, `orch flip status`,
+  `orch supervisor stop`, ...) outside the project. `cd` into it, or pass `--cwd <project dir>`
+  (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
+  usually means the id belongs to another project.
 
 ## Documentation map
 
@@ -321,11 +333,6 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 |---|---|
 | [orchestrator/README.md](orchestrator/README.md) | Scripts and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
 | [go/README.md](go/README.md) | The `orch` binary: commands, building, install, plugin runtime, parity harness, release checklist |
-- `not an orchestrator project: <dir> has no .orchestrator/ directory`: you ran a command that
-  reads or stops a project's state (`orch watch`, `orch mailbox inbox|reply`, `orch flip status`,
-  `orch supervisor stop`, ...) outside the project. `cd` into it, or pass `--cwd <project dir>`
-  (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
-  usually means the id belongs to another project.
 | [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |

@@ -53,7 +53,7 @@ func WatchFollow() string {
 
 // KickoffUsage is the usage line `kickoff.mjs` prints for --help or without a brief.
 func KickoffUsage() string {
-	return "usage: " + ScriptFile("kickoff") + " --brief FILE [--brief FILE2] [--door auto|claude|opencode] [--headless] [--dry-run]"
+	return "usage: " + ScriptFile("kickoff") + " --brief FILE [--brief FILE2] [--door auto|claude|opencode] [--headless] [--unattended] [--dry-run]"
 }
 
 // KickoffPrompt is the conductor's opening prompt kickoff builds (bin/kickoff.mjs l.42): ship

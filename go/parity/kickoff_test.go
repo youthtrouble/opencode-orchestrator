@@ -50,8 +50,12 @@ func (h *harness) testKickoff(t *testing.T) {
 	brief := seedProjectFile("a.md", "# a\n")
 	briefs := seeds(brief, seedProjectFile("b.md", "# b\n"), seedProjectFile("c.md", "# c\n"))
 	dryRun := []string{"--brief", "a.md", "--dry-run"}
+	// preflightOnly runs the whole preflight, then dies of the unknown door before any launch.
+	preflightOnly := []string{"--brief", "a.md", "--door", "gemini"}
+	gate := seedFlip(`{"from":"opencode","to":"claude","at":"2026-01-01T00:00:00.000Z","awaiting_human":{"reason":"push?"}}`)
 	usageLine := cmdref.KickoffUsage()
 	supervisorLine := `supervisor: {"started":false,"reason":"already running","pid":` + strconv.Itoa(os.Getpid()) + `}`
+	const dryRunSupervisorLine = "supervisor: not started (dry-run)"
 	door := func(door, vendor, home, mode string) string {
 		return "door: " + door + " (" + vendor + " green; home " + home + ") " + mode
 	}
@@ -63,6 +67,7 @@ func (h *harness) testKickoff(t *testing.T) {
 		{name: "usage/help-with-brief", args: []string{"--help", "--brief", "a.md"}, seed: brief, stdout: usageLine},
 		{name: "usage/empty-brief", args: []string{"--brief", "", "--dry-run"}, stdout: usageLine},
 		{name: "brief/missing", args: []string{"--brief", "a.md", "--brief", "nope.md"}, seed: brief},
+		{name: "brief/brief-not-found-names-root", args: []string{"--brief", "nope.md", "--dry-run"}},
 		{name: "brief/brief-named-brief", args: []string{"--brief", "--brief", "a.md"}, seed: brief},
 		{name: "brief/directory", args: []string{"--brief", ".git", "--dry-run"}, seed: c.green, stdout: "prompt: " + cmdref.KickoffPrompt(".git", nil)},
 		{name: "cwd-bare", args: append(dryRun, "--cwd"), seed: brief, crash: crashC1, errorLine: cwdBoolean},
@@ -72,14 +77,17 @@ func (h *harness) testKickoff(t *testing.T) {
 		{name: "dry-run/door-auto", args: append(dryRun, "--door", "auto"), seed: seeds(brief, c.anthropicRed), stdout: opencodeGreen},
 		{name: "dry-run/headless", args: append(dryRun, "--headless"), seed: seeds(brief, c.green), stdout: door("opencode", "openai", "opencode", "headless")},
 		{name: "dry-run/side-briefs", args: append(dryRun, "--brief", "b.md", "--brief", "c.md"), seed: seeds(briefs, c.green), stdout: "prompt: " + cmdref.KickoffPrompt("a.md", []string{"b.md", "c.md"})},
-		{name: "dry-run/unattended", args: append(dryRun, "--unattended"), seed: seeds(brief, c.green), stdout: supervisorLine},
-		{name: "dry-run/awaiting-human-cleared", args: dryRun, seed: seeds(brief, c.green, seedFlip(`{"from":"opencode","to":"claude","at":"2026-01-01T00:00:00.000Z","awaiting_human":{"reason":"push?"}}`)), stdout: supervisorLine},
-		{name: "dry-run/exclude-appended", args: dryRun, seed: seeds(brief, c.green, seedExclude("*.log")), stdout: opencodeGreen},
-		{name: "dry-run/exclude-present", args: dryRun, seed: seeds(brief, c.green, seedExclude("*.log\n.orchestrator\n")), stdout: opencodeGreen},
-		{name: "dry-run/no-git", args: dryRun, seed: seeds(brief, c.green, withGit(nil)), stdout: opencodeGreen},
-		{name: "dry-run/git-file", args: dryRun, seed: seeds(brief, c.green, withGit(&gitFile)), crash: crashC1, errorLine: "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", stdout: supervisorLine},
-		{name: "door-gemini", args: append(dryRun, "--door", "gemini"), seed: seeds(brief, c.green), crash: crashC2, stdout: supervisorLine},
-		{name: "door-bare", args: append(dryRun, "--door"), seed: seeds(brief, c.green), crash: crashC2, stdout: supervisorLine},
+		{name: "dry-run/unattended", args: append(dryRun, "--unattended"), seed: seeds(brief, c.green), stdout: dryRunSupervisorLine},
+		{name: "dry-run/awaiting-human-kept", args: dryRun, seed: seeds(brief, c.green, gate), stdout: dryRunSupervisorLine},
+		{name: "dry-run/git-file", args: dryRun, seed: seeds(brief, c.green, withGit(&gitFile)), stdout: opencodeGreen},
+		{name: "preflight/unattended", args: append(preflightOnly, "--unattended"), seed: seeds(brief, c.green), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/awaiting-human-cleared", args: preflightOnly, seed: seeds(brief, c.green, gate), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/exclude-appended", args: preflightOnly, seed: seeds(brief, c.green, seedExclude("*.log")), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/exclude-present", args: preflightOnly, seed: seeds(brief, c.green, seedExclude("*.log\n.orchestrator\n")), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/no-git", args: preflightOnly, seed: seeds(brief, c.green, withGit(nil)), crash: crashC2, stdout: supervisorLine},
+		{name: "preflight/git-file", args: preflightOnly, seed: seeds(brief, c.green, withGit(&gitFile)), crash: crashC1, errorLine: "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", stdout: supervisorLine},
+		{name: "door-gemini", args: append(dryRun, "--door", "gemini"), seed: seeds(brief, c.green), crash: crashC2, stdout: dryRunSupervisorLine},
+		{name: "door-bare", args: append(dryRun, "--door"), seed: seeds(brief, c.green), crash: crashC2, stdout: dryRunSupervisorLine},
 		{name: "both-red/dry-run", args: dryRun, seed: seeds(brief, c.bothRed), stdout: "dry-run: both vendors red; a real run would pause and let the supervisor relaunch at the first reset."},
 		{name: "both-red/pause", args: []string{"--brief", "a.md"}, seed: seeds(brief, c.bothRed), stdout: "Both vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do."},
 	}
@@ -89,6 +97,10 @@ func (h *harness) testKickoff(t *testing.T) {
 			h.compareKickoff(t, h.kickoffInvocation(kc), kc.stdout)
 		})
 	}
+	t.Run("dry-run-makes-no-changes", func(t *testing.T) {
+		t.Parallel()
+		h.testKickoffDryRunMakesNoChanges(t, seeds(brief, c.green, gate, seedExclude("*.log\n")))
+	})
 	t.Run("registry-home-claude", func(t *testing.T) {
 		t.Parallel()
 		root := h.jsTreeWithRegistry(t, h.registryWithHome(t, "claude"))
@@ -177,4 +189,49 @@ func (h *harness) testKickoffRegistryMissing(t *testing.T, s seed) {
 	}
 	js.stderr, orch.stderr = "", ""
 	compareOutcomes(t, js, orch)
+}
+
+// testKickoffDryRunMakesNoChanges asserts that a headless, unattended dry run with a usable door
+// leaves the project as seeded: no policy, the human gate kept, no supervisor state, no
+// conductor brief and .git/info/exclude untouched. It then compares the pair.
+func (h *harness) testKickoffDryRunMakesNoChanges(t *testing.T, s seed) {
+	inv := h.kickoffInvocation(kickoffCase{args: []string{"--brief", "a.md", "--headless", "--unattended", "--dry-run"}, seed: s})
+	var changed, unseeded []string
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		for _, key := range []string{"project/flip.json", "extra/.git/info/exclude"} {
+			if before[key] == "" {
+				unseeded = append(unseeded, key)
+			}
+		}
+		for key, content := range o.files {
+			if isProjectFile(key) && before[key] != content {
+				changed = append(changed, key)
+			}
+		}
+		for key := range before {
+			if _, kept := o.files[key]; !kept {
+				changed = append(changed, key)
+			}
+		}
+		return o
+	}
+	js, orch := h.runPair(t, inv)
+	if len(unseeded) > 0 {
+		t.Errorf("%q not seeded, so their changes cannot be seen", unseeded)
+	}
+	if len(changed) > 0 {
+		t.Errorf("a dry run changed %q, want nothing", changed)
+	}
+	for side, o := range map[string]outcome{"js": js, "orch": orch} {
+		if o.exitCode != 0 || !strings.Contains(o.stdout, "\nsupervisor: not started (dry-run)\n") {
+			t.Errorf("%s: exit %d, stdout %q; want 0 and the dry-run supervisor line", side, o.exitCode, o.stdout)
+		}
+	}
+	compareOutcomes(t, js, orch)
+}
+
+// isProjectFile reports whether an outcome's file key is in the project: its .orchestrator/
+// directory or an extra file such as .git/info/exclude.
+func isProjectFile(key string) bool {
+	return strings.HasPrefix(key, "project/") || strings.HasPrefix(key, "extra/")
 }

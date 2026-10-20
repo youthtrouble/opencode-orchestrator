@@ -10,7 +10,7 @@ Code subagents; OpenAI roles (cross-vendor review, Sol/Astra work) go through th
 Install the main orchestrator first (`./install.sh` in the checkout root), then:
 
 ```sh
-./install-claude.sh              # symlink claude/agents/*.md and claude/skills/orchestrator into ~/.claude
+./install-claude.sh              # symlink claude/agents/*.md and claude/skills/{orchestrator,away} into ~/.claude
 ./install-claude.sh --uninstall  # remove only the links that point into this checkout
 ```
 
@@ -33,12 +33,18 @@ is skipped with a message, never replaced. Safe to re-run.
 Normal review is cross-vendor: `codex-exec.mjs --sandbox read-only` with GPT-6.1 Sol, or
 `codex review --uncommitted`. Exploration uses Claude Code's built-in `Explore` agent.
 
-## Skill
+## Skills
 
 `skills/orchestrator/SKILL.md` teaches any Claude Code session (not only the conductor) the shell
 commands for budgets, delegation to Codex or a fresh Claude session, workers, the supervisor, the
 mailbox and manifests. It loads when you mention budgets, limits, delegation to Codex,
 cross-vendor review or the orchestrator.
+
+`skills/away/SKILL.md` is the `/away [--dry-run] [brief]` command: it hands the interactive
+conductor session to one headless, unattended conductor lane and ends the turn (`--dry-run` only
+shows the door and prompt). Only you can invoke it (`disable-model-invocation`); the procedure is
+the "Going away" rule in `agents/conductor.md`, word-identical to the one in `AGENTS.md`, and
+saying "I'm away" triggers the same rule.
 
 The opencode-side skills (`deep-planning`, `clean-code`, `cross-review`, `handoff-protocol`,
 `delegation`, `orchestrator-audit`) live in the root `skills/` directory and are installed by

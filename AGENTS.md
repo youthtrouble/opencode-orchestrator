@@ -65,6 +65,32 @@ independent slice; record a human gate (`flip.mjs gate`) only when nothing indep
 `product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
 post the question, continue.
 
+## Going away (`/away`)
+<!-- Word-identical in AGENTS.md and claude/agents/conductor.md (Claude Code does not load AGENTS.md): change both. -->
+`/away`, or the human saying "I'm away", "keep going without me" or "I'm leaving", hands this
+interactive session to exactly one headless conductor. A typed `/away` needs no confirmation; for
+a spoken trigger, first ask once "Hand off to a headless conductor and enable unattended push?"
+and continue only on a yes. Arguments: an optional brief path and `--dry-run`.
+1. Update `.orchestrator/STATE.md` (the exact next action) and write any remaining briefs under
+   `.orchestrator/briefs/`.
+2. Pick the brief to continue with: the argument, else STATE.md's next brief, else
+   `.orchestrator/briefs/conductor-continue.md` (the brief `orch flip run` writes; if it is absent,
+   write it as "Continue from .orchestrator/STATE.md.").
+3. `orch kickoff --brief <brief> --headless --unattended` (no `--door`: kickoff picks it by
+   budget; `--unattended` sets the unattended policy). Exit 75 means both vendors are red: tell
+   the human the supervisor relaunches the conductor at the first reset, and go to step 5. Any
+   other non-zero exit: report the error and stay in the session; do not end the turn.
+4. `orch worker status --lane conductor`: confirm the lane is running and was started by this
+   kickoff (its `started_at` is after step 3 ran; an older lane does not count), and quote its
+   status and pid. Otherwise report the failure and stay in the session.
+5. Post a `handoff` mailbox message: the brief, the door, and where STATE.md stands.
+6. Tell the human how to check in: `orch watch --follow`, `orch mailbox inbox`,
+   `orch mailbox reply <id> "..."`.
+7. End the turn and take no further action: the headless lane is now the only conductor.
+
+With `--dry-run`, only run `orch kickoff --brief <brief> --headless --unattended --dry-run`
+(it changes nothing), report the door and prompt it prints, and carry on with the session.
+
 ## Never idle on a review gate (pipelining)
 When a slice waits for a review the other vendor cannot give yet, do not wait. Start the next slice
 whose dependencies are met (check the plan's In scope / Mirrors lines), coded by the vendor that has

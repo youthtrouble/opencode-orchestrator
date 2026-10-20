@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Link the Claude Code side of the orchestrator (agents + skill) into ~/.claude.
+# Link the Claude Code side of the orchestrator (agents + skills) into ~/.claude.
 # Usage: ./install-claude.sh [--uninstall]
 # Symlinks only; refuses to replace a real file that is not ours. Safe to re-run.
 set -euo pipefail
@@ -19,9 +19,9 @@ link() { # link <source> <target>
 unlink_ours() { local dst=$1; if [[ -L $dst && $(readlink "$dst") == "$here"/* ]]; then rm "$dst" && echo "removed $dst"; fi; }
 if [[ ${1:-} == "--uninstall" ]]; then
   for f in "$here"/claude/agents/*.md; do unlink_ours "$claude_home/agents/$(basename "$f")"; done
-  unlink_ours "$claude_home/skills/orchestrator"
+  for skill in orchestrator away; do unlink_ours "$claude_home/skills/$skill"; done
   exit 0
 fi
 for f in "$here"/claude/agents/*.md; do link "$f" "$claude_home/agents/$(basename "$f")"; done
-link "$here/claude/skills/orchestrator" "$claude_home/skills/orchestrator"
+for skill in orchestrator away; do link "$here/claude/skills/$skill" "$claude_home/skills/$skill"; done
 echo "Claude Code side installed. Start the Anthropic-native conductor with:  claude --agent conductor"

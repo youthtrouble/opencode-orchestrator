@@ -1,7 +1,7 @@
 // Package kickoff starts a run as bin/kickoff.mjs does: check the briefs, refresh the usage,
 // pick the door by live budget, run the preflight (policy, gate, supervisor, git exclude) and
 // launch the conductor, headless through `orch worker start --detach` or interactive in this
-// terminal. The orchestrator commands it runs are self-execs of orch, as the JS spawns node
+// terminal. A dry run prints the door and prompt and changes nothing. The orchestrator commands it runs are self-execs of orch, as the JS spawns node
 // on its sibling scripts; every child is reached through Children so each branch can be
 // tested without processes.
 package kickoff
@@ -26,6 +26,10 @@ import (
 
 // exitBothRed is the exit code when neither vendor can run the conductor (EX_TEMPFAIL).
 const exitBothRed = 75
+
+// dryRunSupervisorLine stands in for the supervisor's answer in a dry run, which starts nothing,
+// so its output has the shape of a real run's.
+const dryRunSupervisorLine = "supervisor: not started (dry-run)"
 
 // conductorBrief is where a headless kickoff writes the conductor's prompt, relative to the root.
 var conductorBrief = filepath.Join(".orchestrator", "briefs", "conductor-kickoff.md")
@@ -100,7 +104,7 @@ func Run(args Args, d Deps) (int, error) {
 	}
 	for _, brief := range args.Briefs {
 		if !nodefs.Exists(resolveIn(d.Root, brief)) {
-			fmt.Fprintf(d.Err, "brief not found: %s\n", brief)
+			fmt.Fprintf(d.Err, "brief not found: %s (looked in %s; cd into the project or pass --cwd <project dir>)\n", brief, d.Root)
 			return 2, nil
 		}
 	}
@@ -114,7 +118,9 @@ func Run(args Args, d Deps) (int, error) {
 	if !chosen {
 		return bothRed(args.Opts, home, d), nil
 	}
-	if err := preflight(args.Opts, d); err != nil {
+	if args.Opts.Truthy("dry-run") {
+		fmt.Fprintln(d.Out, dryRunSupervisorLine)
+	} else if err := preflight(args.Opts, d); err != nil {
 		return 0, err
 	}
 	prompt := cmdref.KickoffPrompt(args.Briefs[0], args.Briefs[1:])
@@ -193,7 +199,7 @@ func bothRed(opts cliargs.Opts, home string, d Deps) int {
 	return exitBothRed
 }
 
-// preflight runs in the JS order, for a dry run too: --unattended applies the unattended
+// preflight runs in the JS order, never for a dry run: --unattended applies the unattended
 // policy, a human gate is cleared (a human is running this), the supervisor is started and
 // its answer printed, and .orchestrator/ is excluded from git. The policy and gate outputs
 // are discarded. The gate is cleared with --no-relaunch: kickoff starts the conductor itself,

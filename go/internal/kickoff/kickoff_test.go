@@ -132,7 +132,7 @@ func TestUsageWithoutBriefExits2AndWithHelpExits0(t *testing.T) {
 
 func TestMissingBriefExits2AndADirectoryPasses(t *testing.T) {
 	k := newRun(t, "green", "green")
-	if code, _ := k.run("--brief", ".git", "--brief", "nope.md"); code != 2 || k.err.String() != "brief not found: nope.md\n" {
+	if code, _ := k.run("--brief", ".git", "--brief", "nope.md"); code != 2 || k.err.String() != "brief not found: nope.md (looked in "+k.root+"; cd into the project or pass --cwd <project dir>)\n" {
 		t.Errorf("code %d stderr %q", code, k.err.String())
 	}
 }
@@ -146,14 +146,34 @@ func TestRoutingFailureIsARoutingError(t *testing.T) {
 	}
 }
 
-func TestDryRunRunsThePreflightAndPrintsThePrompt(t *testing.T) {
+func TestDryRunChangesNothingAndPrintsThePrompt(t *testing.T) {
 	k := newRun(t, "green", "green")
-	code, err := k.run("--brief", "a.md", "--brief", "b.md", "--dry-run", "--unattended")
-	want := "line 1\nline 2\nsupervisor: {\"started\":false}\ndoor: opencode (openai green; home opencode) interactive\nprompt: " + cmdref.KickoffPrompt("a.md", []string{"b.md"}) + "\n"
+	code, err := k.run("--brief", "a.md", "--brief", "b.md", "--headless", "--dry-run", "--unattended")
+	want := "line 1\nline 2\nsupervisor: not started (dry-run)\ndoor: opencode (openai green; home opencode) headless\nprompt: " + cmdref.KickoffPrompt("a.md", []string{"b.md"}) + "\n"
 	if err != nil || code != 0 || k.out.String() != want {
 		t.Fatalf("code %d err %v out\n%s\nwant\n%s", code, err, k.out.String(), want)
 	}
-	if want := k.preflightCalls([]string{"self", "policy", "unattended", "--cwd", k.root}); !reflect.DeepEqual(k.children.calls, want) {
+	if len(k.children.calls) != 0 {
+		t.Errorf("calls %q, want none", k.children.calls)
+	}
+	for _, path := range []string{filepath.Join(".git", "info"), ".orchestrator"} {
+		if _, err := os.Stat(filepath.Join(k.root, path)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s: stat err %v, want it never created", path, err)
+		}
+	}
+}
+
+func TestPreflightRunsBeforeTheLaunch(t *testing.T) {
+	k := newRun(t, "green", "green")
+	k.children.interactive.code = new(int)
+	if code, err := k.run("--brief", "a.md", "--unattended"); err != nil || code != 0 {
+		t.Fatalf("code %d err %v", code, err)
+	}
+	if !strings.Contains(k.out.String(), "\nsupervisor: {\"started\":false}\n") {
+		t.Errorf("out %q, want the supervisor's answer", k.out.String())
+	}
+	want := append(k.preflightCalls([]string{"self", "policy", "unattended", "--cwd", k.root}), []string{"interactive", "opencode", "--prompt", cmdref.KickoffPrompt("a.md", nil)})
+	if !reflect.DeepEqual(k.children.calls, want) {
 		t.Errorf("calls %q, want %q", k.children.calls, want)
 	}
 	if exclude, _ := os.ReadFile(filepath.Join(k.root, ".git", "info", "exclude")); string(exclude) != ".orchestrator/\n" {
@@ -190,7 +210,7 @@ func TestDoorChoice(t *testing.T) {
 func TestUnknownDoorCrashesAfterThePreflight(t *testing.T) {
 	for _, door := range [][]string{{"--door", "gemini"}, {"--door"}} {
 		k := newRun(t, "green", "green")
-		_, err := k.run(append([]string{"--brief", "a.md", "--dry-run"}, door...)...)
+		_, err := k.run(append([]string{"--brief", "a.md"}, door...)...)
 		var typeErr *jsjson.TypeError
 		if !errors.As(err, &typeErr) || err.Error() != "Cannot read properties of undefined (reading 'overall')" {
 			t.Errorf("%q: err = %v", door, err)
