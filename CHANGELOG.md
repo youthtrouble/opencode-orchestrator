@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- flip/mailbox: clearing a human gate (`orch flip gate --clear`, or `orch mailbox reply` to the
+  gate's question) now queues a relaunch; the supervisor restarts the gated door's conductor within
+  a minute. Clearing when no gate is set changes nothing; `kickoff` clears with the new
+  `--no-relaunch` so it never starts a second conductor.
 - mailbox/watch: the reply hint says `orch mailbox reply <id> "..."` when `orch` is on PATH
   (PE-26).
 - parity: the harness PATH holds only links to node and sqlite3, and destructive cleanup refuses

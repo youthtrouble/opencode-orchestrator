@@ -28,11 +28,12 @@ var kickoffSupervisorStarted = regexp.MustCompile(`(?m)^(supervisor: \{"started"
 // the pair is compared, so no case passes by both runtimes launching nothing.
 func (h *harness) testKickoffLaunches(t *testing.T) {
 	t.Run("headless/claude", func(t *testing.T) {
-		h.compareKickoffHeadless(t, claudeBridge, bridgeCase{fixture: "ok"}, "--door", "claude")
+		h.compareKickoffHeadless(t, claudeBridge, bridgeCase{fixture: "ok"}, nil, "--door", "claude")
 	})
 	t.Run("headless/opencode", func(t *testing.T) {
-		h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK})
+		h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, nil)
 	})
+	t.Run("clears-gate-without-relaunch", h.testKickoffClearsGateWithoutRelaunch)
 	claudeTUI := func(script map[string]string) seed {
 		return seeds(seedFile("fake-log/.keep", ""), h.seedFake(t, claudeBridge, bridgeCase{script: script}))
 	}
@@ -77,24 +78,38 @@ func kickoffRoutedGreen(t *testing.T) seed {
 	return seeds(kickoffBrief(), newFlipCaches(t).green, kickoffFeedsFail())
 }
 
+// testKickoffClearsGateWithoutRelaunch asserts that kickoff clears a human gate without
+// queueing the supervisor relaunch a plain `flip gate --clear` would: kickoff launches the
+// conductor itself, so a pending launch would start a second one.
+func (h *harness) testKickoffClearsGateWithoutRelaunch(t *testing.T) {
+	gate := seedFlip(`{"awaiting_human":{"at":"2026-01-01T00:00:00.000Z","door":"opencode","reason":"push","question":null}}`)
+	js, orch := h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, gate)
+	for side, o := range map[string]outcome{"js": js, "orch": orch} {
+		if flipJSON := o.files["project/flip.json"]; flipJSON != "{}\n" {
+			t.Errorf("%s: flip.json = %q, want the gate cleared and no pending launch", side, flipJSON)
+		}
+	}
+}
+
 // compareKickoffHeadless runs a headless kickoff on the bridge's door in each runtime's own
-// sandbox, settles the conductor lane's runner by the pid each printed, and compares the
-// kickoff's output with everything the runner wrote (lane state, log, mailbox, run record).
-// The routing refresh's feeds fail over the bridge's green cache (see withoutPostRunSession).
-func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase, door ...string) {
+// sandbox, with the project state seeded by state (nil for none), settles the conductor
+// lane's runner by the pid each printed, and compares the kickoff's output with everything
+// the runner wrote (lane state, log, mailbox, run record). It returns both outcomes. The
+// routing refresh's feeds fail over the bridge's green cache (see withoutPostRunSession).
+func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase, state seed, door ...string) (js, orch outcome) {
 	t.Helper()
 	inv := h.workerStartInvocation(t, workerStartCase{bridge: b, run: run, brief: text("")})
 	args := append(append(append([]string{}, kickoffLaunchArgs...), "--headless"), door...)
 	inv.js = append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, args...)
 	inv.orch = append([]string{h.orchBin, "kickoff"}, args...)
-	inv.seed = seeds(inv.seed, supervisorHeldByThisTest(), kickoffBrief(), kickoffFeedsFail())
+	inv.seed = seeds(inv.seed, supervisorHeldByThisTest(), kickoffBrief(), kickoffFeedsFail(), orNothing(state))
 	inv.extraFiles = []string{".git/info/exclude"}
 	worker, fresh := inv.normalize, normalizeFlip(time.Now())
 	inv.normalize = func(s string) string { return fresh(normalizeGeneratedAt(worker(s))) }
 	launched := workerDetachCase{launchLine: kickoffLauncherLine}
 	runners := strings.NewReplacer(h.runnerPrefixes(t)...)
-	js := h.runDetached(t, inv, nil, inv.js, launched, runners)
-	orch := h.runDetached(t, inv, nil, inv.orch, launched, runners)
+	js = h.runDetached(t, inv, nil, inv.js, launched, runners)
+	orch = h.runDetached(t, inv, nil, inv.orch, launched, runners)
 	js, orch = withoutPostRunSession(t, js, orch)
 	brief := cmdref.KickoffPrompt("a.md", nil) + "\n"
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
@@ -103,6 +118,7 @@ func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase,
 		}
 	}
 	compareOutcomes(t, js, orch)
+	return js, orch
 }
 
 // codexAppServerLog is the scripted codex app-server's log of the requests it was sent.

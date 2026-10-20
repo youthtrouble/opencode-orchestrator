@@ -30,9 +30,10 @@ if (!door) {
   console.log("Both vendors are red: paused. The supervisor will relaunch headless at the first reset. Nothing else to do.");
   process.exit(75);
 }
-// Preflight (a human is running this, so any human gate is cleared)
+// Preflight (a human is running this, so any human gate is cleared). --no-relaunch: kickoff starts the
+// conductor itself, so a queued relaunch would give the project a second one.
 if (opts.unattended) spawnSync(process.execPath, [path.join(HERE, "policy.mjs"), "unattended", "--cwd", root], { stdio: "ignore" });
-spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "gate", "--clear", "--cwd", root], { stdio: "ignore" });
+spawnSync(process.execPath, [path.join(HERE, "flip.mjs"), "gate", "--clear", "--no-relaunch", "--cwd", root], { stdio: "ignore" });
 const sup = spawnSync(process.execPath, [path.join(HERE, "supervisor.mjs"), "start", "--cwd", root], { encoding: "utf8" });
 console.log(`supervisor: ${(sup.stdout || sup.stderr).trim().slice(0, 120)}`);
 const info = path.join(root, ".git", "info");

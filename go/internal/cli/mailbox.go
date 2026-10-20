@@ -7,9 +7,11 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
 // Mailbox implements `orch mailbox post|list|ack|reply|inbox`, byte-identical to
@@ -29,7 +31,7 @@ func Mailbox(args []string, stdio Stdio) int {
 	case "list":
 		return mailboxList(box, parsed, stdio)
 	case "reply":
-		return mailboxReply(box, args[1:], stdio)
+		return mailboxReply(box, flipcmd.NewProject(root), args[1:], stdio)
 	case "inbox":
 		return mailboxInbox(box, stdio)
 	case "ack":
@@ -159,9 +161,10 @@ func refsText(m *jsjson.Object) (string, error) {
 }
 
 // mailboxReply posts the human's answer to a message as a threaded note to its sender and
-// acknowledges the message. The id is the first token not starting with "--", so an option's
-// value counts (`reply --root /x abc hi` takes /x as the id), as in the JS.
-func mailboxReply(box *mailbox.Mailbox, rest []string, stdio Stdio) int {
+// acknowledges the message; a reply to the human gate's question also clears the gate. The id
+// is the first token not starting with "--", so an option's value counts (`reply --root /x
+// abc hi` takes /x as the id), as in the JS.
+func mailboxReply(box *mailbox.Mailbox, project flipcmd.Project, rest []string, stdio Stdio) int {
 	var positional []string
 	for _, arg := range rest {
 		if !strings.HasPrefix(arg, "--") {
@@ -215,7 +218,57 @@ func mailboxReply(box *mailbox.Mailbox, rest []string, stdio Stdio) int {
 	}
 	replyID, _ := jsjson.Path(reply, "id").(string)
 	fmt.Fprintf(stdio.Out, "replied (%s) and acknowledged %s; the conductor reads it on its next turn\n", jsstr.Slice(replyID, 0, 8), jsstr.Slice(id, 0, 8))
+	clearGateAnsweredBy(box, project, id, stdio)
 	return 0
+}
+
+// clearGateAnsweredBy clears the human gate when id answers it: the gate's question (stored as
+// a full id or a prefix) resolves to that same message, the way the reply's own id was
+// resolved. A question that resolves to no single message is reported and answers nothing.
+// Clearing queues the conductor's relaunch. The reply has already succeeded, so a failure here
+// is reported on stderr and leaves the exit code alone.
+func clearGateAnsweredBy(box *mailbox.Mailbox, project flipcmd.Project, id string, stdio Stdio) {
+	record := readFlipForGate(project, stdio)
+	question, _ := jsjson.Path(record, "awaiting_human", "question").(string)
+	if question == "" {
+		return
+	}
+	gateID, err := box.ResolveID(question)
+	if err != nil {
+		fmt.Fprintf(stdio.Err, "could not match the human gate's question: %s\n", err)
+		return
+	}
+	if gateID != id {
+		return
+	}
+	door, queued, err := project.ClearGate(record, true)
+	if err != nil {
+		fmt.Fprintf(stdio.Err, "could not clear the human gate: %s\n", err)
+		return
+	}
+	if !queued {
+		fmt.Fprintln(stdio.Out, "cleared the human gate")
+		return
+	}
+	fmt.Fprintf(stdio.Out, "cleared the human gate; the supervisor relaunches the %s conductor within a minute\n", jsjson.TemplateString(door))
+}
+
+// readFlipForGate is flip.json, or nil when there is none. A file that cannot be read or
+// parsed is reported, not skipped silently.
+func readFlipForGate(project flipcmd.Project, stdio Stdio) any {
+	data, err := nodefs.ReadFile(project.FlipPath)
+	if err != nil {
+		if nodefs.Code(err) != "ENOENT" {
+			fmt.Fprintf(stdio.Err, "could not check for a human gate: %s\n", err)
+		}
+		return nil
+	}
+	record, err := jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
+	if err != nil {
+		fmt.Fprintln(stdio.Err, "could not check for a human gate: .orchestrator/flip.json is not valid JSON")
+		return nil
+	}
+	return record
 }
 
 // mailboxInbox lists the open questions for the human. The limit applies before the

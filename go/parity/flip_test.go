@@ -45,7 +45,7 @@ type flipCase struct {
 	seed      seed
 	crash     crashClass
 	errorLine string
-	pe21      bool // errorLine is the JS's open failure; orch fails at its rename (PE-21)
+	leftover  string // the rename of flip.json fails: the JS leaves flip.json.tmp holding this (PE-21)
 }
 
 // flipInvocation runs bin/flip.mjs and `orch flip` in the sandbox project, never with a --cwd
@@ -72,7 +72,7 @@ func seedFlip(content string) seed { return seedProjectFile(".orchestrator/flip.
 func (h *harness) testFlip(t *testing.T) {
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	const orchestratorIsFile = "Error: EEXIST: file already exists, mkdir '$PROJECT/.orchestrator'"
-	const flipIsDir = "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/flip.json'"
+	const flipIsDir = "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/flip.json.tmp' -> '$PROJECT/.orchestrator/flip.json'"
 	typeError := func(on string) string { return "TypeError: Cannot create property 'awaiting_human' on " + on }
 	seeded := `{"to":"claude","paused":{"door":"claude","at":"2026-01-01T00:00:00.000Z","reason":"r"},"awaiting_human":{"door":"opencode","at":"2026-01-02T00:00:00.000Z","reason":"g","question":null},"z":1}`
 	cases := []flipCase{
@@ -107,7 +107,7 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "pause/number", args: []string{"pause"}, seed: seedFlip(`5`)},
 		{name: "pause/prototype-keys", args: []string{"pause"}, seed: seedFlip(`{"__proto__":{"a":1},"constructor":2}`)},
 		{name: "pause/orchestrator-is-file", args: []string{"pause"}, seed: seedProjectFile(".orchestrator", ""), crash: crashC1, errorLine: orchestratorIsFile},
-		{name: "pause/PE-21-flip-is-directory", args: []string{"pause"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, pe21: true},
+		{name: "pause/PE-21-flip-is-directory", args: []string{"pause"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, leftover: `"paused"`},
 		{name: "pause/mailbox-is-file", args: []string{"pause"}, seed: seedProjectFile(".orchestrator/mailbox", "x")},
 
 		{name: "gate/fresh", args: []string{"gate"}},
@@ -126,17 +126,21 @@ func (h *harness) testFlip(t *testing.T) {
 		{name: "gate/orchestrator-is-file", args: []string{"gate"}, seed: seedProjectFile(".orchestrator", ""), crash: crashC1, errorLine: orchestratorIsFile},
 		{name: "gate/clear", args: []string{"gate", "--clear"}, seed: seedFlip(seeded)},
 		{name: "gate/clear-without-gate", args: []string{"gate", "--clear"}, seed: seedFlip(`{"to":"claude"}`)},
+		{name: "gate/clear-queues-relaunch", args: []string{"gate", "--clear"}, seed: seedFlip(`{"to":"claude","awaiting_human":{"door":"claude","at":"2026-01-02T00:00:00.000Z","reason":"g","question":"q"},"z":1}`)},
+		{name: "gate/clear-keeps-pending-launch", args: []string{"gate", "--clear"}, seed: seedFlip(`{"pending_launch":{"to":"opencode","from":"claude","reason":"handback","resume":null,"at":"2026-01-01T00:00:00.000Z"},"awaiting_human":{"door":"claude"}}`)},
+		{name: "gate/clear-queues-relaunch-without-door", args: []string{"gate", "--clear"}, seed: seedFlip(`{"awaiting_human":"yes"}`)},
+		{name: "gate/clear-no-relaunch", args: []string{"gate", "--clear", "--no-relaunch"}, seed: seedFlip(seeded)},
 		{name: "gate/clear-fresh", args: []string{"gate", "--clear"}},
 		{name: "gate/clear-string", args: []string{"gate", "--clear"}, seed: seedFlip(`"abc"`)},
 		{name: "gate/clear-number", args: []string{"gate", "--clear"}, seed: seedFlip(`5`)},
 		{name: "gate/clear-array", args: []string{"gate", "--clear"}, seed: seedFlip(`[1]`)},
 		{name: "gate/clear-null", args: []string{"gate", "--clear"}, seed: seedFlip(`null`)},
-		{name: "gate/clear-PE-21-directory", args: []string{"gate", "--clear"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, pe21: true},
+		{name: "gate/clear-PE-21-directory", args: []string{"gate", "--clear"}, seed: seedProjectDir(".orchestrator/flip.json"), errorLine: flipIsDir, leftover: "{}"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if c.pe21 {
-				h.comparePE21OpenVsRename(t, h.flipInvocation(c))
+			if c.leftover != "" {
+				h.compareFlipPE21FailedRename(t, h.flipInvocation(c), c.leftover)
 				return
 			}
 			h.comparePair(t, h.flipInvocation(c))
@@ -157,6 +161,24 @@ func (h *harness) testFlipGateArray(t *testing.T) {
 	if !strings.HasPrefix(js.files[flipJSON], "{\n  \"awaiting_human\": {") {
 		t.Errorf("js flip.json = %q, want the gate", js.files[flipJSON])
 	}
+	compareOutcomes(t, js, orch)
+}
+
+// compareFlipPE21FailedRename asserts PE-21 for a write of flip.json onto a directory: both
+// runtimes die of the EISDIR of the rename onto it (C1, inv.errorLine), but orch's line names
+// its own `flip.json.tmp-<random>`, which it removes, where the JS names and leaves
+// `flip.json.tmp` holding written. The rest is compared.
+func (h *harness) compareFlipPE21FailedRename(t *testing.T, inv invocation, written string) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	if !privateTempSuffix.MatchString(orch.stderr) {
+		t.Errorf("orch stderr = %q, want orch's temp name", orch.stderr)
+	}
+	assertPE21FailedRename(t, &js, &orch, "project/flip.json", written)
+	if err := crashError(crashC1, inv.errorLine, js, orch); err != nil {
+		t.Error(err)
+	}
+	js.stderr, orch.stderr = "", ""
 	compareOutcomes(t, js, orch)
 }
 

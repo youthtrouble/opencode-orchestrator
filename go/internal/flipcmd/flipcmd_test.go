@@ -31,7 +31,7 @@ func newTestProject(t *testing.T) Project {
 }
 
 func opts(argv ...string) cliargs.Opts {
-	o, _ := cliargs.ParseArgs(argv, []string{"active", "to", "from", "cwd", "reason", "resume", "question"}, []string{"force", "clear"})
+	o, _ := cliargs.ParseArgs(argv, []string{"active", "to", "from", "cwd", "reason", "resume", "question"}, []string{"force", "clear", "no-relaunch"})
 	return o
 }
 
@@ -277,7 +277,7 @@ func TestGateAppendsKeepsPositionAndDeletesPaused(t *testing.T) {
 			if got := readFile(t, p.FlipPath); got != indented(t, c.want) {
 				t.Errorf("flip.json = %s, want %s", got, indented(t, c.want))
 			}
-			want := `{"id":"id-1","at":"` + nowISO + `","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: approval","body":"Supervisor will not relaunch until cleared: node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear (or kickoff/flip run).","refs":[".orchestrator/STATE.md"],"thread":null}` + "\n"
+			want := `{"id":"id-1","at":"` + nowISO + `","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: approval","body":"Supervisor will not relaunch until cleared: node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear (or a reply to the gate's question, or kickoff/flip run).","refs":[".orchestrator/STATE.md"],"thread":null}` + "\n"
 			if got := p.messages(t); got != want {
 				t.Errorf("mailbox = %s, want %s", got, want)
 			}
@@ -342,10 +342,9 @@ func TestGateOnAPrimitiveIsTheStrictModeTypeError(t *testing.T) {
 	}
 }
 
-func TestGateClearDeletesTheGateAndRewritesAnyShape(t *testing.T) {
+func TestGateClearWithoutAGateRewritesAnyShapeAndQueuesNothing(t *testing.T) {
 	for prev, want := range map[string]string{
-		"": `{}`,
-		`{"awaiting_human":{"door":"x"},"to":"c"}`: `{"to":"c"}`,
+		"":           `{}`,
 		`{"to":"c"}`: `{"to":"c"}`,
 		`"abc"`:      `"abc"`,
 		`5`:          `5`,
@@ -369,6 +368,50 @@ func TestGateClearDeletesTheGateAndRewritesAnyShape(t *testing.T) {
 		if got := p.messages(t); got != "" {
 			t.Errorf("mailbox = %s, want no message", got)
 		}
+	}
+}
+
+func TestGateClearQueuesARelaunchOfTheGatedDoor(t *testing.T) {
+	relaunch := func(door string) string {
+		return `{"to":"` + door + `","from":"` + door + `","reason":"human gate cleared","resume":null,"at":"` + nowISO + `"}`
+	}
+	for _, c := range []struct {
+		name, prev, door, want string
+	}{
+		{"gated door", `{"awaiting_human":{"door":"claude"},"to":"c"}`, "claude", `{"to":"c","pending_launch":` + relaunch("claude") + `}`},
+		{"no door is opencode", `{"awaiting_human":"yes"}`, "opencode", `{"pending_launch":` + relaunch("opencode") + `}`},
+		{"an earlier pending launch is kept", `{"pending_launch":{"to":"opencode","from":"claude"},"awaiting_human":{"door":"claude"}}`, "opencode", `{"pending_launch":{"to":"opencode","from":"claude"}}`},
+		{"a falsy pending launch is replaced in place", `{"pending_launch":null,"awaiting_human":{"door":"claude"},"z":1}`, "claude", `{"pending_launch":` + relaunch("claude") + `,"z":1}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := newTestProject(t)
+			writeFile(t, p.FlipPath, c.prev)
+			answer, err := p.Gate(opts("gate", "--clear"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := compact(t, answer), `{"awaiting_human":false,"relaunch":"`+c.door+`"}`; got != want {
+				t.Errorf("answer = %s, want %s", got, want)
+			}
+			if got := readFile(t, p.FlipPath); got != indented(t, c.want) {
+				t.Errorf("flip.json = %s, want %s", got, indented(t, c.want))
+			}
+		})
+	}
+}
+
+func TestGateClearNoRelaunchOnlyDeletesTheGate(t *testing.T) {
+	p := newTestProject(t)
+	writeFile(t, p.FlipPath, `{"awaiting_human":{"door":"claude"},"to":"c"}`)
+	answer, err := p.Gate(opts("gate", "--clear", "--no-relaunch"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compact(t, answer); got != `{"awaiting_human":false}` {
+		t.Errorf("answer = %s", got)
+	}
+	if got := readFile(t, p.FlipPath); got != indented(t, `{"to":"c"}`) {
+		t.Errorf("flip.json = %s", got)
 	}
 }
 

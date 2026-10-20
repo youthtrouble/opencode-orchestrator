@@ -196,12 +196,13 @@ func bothRed(opts cliargs.Opts, home string, d Deps) int {
 // preflight runs in the JS order, for a dry run too: --unattended applies the unattended
 // policy, a human gate is cleared (a human is running this), the supervisor is started and
 // its answer printed, and .orchestrator/ is excluded from git. The policy and gate outputs
-// are discarded.
+// are discarded. The gate is cleared with --no-relaunch: kickoff starts the conductor itself,
+// so a queued relaunch would give the project a second one.
 func preflight(opts cliargs.Opts, d Deps) error {
 	if opts.Truthy("unattended") {
 		d.Children.Self([]string{"policy", "unattended", "--cwd", d.Root})
 	}
-	d.Children.Self([]string{"flip", "gate", "--clear", "--cwd", d.Root})
+	d.Children.Self([]string{"flip", "gate", "--clear", "--no-relaunch", "--cwd", d.Root})
 	supervisor := d.Children.Self([]string{"supervisor", "start", "--cwd", d.Root})
 	fmt.Fprintf(d.Out, "supervisor: %s\n", jsstr.Slice(trim(stdoutOrStderr(supervisor)), 0, 120))
 	_, err := flipcmd.EnsureGitExclude(d.Root)

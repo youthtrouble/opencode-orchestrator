@@ -62,12 +62,12 @@ Every script is dependency-free Node and has a Go twin, `orch <script>` (see
 
 | Script | Usage | What it does |
 |---|---|---|
-| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. Both vendors red: records a pause and exits 75. |
+| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate without queueing a relaunch, start the supervisor, add `.orchestrator/` to `.git/info/exclude`), then launch the conductor interactively or as the headless `conductor` lane. Both vendors red: records a pause and exits 75. |
 | `watch.mjs` | `[--cwd DIR] [--follow] [--interval 20]` | One-screen dashboard: budgets, routing, supervisor, flip state, lanes, open questions with the reply command, human gate, last messages, incidents of the last 24 h, next action from `STATE.md`. |
 | `usage.mjs` | `[--refresh] [--json] [--brief]` | Live Claude + Codex usage -> posture -> role routing. |
 | `mailbox.mjs` | `post \| list \| ack \| reply \| inbox` | Durable project mailbox (see [below](#mailbox-and-manifests)). |
 | `policy.mjs` | `show \| set key=value... \| unattended [--cwd DIR]` | Effective autonomy policy: registry `autonomy` merged with `.orchestrator/policy.json`. |
-| `flip.mjs` | `decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] \| gate [--active D] [--reason R] [--question ID] [--clear] \| status [--cwd DIR]` | Move the conductor between doors, record budget pauses and human gates. |
+| `flip.mjs` | `decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | Move the conductor between doors, record budget pauses and human gates. |
 | `worker.mjs` | `start --brief F --harness claude\|codex\|opencode [--lane L] [--model M] [--effort E] ... [--detach] \| status [--lane L] \| stop --lane L` | One bounded brief on one harness as a tracked, lockable, resumable lane. |
 | `supervisor.mjs` | `start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | Per-project daemon: watches lanes, wakes the coordinator, relaunches conductors. |
 | `claude-exec.mjs` | `[--model M] [--effort E] [--permission-mode P] ... [--timeout-min 60] [--force] [--prompt T \| --prompt-file F \| stdin]` | Bounded task on Claude Code (`claude -p`, stream-json) -> JSON result + session id. |
@@ -217,9 +217,12 @@ every 5 minutes rather than on every read. Both runtimes share this cache.
 
 A headless conductor that reaches a human gate with nothing independent left posts the question and
 runs `flip.mjs gate --active <door> --reason "..." --question <id>`. The supervisor will not
-relaunch while the gate is set. `kickoff` and `flip.mjs run` clear it and start a conductor;
-`flip.mjs gate --clear` only removes the marker. Because the gated conductor ended `finished` after
-posting a handoff, the supervisor does not restart it on its own once the marker is gone. `pause`
+relaunch while the gate is set. `kickoff` and `flip.mjs run` clear it and start a conductor.
+`flip.mjs gate --clear`, and `mailbox.mjs reply` to the gate's question (its full id or a prefix of
+it, as recorded by `--question`), clear it and record `pending_launch` for the gated door, which the
+supervisor launches once the conductor lane is idle and unlocked (within a minute); `gate --clear`
+then prints `{"awaiting_human":false,"relaunch":"<door>"}`. Clearing when no gate is set queues
+nothing, and `gate --clear --no-relaunch` (what kickoff runs) only removes the marker. `pause`
 is for budgets only. To pause a running project by hand, set a gate and then `worker.mjs stop --lane
 conductor`; a stopped (`interrupted`) lane without a gate is relaunched by the supervisor.
 

@@ -92,7 +92,7 @@ func (k *kickoffRun) run(argv ...string) (int, error) {
 
 func (k *kickoffRun) preflightCalls(extra ...[]string) [][]string {
 	return append(extra,
-		[]string{"self", "flip", "gate", "--clear", "--cwd", k.root},
+		[]string{"self", "flip", "gate", "--clear", "--no-relaunch", "--cwd", k.root},
 		[]string{"self", "supervisor", "start", "--cwd", k.root},
 	)
 }

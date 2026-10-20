@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Seeded ids are not uuid v4-shaped, so the fresh-id normalizer never rewrites them and their
@@ -247,6 +248,7 @@ func (h *harness) testMailbox(t *testing.T) {
 	}
 	t.Run("post/json-PE-3", h.testMailboxPostJSON)
 	t.Run("reply/subject-split-surrogate-PE-1", h.testMailboxReplySplitSurrogate)
+	h.testMailboxReplyGate(t)
 	t.Run("inbox/orch-on-path-PE-26", func(t *testing.T) {
 		seed := seedMailbox(mailboxMessages+inboxExtras, mailboxAcks)
 		h.compareReplyHintWithOrchOnPath(t, h.mailboxInvocation(mailboxCase{args: []string{"inbox"}, seed: seed}))
@@ -346,6 +348,34 @@ func (h *harness) compareReplyHintWithOrchOnPath(t *testing.T, inv invocation) {
 	}
 	orch.stdout = strings.ReplaceAll(orch.stdout, orchReplyHint, jsReplyHint)
 	compareOutcomes(t, js, orch)
+}
+
+// testMailboxReplyGate compares a reply to a human gate's question, which clears the gate and
+// queues the conductor's relaunch (or keeps one already queued), with replies that leave the
+// gate alone. The gate records the question as a full id or a prefix, which must resolve to
+// the replied message; flip.json's fresh pending_launch.at is normalized.
+func (h *harness) testMailboxReplyGate(t *testing.T) {
+	gate := func(question string) seed {
+		return seeds(seedMailbox(mailboxMessages, mailboxAcks), seedFlip(`{"to":"claude","awaiting_human":{"at":"2026-01-02T00:00:00.000Z","door":"claude","reason":"push","question":`+question+`}}`))
+	}
+	cases := []mailboxCase{
+		{name: "reply/to-gate-question-clears-gate", args: []string{"reply", "bbbb", "yes"}, seed: gate(`"` + idQuestion + `"`)},
+		{name: "reply/to-gate-question-prefix-clears-gate", args: []string{"reply", idQuestion, "yes"}, seed: gate(`"bbbbbbbb"`)},
+		{name: "reply/other-message-keeps-gate", args: []string{"reply", idStar, "no"}, seed: gate(`"` + idQuestion + `"`)},
+		{name: "reply/gate-without-question-kept", args: []string{"reply", "bbbb", "yes"}, seed: gate(`null`)},
+		{name: "reply/gate-ambiguous-short-prefix-kept", args: []string{"reply", idReview, "yes"}, seed: gate(`"aaaa"`)},
+		{name: "reply/gate-unknown-question-kept", args: []string{"reply", "bbbb", "yes"}, seed: gate(`"eeee"`)},
+		{name: "reply/to-gate-question-keeps-pending-launch", args: []string{"reply", "bbbb", "yes"}, seed: seeds(seedMailbox(mailboxMessages, mailboxAcks),
+			seedFlip(`{"pending_launch":{"to":"opencode","from":"claude","reason":"handback","resume":null,"at":"2026-01-01T00:00:00.000Z"},"awaiting_human":{"door":"claude","question":"bbbb"}}`))},
+		{name: "reply/flip-json-unparsable", args: []string{"reply", "bbbb", "yes"}, seed: seeds(seedMailbox(mailboxMessages, mailboxAcks), seedFlip(`{"to":`))},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			inv := h.mailboxInvocation(c)
+			inv.normalize = normalizeFlip(time.Now())
+			h.comparePair(t, inv)
+		})
+	}
 }
 
 // testMailboxReplySplitSurrogate asserts PE-1: the reply subject is cut at 140 UTF-16 units

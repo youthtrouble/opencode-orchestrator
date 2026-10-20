@@ -2,15 +2,52 @@
 // mailbox.mjs post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
 // mailbox.mjs list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
 // mailbox.mjs ack --id ID --by B [--note text]
-// mailbox.mjs reply ID-or-prefix "your answer"      (posts a threaded note from "human" and acks the message)
+// mailbox.mjs reply ID-or-prefix "your answer"      (posts a threaded note from "human" and acks the message;
+//                                                     a reply to a human gate's question also clears the gate)
 // mailbox.mjs inbox                                  (unanswered questions addressed to you, with the reply command)
 import fs from "node:fs";
 import path from "node:path";
 import tty from "node:tty";
-import { post, list, ack } from "../lib/mailbox.mjs";
+import { post, list, ack, resolveId } from "../lib/mailbox.mjs";
+import { clearGate } from "../lib/flip.mjs";
+
+// A reply to message `id` answers the human gate when the gate's question (stored as a full id or a
+// prefix) resolves to that same message, the way the reply's own id was resolved; a question that
+// resolves to no single message is reported and answers nothing. Answering clears the gate and queues
+// the conductor's relaunch. The reply has already succeeded: a failure here is reported on stderr and
+// leaves the exit code alone.
+function clearGateAnsweredBy(root, id) {
+  const flip = readFlipForGate(root);
+  const question = flip?.awaiting_human?.question;
+  if (typeof question !== "string" || !question) return;
+  let gateId;
+  try { gateId = resolveId(root, question); } catch (e) {
+    console.error(`could not match the human gate's question: ${e.message}`);
+    return;
+  }
+  if (gateId !== id) return;
+  try {
+    const door = clearGate(root, flip);
+    console.log(door ? `cleared the human gate; the supervisor relaunches the ${door} conductor within a minute` : "cleared the human gate");
+  } catch (e) {
+    console.error(`could not clear the human gate: ${e.message}`);
+  }
+}
+
+// flip.json, or null when there is none. A file that cannot be read or parsed is reported, not skipped silently.
+function readFlipForGate(root) {
+  let text;
+  try { text = fs.readFileSync(path.join(root, ".orchestrator", "flip.json"), "utf8"); } catch (e) {
+    if (e.code !== "ENOENT") console.error(`could not check for a human gate: ${e.message}`);
+    return null;
+  }
+  try { return JSON.parse(text); } catch {
+    console.error("could not check for a human gate: .orchestrator/flip.json is not valid JSON");
+    return null;
+  }
+}
 
 const [cmd, ...rest] = process.argv.slice(2);
-import { resolveId } from "../lib/mailbox.mjs";
 const opts = { ref: [] }; const flags = new Set();
 for (let i = 0; i < rest.length; i++) {
   const a = rest[i];
@@ -41,6 +78,7 @@ if (cmd === "post") {
   const m = post(root, { from: "human", to: orig?.from || "*", kind: "note", subject: `Re: ${orig?.subject || id}`.slice(0, 140), body, thread: id });
   ack(root, { id, by: "human", note: "replied" });
   console.log(`replied (${m.id.slice(0, 8)}) and acknowledged ${id.slice(0, 8)}; the conductor reads it on its next turn`);
+  clearGateAnsweredBy(root, id);
 } else if (cmd === "inbox") {
   const qs = list(root, { kind: "question", unackedBy: "human", limit: 50 }).filter((m) => m.to === "human" || m.to === "*");
   if (!qs.length) { console.log("No open questions for you."); process.exit(0); }

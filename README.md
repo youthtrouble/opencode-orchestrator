@@ -96,11 +96,11 @@ conductor to "go unattended" is not a defined workflow; use kickoff.
 ```sh
 orch watch --follow                                     # one live screen; Ctrl-C to leave
 orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"  # the id, or its first 8 characters
-orch flip run --to opencode                             # after a gate: clear it and restart (or --to claude)
+orch flip gate --clear                                  # after a gate: clear it; the conductor restarts
 ```
 
-`orch flip gate --clear` removes a gate marker but does not restart a conductor that stopped at it;
-`orch flip run` or `orch kickoff` does both. Details are in [step 3](#3-while-it-runs).
+Replying to the question a gate is waiting on clears it too. Details are in
+[step 3](#3-while-it-runs).
 
 | Inside opencode / Claude Code (chat) | In a terminal (`orch`) |
 |---|---|
@@ -226,10 +226,12 @@ orch mailbox inbox                     # the open questions, each with its reply
 orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"   # the id or its first 8 characters
 ```
 
-**Clearing a gate.** A conductor stopped at a human gate stays stopped; the supervisor will not
-relaunch it. Do the thing it asked for (or answer it), then start it again: `orch flip run --to
-opencode` (or `--to claude`) or rerun `orch kickoff`. Both clear the gate. `orch flip gate --clear`
-only removes the marker.
+**Clearing a gate.** A conductor stopped at a human gate stays stopped until you clear the gate.
+Answer its question with `orch mailbox reply <id> "..."`, or do the thing it asked for and run
+`orch flip gate --clear`. Either clears the gate, and the supervisor restarts that door's conductor
+within a minute (it must be running: `orch supervisor status`); a flip queued before the gate is kept
+and starts instead. `orch flip run --to <door>` and
+`orch kickoff` also clear the gate and start a conductor at once.
 
 **Restarting or moving the conductor.** `orch flip run --to claude` (or `--to opencode`) writes a
 continue brief and starts that door's conductor in the background. If a conductor is still running,
@@ -244,10 +246,12 @@ orch flip gate --reason "paused by me"
 orch worker stop --lane conductor
 ```
 
-Resume with `orch flip run --to <door>` or `orch kickoff ...`. `orch supervisor stop` stops all
-background supervision for the project (workers keep running). To take the wheel yourself, pause as
-above, then open `opencode` and type `/continue`, or `claude --agent conductor` and ask it to
-continue from `STATE.md`.
+Resume with `orch flip gate --clear` (the supervisor restarts the conductor within a minute),
+`orch flip run --to <door>` or `orch kickoff ...`. `orch supervisor stop` stops all background
+supervision for the project (workers keep running). To take the wheel yourself, pause as above,
+then open `opencode` and type `/continue`, or `claude --agent conductor` and ask it to continue from
+`STATE.md`; leave the gate set while you drive, or the supervisor starts a background conductor
+beside yours.
 
 ### 4. Where things live in your project
 

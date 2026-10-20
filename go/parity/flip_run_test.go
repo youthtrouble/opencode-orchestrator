@@ -123,14 +123,16 @@ func (h *harness) testFlipRun(t *testing.T) {
 	crashes := []struct {
 		name, errorLine string
 		seed            seed
-		blocksExclude   bool // the exclude is a directory or lies under a file
-		pe21            bool // errorLine is the JS's open failure; orch fails at its rename
+		blocksExclude   bool   // the exclude is a directory or lies under a file
+		pe21            bool   // errorLine is the JS's open failure; orch fails at its rename
+		leftover        string // both fail at the rename of flip.json; the JS leaves flip.json.tmp holding this
 	}{
-		{"crash/git-is-a-file", "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", withGit(text("gitdir: elsewhere\n")), true, false},
-		{"crash/exclude-is-a-directory", "Error: EISDIR: illegal operation on a directory, read", seedProjectDir(".git/info/exclude"), true, false},
+		{"crash/git-is-a-file", "Error: ENOTDIR: not a directory, mkdir '$PROJECT/.git/info'", withGit(text("gitdir: elsewhere\n")), true, false, ""},
+		{"crash/exclude-is-a-directory", "Error: EISDIR: illegal operation on a directory, read", seedProjectDir(".git/info/exclude"), true, false, ""},
 		{"crash/PE-21-brief-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/briefs/conductor-continue.md'",
-			seedProjectDir(".orchestrator/briefs/conductor-continue.md"), false, true},
-		{"crash/PE-21-flip-is-a-directory", "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/flip.json'", seedProjectDir(".orchestrator/flip.json"), false, true},
+			seedProjectDir(".orchestrator/briefs/conductor-continue.md"), false, true, ""},
+		{"crash/PE-21-flip-is-a-directory", "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/flip.json.tmp' -> '$PROJECT/.orchestrator/flip.json'",
+			seedProjectDir(".orchestrator/flip.json"), false, false, `"previous"`},
 	}
 	for _, c := range crashes {
 		t.Run(c.name, func(t *testing.T) {
@@ -138,6 +140,10 @@ func (h *harness) testFlipRun(t *testing.T) {
 			inv.extraFilesMayBeBlocked = c.blocksExclude
 			if c.pe21 {
 				h.comparePE21OpenVsRename(t, inv)
+				return
+			}
+			if c.leftover != "" {
+				h.compareFlipPE21FailedRename(t, inv, c.leftover)
 				return
 			}
 			h.comparePair(t, inv)

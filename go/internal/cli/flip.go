@@ -14,7 +14,7 @@ import (
 
 var (
 	flipValueKeys = []string{"active", "to", "from", "cwd", "reason", "resume", "question"}
-	flipFlagKeys  = []string{"force", "clear"}
+	flipFlagKeys  = []string{"force", "clear", "no-relaunch"}
 )
 
 // launcherGrace bounds how long `flip run` waits for the launcher's pipes once it has exited
@@ -55,7 +55,7 @@ func Flip(args []string, stdio Stdio) int {
 	case "run":
 		return flipRun(project, opts, stdio)
 	}
-	fmt.Fprintln(stdio.Err, "commands: decide | run | pause | gate [--clear] | status")
+	fmt.Fprintln(stdio.Err, "commands: decide | run | pause | gate [--clear [--no-relaunch]] | status")
 	return 2
 }
 

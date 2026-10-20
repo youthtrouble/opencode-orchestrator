@@ -637,6 +637,14 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 		{"conductor/paused-relaunch", "conductor", conductor(seeds(seedFlip(`{"paused": true}`), caches.green)), []string{"relaunch opencode->opencode (stay, was paused)"}},
 		// A hand-off recorded while the previous conductor held the lane: the target starts.
 		{"conductor/pending-launch", "conductor", conductor(seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode", "from": "claude", "reason": "handback: R"}}`)), []string{"pending launch claude->opencode"}},
+		// A human gate cleared after the conductor stopped at it (its lane finished with the
+		// gate's hand-off, so no restart is due): the pending launch `gate --clear` queued
+		// relaunches the gated door.
+		{"conductor/gate-cleared", "conductor", conductor(seeds(
+			seedConductor(`{"status": "finished", "harness": "opencode", "pid": 0, "started_at": "2026-10-19T09:00:00.000Z"}`),
+			seedMailbox(lines(`{"id":"gggggggg-0000-0000-0000-000000000001","at":"2026-10-19T09:30:00.000Z","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: push","body":"","refs":[],"thread":null,"acked_by":[]}`), ""),
+			seedFlip(`{"to": "opencode", "at": "2026-10-19T08:00:00.000Z", "pending_launch": {"to": "opencode", "from": "opencode", "reason": "human gate cleared", "resume": null, "at": "2026-10-19T10:00:00.000Z"}}`), caches.green)),
+			[]string{"pending launch opencode->opencode"}},
 		// Timing assumption: the serve's write of its stale in-memory lane lands before the
 		// runner's first state write, because the runner boots far slower, so the runner's own
 		// final state replaces the redispatched_at the serve wrote. Under heavy load the order
