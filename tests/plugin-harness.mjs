@@ -15,7 +15,7 @@ const CHECKOUT_LIBS = fs.readdirSync(path.join(REPO, "orchestrator", "lib")).fil
 const CHECKOUT_SCRIPTS = fs.readdirSync(path.join(REPO, "orchestrator", "bin")).filter((f) => f.endsWith(".mjs"));
 /** The orchestrator scripts the plugin spawns; JS sandboxes get logging fakes of these. */
 export const SPAWNED_SCRIPTS = ["claude-exec", "codex-exec", "worker", "supervisor", "flip"];
-const ENV_KEYS = ["HOME", "PATH", "ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY", "PLUGIN_TEST_LOG", "PLUGIN_TEST_ANSWERS", "PLUGIN_TEST_POISON", "ORCH_PLUGIN_KILL_GRACE_MS", "ORCH_PLUGIN_PIPE_GRACE_MS", "ORCH_PLUGIN_ORCH_TIMEOUT_SCALE", "PLUGIN_TEST_HANG_CEILING_MS"];
+const ENV_KEYS = ["HOME", "PATH", "ORCH_RUNTIME", "ORCH_BIN", "ORCH_HOME", "ORCH_REGISTRY", "PLUGIN_TEST_LOG", "PLUGIN_TEST_ANSWERS", "PLUGIN_TEST_POISON", "ORCH_PLUGIN_KILL_GRACE_MS", "ORCH_PLUGIN_PIPE_GRACE_MS", "ORCH_PLUGIN_ORCH_TIMEOUT_SCALE", "ORCH_PLUGIN_BEAT_INTERVAL_MS", "PLUGIN_TEST_HANG_CEILING_MS"];
 
 export const typescriptSupported = Boolean(process.features.typescript);
 
@@ -201,7 +201,8 @@ export async function loadPlugin(t, sandbox, { options = {}, env = {}, brokenRun
 
   const plugin = await import(`${PLUGIN_URL}?case=${++caseNumber}`);
   const ctx = fakeContext(sandbox, options);
-  await plugin.default.setup(ctx.api);
+  ctx.dispose = await plugin.default.setup(ctx.api);
+  t.after(() => ctx.dispose());
   if (brokenRuntime) await requireBrokenRuntime(ctx);
   else await settleWarmUp(sandbox);
   return ctx;
@@ -222,7 +223,7 @@ async function requireBrokenRuntime(ctx) {
 }
 
 function fakeContext(sandbox, options) {
-  const tools = {}, toolHooks = {}, sessionHooks = {}, agentTransforms = [];
+  const tools = {}, toolHooks = {}, sessionHooks = {}, agentTransforms = [], subscriptions = [];
   const api = {
     options,
     location: { directory: sandbox.project },
@@ -232,6 +233,7 @@ function fakeContext(sandbox, options) {
     },
     session: { hook: async (name, fn) => { sessionHooks[name] = fn; } },
     agent: { transform: async (fn) => { agentTransforms.push(fn); } },
+    event: { subscribe: (options) => subscribeEvents(options, subscriptions) },
   };
   const callContext = (signal = new AbortController().signal) => ({ directory: sandbox.project, signal, progress: async () => {}, agent: "conductor", sessionID: "ses_test" });
   return {
@@ -242,19 +244,54 @@ function fakeContext(sandbox, options) {
     async toolResult(name, input = {}) {
       try { return { status: "ok", ...(await tools[name].execute(input, callContext())) }; } catch (error) { return { status: "error", error }; }
     },
-    async context(agent) {
-      const e = { agent, system: [] };
+    /** Run the context hook; a `sessionID` names the session, as opencode's payload does. */
+    async context(agent, sessionID) {
+      const e = { agent, system: [], ...(sessionID === undefined ? {} : { sessionID }) };
       await sessionHooks.context(e);
       return e.system;
     },
     executeBefore: (e) => toolHooks["execute.before"](e),
     executeAfter: (e) => toolHooks["execute.after"](e),
     retry: (e) => sessionHooks.retry(e),
+    /** Every event.subscribe call: its options and whether its iteration has ended. */
+    subscriptions,
+    /** Deliver a bus event ({type, data}) to every open subscription. */
+    emit: (event) => { for (const sub of subscriptions) sub.push(event); },
     /** Apply the model-sync transforms and return the updated agents by id. */
     syncedAgents() {
       const agents = {};
       for (const fn of agentTransforms) fn({ update(id, mutate) { agents[id] ??= {}; mutate(agents[id]); } });
       return agents;
+    },
+  };
+}
+
+// opencode 2.0.32's promise API: event.subscribe({signal}) returns an endless async iterable of bus
+// events that ends when the signal aborts. `failWith` makes the next read throw instead.
+function subscribeEvents(options, subscriptions) {
+  const queued = [];
+  let wake = null;
+  const sub = {
+    options,
+    ended: false,
+    failWith: null,
+    push(event) { queued.push(event); wake?.(); },
+    fail(error) { sub.failWith = error; wake?.(); },
+  };
+  options?.signal?.addEventListener("abort", () => wake?.());
+  subscriptions.push(sub);
+  return {
+    async *[Symbol.asyncIterator]() {
+      try {
+        while (!options?.signal?.aborted) {
+          if (sub.failWith) throw sub.failWith;
+          if (queued.length) { yield queued.shift(); continue; }
+          await new Promise((resolve) => { wake = resolve; });
+          wake = null;
+        }
+      } finally {
+        sub.ended = true;
+      }
     },
   };
 }

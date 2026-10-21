@@ -14,22 +14,22 @@ import { calls, checkoutRegistry, createSandbox, loadPlugin, poisonHits, routing
 
 const skip = typescriptSupported ? false : "Node cannot strip TypeScript types here (needs >= 22.18)";
 
-/** A go sandbox whose fake orch answers routing like the real binary, plus `answers`. */
-async function loadGo(t, answers = {}) {
-  return loadGoInto(t, createSandbox(t, { runtime: "go" }), answers);
+/** A go sandbox whose fake orch answers routing like the real binary, plus `answers`; `env` adds to the plugin's. */
+async function loadGo(t, answers = {}, env = {}) {
+  return loadGoInto(t, createSandbox(t, { runtime: "go" }), answers, env);
 }
 
-async function loadGoInto(t, sandbox, answers) {
+async function loadGoInto(t, sandbox, answers, env = {}) {
   const doc = await routingDocument(usageFixture("green"));
   setAnswers(sandbox, { "routing --json": { stdout: doc }, "routing --json --refresh": { stdout: doc }, "routing --cached --json": { stdout: doc }, ...answers });
-  const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go" } });
+  const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ...env } });
   return { sandbox, plugin };
 }
 
-async function loadJs(t, answers = {}) {
+async function loadJs(t, answers = {}, env = {}) {
   const sandbox = createSandbox(t, { runtime: "js" });
   setAnswers(sandbox, answers);
-  const plugin = await loadPlugin(t, sandbox);
+  const plugin = await loadPlugin(t, sandbox, { env });
   return { sandbox, plugin };
 }
 
@@ -56,11 +56,11 @@ describe("mailbox_post", { skip }, () => {
   });
 
   test("go: orch mailbox post with the body on stdin and --json last", async (t) => {
-    const message = { id: "m-1", at: "2026-10-19T00:00:00.000Z", from: "coder", to: "human", kind: "question", subject: "hi", body: "line 1\n--not-a-flag", refs: ["a.md", "b.md"], thread: "t-1" };
+    const message = { id: "m-1", at: "2026-10-19T00:00:00.000Z", from: "coder", to: "human", kind: "question", subject: "hi", body: "line 1\n--not-a-flag", refs: ["a.md", "b.md"], thread: "t-1", recommended: "yes", blocking: false };
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: message } });
-    const r = await plugin.callTool("mailbox_post", { from: "coder", to: "human", kind: "question", subject: "hi", body: message.body, refs: message.refs, thread: "t-1" });
+    const r = await plugin.callTool("mailbox_post", { from: "coder", to: "human", kind: "question", subject: "hi", body: message.body, refs: message.refs, thread: "t-1", recommended: "yes", blocking: false });
     const [call] = orchCalls(sandbox, "mailbox");
-    assert.deepEqual(call.argv, ["mailbox", "post", "--root", sandbox.project, "--from", "coder", "--to", "human", "--kind", "question", "--subject", "hi", "--thread", "t-1", "--ref", "a.md", "--ref", "b.md", "--body", "-", "--json"]);
+    assert.deepEqual(call.argv, ["mailbox", "post", "--root", sandbox.project, "--from", "coder", "--to", "human", "--kind", "question", "--subject", "hi", "--thread", "t-1", "--ref", "a.md", "--ref", "b.md", "--recommended", "yes", "--blocking", "false", "--body", "-", "--json"]);
     assert.equal(call.stdin, message.body);
     assert.equal(call.cwd, fs.realpathSync(process.cwd()));
     assert.equal(r.content, "posted m-1");
@@ -87,6 +87,45 @@ describe("mailbox_post", { skip }, () => {
       assert.deepEqual(orchCalls(sandbox, "mailbox"), []);
     });
   }
+
+  test("js: a question records its recommended answer and blocks by default", async (t) => {
+    const { plugin } = await loadJs(t);
+    const r = await plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "ship?", recommended: "Ship it." });
+    assert.equal(r.metadata.recommended, "Ship it.");
+    assert.equal(r.metadata.blocking, true);
+  });
+
+  test("js: a question without a recommended answer is a tool error and writes nothing", async (t) => {
+    const { sandbox, plugin } = await loadJs(t);
+    const r = await plugin.toolResult("mailbox_post", { from: "conductor", kind: "question", subject: "ship?" });
+    assert.equal(r.status, "error");
+    assert.equal(r.error.message, "a question needs a recommended answer");
+    assert.equal(fs.existsSync(path.join(sandbox.project, ".orchestrator", "mailbox", "messages.jsonl")), false);
+  });
+
+  test("js and go: recommended and blocking are ignored on other kinds", async (t) => {
+    const js = await loadJs(t);
+    const posted = await js.plugin.callTool("mailbox_post", { from: "coder", subject: "hi", recommended: "x", blocking: false });
+    assert.equal(Object.hasOwn(posted.metadata, "recommended"), false);
+    const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: { id: "m-3" } } });
+    await plugin.callTool("mailbox_post", { from: "coder", subject: "hi", recommended: "--x", blocking: false });
+    assert.deepEqual(orchCalls(sandbox, "mailbox")[0].argv, ["mailbox", "post", "--root", sandbox.project, "--from", "coder", "--to", "*", "--kind", "note", "--subject", "hi", "--body", "-", "--json"]);
+  });
+
+  test("go: a question's recommended beginning with \"--\" is refused before any spawn", async (t) => {
+    const { sandbox, plugin } = await loadGo(t);
+    const r = await plugin.toolResult("mailbox_post", { from: "coder", kind: "question", subject: "hi", recommended: "--x" });
+    assert.equal(String(r.error), 'OrchCommandError: recommended may not begin with "--" in the go runtime');
+    assert.deepEqual(orchCalls(sandbox, "mailbox"), []);
+  });
+
+  test("go: a question without a recommended answer surfaces orch's exit 2", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, { "mailbox post": { code: 2, stderr: 'mailbox post: a question needs --recommended "<the answer you recommend>"\n' } });
+    const r = await plugin.toolResult("mailbox_post", { from: "coder", kind: "question", subject: "hi" });
+    assert.equal(r.status, "error");
+    assert.equal(r.error.message, 'orch mailbox post exited 2: mailbox post: a question needs --recommended "<the answer you recommend>"');
+    assert.equal(orchCalls(sandbox, "mailbox")[0].argv.includes("--recommended"), false);
+  });
 
   test("go: exit 1 from orch is a tool error with the stderr line", async (t) => {
     const { plugin } = await loadGo(t, { "mailbox post": { code: 1, stderr: "Error: post needs from and subject\n" } });
@@ -594,3 +633,203 @@ describe("process runner", { skip }, () => {
     });
   }
 });
+
+describe("conductor session heartbeat", { skip }, () => {
+  const sessionFile = (sandbox) => path.join(sandbox.project, ".orchestrator", "sessions", "opencode.json");
+  const readBeat = (sandbox) => { try { return JSON.parse(fs.readFileSync(sessionFile(sandbox), "utf8")); } catch { return null; } };
+  const makeProject = (sandbox) => fs.mkdirSync(path.join(sandbox.project, ".orchestrator"), { recursive: true });
+  const beatKey = (sandbox, session, state) => `session beat --door opencode --session ${session} --state ${state} --cwd ${sandbox.project}`;
+  const beats = (sandbox) => orchCalls(sandbox, "session").map((c) => `${c.argv[5]} ${c.argv[7]}`);
+  const interval = (ms) => ({ ORCH_PLUGIN_BEAT_INTERVAL_MS: String(ms) });
+  const idle = (sessionID) => ({ type: "session.idle", data: { sessionID } });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const OK = { "session beat": { stdout: "" } };
+
+  test("js: a conductor turn beats working, a repeat inside the interval writes nothing, session.idle beats waiting", async (t) => {
+    const { sandbox, plugin } = await loadJs(t, {}, interval(300));
+    makeProject(sandbox);
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => readBeat(sandbox) !== null));
+    const first = readBeat(sandbox);
+    assert.deepEqual({ ...first, updated_at: 0 }, { door: "opencode", session_id: "ses_1", state: "working", now: null, slice: null, progress: null, updated_at: 0 });
+    await plugin.context("conductor", "ses_1");
+    await sleep(500);
+    assert.equal(readBeat(sandbox).updated_at, first.updated_at);
+    plugin.emit(idle("ses_1"));
+    assert.ok(await waitFor(() => readBeat(sandbox)?.state === "waiting"));
+  });
+
+  // R1: opencode 2.0.32's event.subscribe returns an async iterable; a callback is never called.
+  test("go: idle arrives through the event.subscribe async iterable, which unloading ends", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    makeProject(sandbox);
+    assert.equal(plugin.subscriptions.length, 1);
+    assert.ok(plugin.subscriptions[0].options.signal instanceof AbortSignal);
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    plugin.emit(idle("ses_1"));
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
+    assert.deepEqual(orchCalls(sandbox, "session").map((c) => c.argv), [beatKey(sandbox, "ses_1", "working").split(" "), beatKey(sandbox, "ses_1", "waiting").split(" ")]);
+    await plugin.dispose();
+    assert.ok(await waitFor(() => plugin.subscriptions[0].ended), "the pump stops iterating once the plugin unloads");
+    assert.deepEqual(poisonHits(sandbox), []);
+  });
+
+  test("go: a failing event subscription is recorded as an incident", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: { recorded: "fp" } } });
+    plugin.subscriptions[0].fail(new Error("stream lost"));
+    assert.ok(await waitFor(() => orchCalls(sandbox, "incident").length === 1));
+    assert.equal(JSON.parse(orchCalls(sandbox, "incident")[0].stdin).summary, "event subscription failed: stream lost");
+  });
+
+  // R2: state changes used to bypass the limiter, one spawn per transition.
+  test("go: rapid working/waiting transitions write once per interval, the latest state last", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, OK, interval(1000));
+    makeProject(sandbox);
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    plugin.emit(idle("ses_1"));
+    await plugin.context("conductor", "ses_1");
+    plugin.emit(idle("ses_1"));
+    await sleep(400);
+    assert.deepEqual(beats(sandbox), ["ses_1 working"]);
+    assert.ok(await waitFor(() => beats(sandbox).length === 2, 3000));
+    await sleep(1200);
+    assert.deepEqual(beats(sandbox), ["ses_1 working", "ses_1 waiting"]);
+  });
+
+  // R3: a slow working write used to race the idle write and could land last.
+  test("go: a slow write finishes before the next beat starts", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, {}, interval(50));
+    makeProject(sandbox);
+    setAnswers(sandbox, { ...sandbox.answers, [beatKey(sandbox, "ses_1", "working")]: { stdoutHex: Array(6).fill("20") }, [beatKey(sandbox, "ses_1", "waiting")]: { stdout: "" } });
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    plugin.emit(idle("ses_1"));
+    await sleep(300);
+    assert.deepEqual(beats(sandbox), ["ses_1 working"], "waiting waits for the working write in flight");
+    assert.ok(await waitFor(() => beats(sandbox).length === 2, 3000));
+    assert.deepEqual(beats(sandbox), ["ses_1 working", "ses_1 waiting"]);
+  });
+
+  // R4: an idle from a session that no longer owns the door used to overwrite the active one.
+  test("go: an idle from a superseded conductor session is ignored", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    makeProject(sandbox);
+    await plugin.context("conductor", "ses_a");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    await plugin.context("conductor", "ses_b");
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
+    plugin.emit(idle("ses_a"));
+    await sleep(300);
+    assert.deepEqual(beats(sandbox), ["ses_a working", "ses_b working"]);
+    plugin.emit(idle("ses_b"));
+    assert.ok(await waitFor(() => beats(sandbox).length === 3));
+    assert.equal(beats(sandbox)[2], "ses_b waiting");
+  });
+
+  // R5: unloading used to return while a beat was still being written, so the unloaded instance's
+  // late write could land over the replacement instance's heartbeat.
+  test("go: unloading waits for the beat in flight, so a reloaded plugin's beat is the last word", async (t) => {
+    const sandbox = createSandbox(t, { runtime: "go" });
+    writeDelayedSessionWriter(sandbox, { ses_old: 600, ses_new: 0 });
+    const old = await loadGoInto(t, sandbox, {}, interval(50));
+    makeProject(sandbox);
+    await old.plugin.context("conductor", "ses_old");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    await old.plugin.dispose();
+    assert.equal(readBeat(sandbox)?.session_id, "ses_old", "dispose returned before the old write landed");
+    const replacement = await loadGoInto(t, sandbox, {}, interval(50));
+    await replacement.plugin.context("conductor", "ses_new");
+    assert.ok(await waitFor(() => readBeat(sandbox)?.session_id === "ses_new"));
+    await sleep(800);
+    assert.equal(readBeat(sandbox).session_id, "ses_new");
+  });
+
+  test("go: a trailing beat pending at unload never starts", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, OK, interval(300));
+    makeProject(sandbox);
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    plugin.emit(idle("ses_1"));
+    await sleep(50);
+    await plugin.dispose();
+    await plugin.context("conductor", "ses_1");
+    await sleep(600);
+    assert.deepEqual(beats(sandbox), ["ses_1 working"]);
+  });
+
+  test("go: unloading during a failing beat settles after its incident is recorded", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, { "session beat": { stdoutHex: Array(4).fill("20"), code: 1 }, "incident record": { stdout: { recorded: "fp" } } }, interval(50));
+    makeProject(sandbox);
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => beats(sandbox).length === 1));
+    await plugin.dispose();
+    assert.equal(orchCalls(sandbox, "incident").length, 1, "the incident is recorded before dispose returns");
+  });
+
+  test("go: no beat for another agent, an unseen idle session, or a directory without .orchestrator/", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    await plugin.context("conductor", "ses_1");
+    makeProject(sandbox);
+    await plugin.context("build", "ses_2");
+    plugin.emit(idle("ses_3"));
+    await sleep(300);
+    assert.deepEqual(orchCalls(sandbox, "session"), []);
+  });
+
+  test("go: a failed beat is recorded as an incident and the turn still gets its budget block", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, { "session beat": { code: 1, stderr: "session beat: could not write .orchestrator/sessions/opencode.json: EACCES\n" }, "incident record": { stdout: { recorded: "fp" } } });
+    makeProject(sandbox);
+    const system = await plugin.context("conductor", "ses_1");
+    assert.equal(system.length, 1);
+    assert.ok(await waitFor(() => orchCalls(sandbox, "incident").length === 1));
+    const incident = JSON.parse(orchCalls(sandbox, "incident")[0].stdin);
+    assert.equal(incident.summary, "session beat failed: orch session beat exited 1: session beat: could not write .orchestrator/sessions/opencode.json: EACCES");
+    assert.deepEqual(incident.context, { session: "ses_1" });
+  });
+
+  test("js: a failed beat is retried by the next request after the interval, not before", async (t) => {
+    const { sandbox, plugin } = await loadJs(t, {}, interval(400));
+    makeProject(sandbox);
+    const sessions = path.join(sandbox.project, ".orchestrator", "sessions");
+    fs.writeFileSync(sessions, "not a directory");
+    await plugin.context("conductor", "ses_1");
+    const incidents = path.join(sandbox.home, ".local", "state", "opencode", "orchestrator", "incidents.jsonl");
+    assert.ok(await waitFor(() => fs.existsSync(incidents)));
+    assert.match(JSON.parse(fs.readFileSync(incidents, "utf8").trim()).summary, /^session beat failed: could not create \.orchestrator\/sessions/);
+    fs.rmSync(sessions);
+    await plugin.context("conductor", "ses_1");
+    await sleep(150);
+    assert.equal(readBeat(sandbox), null, "no immediate retry inside the interval");
+    await sleep(400);
+    await plugin.context("conductor", "ses_1");
+    assert.ok(await waitFor(() => readBeat(sandbox)?.state === "working"));
+  });
+});
+
+/**
+ * Puts an `orch` in front of the sandbox's fake that really writes the session file for
+ * `session beat`, after a delay chosen by session id; every other call goes to the fake.
+ */
+function writeDelayedSessionWriter(sandbox, delaysBySession) {
+  const scripted = path.join(sandbox.fakebin, "orch-scripted");
+  fs.renameSync(path.join(sandbox.fakebin, "orch"), scripted);
+  fs.writeFileSync(path.join(sandbox.fakebin, "orch"), `#!${process.execPath}
+const fs = process.getBuiltinModule("node:fs");
+const path = process.getBuiltinModule("node:path");
+const argv = process.argv.slice(2);
+if (argv[0] !== "session") {
+  const r = process.getBuiltinModule("node:child_process").spawnSync(${JSON.stringify(scripted)}, argv, { stdio: "inherit" });
+  process.exit(r.status ?? 1);
+}
+fs.appendFileSync(process.env.PLUGIN_TEST_LOG, JSON.stringify({ self: "path", argv, cwd: process.cwd(), stdin: "" }) + "\\n");
+const option = (name) => argv[argv.indexOf(name) + 1];
+const delays = ${JSON.stringify(delaysBySession)};
+setTimeout(() => {
+  const file = path.join(option("--cwd"), ".orchestrator", "sessions", "opencode.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ door: "opencode", session_id: option("--session"), state: option("--state") }));
+}, delays[option("--session")] ?? 0);
+`, { mode: 0o755 });
+}

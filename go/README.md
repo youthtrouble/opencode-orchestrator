@@ -182,6 +182,11 @@ arguments the script gets.
     of the stderr tail.
   - D-S10-7 (both runtimes, a fix): a command that cannot be started is a failed run (in go mode
     an `orch <sub>: could not start ...` tool error) instead of an uncaught crash of the host.
+  - D-S10-8: a `mailbox_post` question without `recommended` fails with orch's usage line
+    (`orch mailbox post exited 2: mailbox post: a question needs --recommended ...`); JS mode
+    says `a question needs a recommended answer`. Go mode needs an `orch` from this release or
+    later: questions pass `mailbox post --recommended/--blocking`, and the conductor heartbeat runs
+    `orch session beat`. An older binary fails both (a tool error; a recorded incident per beat).
 - **Rollback:** unset `ORCH_RUNTIME` (or set it, or the option, to `js`) and reload or restart.
 - **Which runtime answered:** `orch_usage_status` metadata carries `runtime` and `orch` (the binary
   path); a new incident's `version` is the `orch` version in go mode (`0.5.0 (<rev>)`, or a bare

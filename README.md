@@ -278,7 +278,7 @@ gate and keeps working with you.
 | `flip.json` | Which door drives, pauses and human gates |
 | `policy.json` | This project's autonomy overrides (`orch policy set release=auto`) |
 | `supervisor.json` | Optional wake channels for the supervisor |
-| `sessions/` | One heartbeat per conductor door (`orch session show`): what it is doing and when it last moved |
+| `sessions/` | One heartbeat per conductor door (`orch session show`): what it is doing and when it last moved. Claude conductors write it through hooks, opencode conductors through the plugin |
 
 `.orchestrator/` is private: kickoff keeps it out of Git through the repository's `info/exclude`.
 With the Go runtime, run records, lane and supervisor state, `flip.json`, generated briefs and new

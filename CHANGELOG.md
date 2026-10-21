@@ -19,6 +19,15 @@
   (new nullable `projects.push_id`, migration `0002_projects_push_id.sql`) rather than on the
   snapshot hash and receive time, so the loser is `deferred`.
 - remote/worker: an Access JWT without `exp` is now refused (403) instead of never expiring, and the public-repo guard matches Access team hosts in any case and flags 32-hex Cloudflare account/zone/D1 ids in config files and `account_id`-style lines.
+- plugin: `orch_mailbox_post` takes `recommended` and `blocking`, so a conductor can post a contract-complete
+  question (both runtimes; a question without `recommended` is a tool error). An opencode `conductor` session
+  now beats `.orchestrator/sessions/opencode.json`: `working` from the per-call context hook, `waiting` on
+  opencode's `session.idle` event (read from the promise API's `event.subscribe` async iterable). One write
+  at a time, at most one per 30 s per session; a change inside the interval is written once it ends, latest
+  state wins. An idle from a session that no longer owns the door is ignored. Unloading the plugin waits for
+  the beat in flight and starts no new one, so a reloaded plugin's heartbeat is never overwritten late.
+  Only in a directory that already has `.orchestrator/`; a failed beat is recorded as an incident and never
+  holds up the turn (WT5).
 - go: new Go-only `orch remote init|status|token rotate|token revoke|service-token set` sets up
   this Mac for Work Trains (no network yet). The config lives in `~/.config/orch/remote.json`
   (owner-only, refused inside a git work tree or when group/other can access it; override

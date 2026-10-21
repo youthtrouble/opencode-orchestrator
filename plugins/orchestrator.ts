@@ -4,7 +4,8 @@
 // What it does:
 //   1. Registers "orch" tools: usage_status, delegate, codex_review, mailbox_post, mailbox_list,
 //      manifest_create, manifest_verify, worker_start, worker_status, supervisor.
-//   2. Injects the live subscription budget + role routing into the system prompt of primary agents.
+//   2. Injects the live subscription budget + role routing into the system prompt of primary agents,
+//      and keeps the conductor's session heartbeat (.orchestrator/sessions/opencode.json).
 //   3. Syncs native agents' models from orchestrator/models.json so the audit skill can retarget
 //      everything by editing one file.
 import { spawn } from "node:child_process";
@@ -90,6 +91,10 @@ function run(cmd: string, args: string[], { cwd, input, signal, timeoutMs = 2 * 
   });
 }
 
+function errorText(err: unknown) {
+  return String((err as any)?.message || err);
+}
+
 function parseJsonOrNull(text: string): any {
   try { return JSON.parse(text); } catch { return null; }
 }
@@ -103,10 +108,13 @@ function lastJson(text: string): Json | null {
 // ---- Runtime adapter: the JS libs or the Go `orch` binary behind one interface ------------
 type RuntimeName = "js" | "go";
 type CachedRouting = { usage: Json; stale: boolean; prompt: () => Promise<string> };
-type MailboxMessage = { from: string; to: string; kind: string; subject: string; body: string; refs: string[]; thread: string | null };
+/** `recommended` and `blocking` count only for a question; other kinds ignore them. */
+type MailboxMessage = { from: string; to: string; kind: string; subject: string; body: string; refs: string[]; thread: string | null; recommended: string | undefined; blocking: boolean | undefined };
 type MailboxQuery = { to: string | null; unackedBy: string | null; kind: string | null; limit: number };
 type ManifestRequest = { task: string; author: string; paths: string[]; baseline: string | null };
 type ManifestCreated = { path: string; manifest_sha256: string; file_count: number };
+type BeatState = "working" | "waiting";
+type SessionBeat = { sessionId: string; state: BeatState };
 type IncidentRequest = { component: string; kind: string; summary: string; detail: string; context: Record<string, unknown>; project: string | null | undefined };
 /** How to launch an orchestrator script (claude-exec, worker, flip, ...): `cmd` plus the argv prefix. */
 type ScriptCommand = { cmd: string; args: string[] };
@@ -124,6 +132,8 @@ interface OrchRuntime {
   manifestCreate(root: string, request: ManifestRequest): Promise<ManifestCreated>;
   manifestVerify(root: string, file: string): Promise<any>;
   recordIncident(request: IncidentRequest): Promise<{ fp: string }>;
+  /** Writes the opencode door's heartbeat in root's .orchestrator/sessions/. */
+  sessionBeat(root: string, beat: SessionBeat): Promise<void>;
   command(script: string): ScriptCommand;
 }
 
@@ -215,6 +225,9 @@ async function createJsRuntime(): Promise<OrchRuntime> {
       return (await lib("manifest.mjs")).verifyManifest({ root, manifest: m });
     },
     recordIncident: async (request) => (await lib("incident.mjs")).record(request),
+    async sessionBeat(root, { sessionId, state }) {
+      (await lib("session.mjs")).writeBeat(root, "opencode", { state, sessionId });
+    },
     command: (script) => ({ cmd: NODE, args: [path.join(BIN, `${script}.mjs`)] }),
   };
 }
@@ -321,12 +334,17 @@ function createGoRuntime(bin: string): OrchRuntime {
     },
     // The registry the spawned orch reads; no subcommand needed for a file read.
     registry: () => JSON.parse(fs.readFileSync(ORCH_PATH_ENV.ORCH_REGISTRY ?? path.join(ORCH_PATH_ENV.ORCH_HOME ?? ORCH, "models.json"), "utf8")),
-    async mailboxPost(root, { from, to, kind, subject, body, refs, thread }) {
-      refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs });
-      // A missing from/subject is left out so orch reports it ("post needs from and subject").
+    async mailboxPost(root, { from, to, kind, subject, body, refs, thread, recommended, blocking }) {
+      // orch refuses --recommended and --blocking on any other kind, where the JS lib ignores them.
+      const isQuestion = kind === "question";
+      refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs, ...(isQuestion ? { recommended } : {}) });
+      // A missing from/subject is left out so orch reports it ("post needs from and subject"), as is
+      // a question's missing recommended answer ("a question needs --recommended ...").
       const args = ["mailbox", "post", "--root", root, ...(from === undefined ? [] : ["--from", from]), "--to", to, "--kind", kind, ...(subject === undefined ? [] : ["--subject", subject])];
       if (thread !== null) args.push("--thread", thread);
       for (const ref of refs) args.push("--ref", ref);
+      if (isQuestion && recommended !== undefined) args.push("--recommended", recommended);
+      if (isQuestion && blocking !== undefined) args.push("--blocking", String(blocking));
       args.push("--body", "-", "--json"); // PE-3: only a bare, final --json counts
       return JSON.parse((await callOrch(args, { input: body })).stdout);
     },
@@ -359,6 +377,10 @@ function createGoRuntime(bin: string): OrchRuntime {
       const request = JSON.stringify({ component, kind, summary, detail, context, project: project || null });
       return { fp: JSON.parse((await callOrch(["incident", "record", "--request", "-"], { input: request })).stdout).recorded };
     },
+    async sessionBeat(root, { sessionId, state }) {
+      refuseFlagLike("session beat", { session: sessionId });
+      await callOrch(["session", "beat", "--door", "opencode", "--session", sessionId, "--state", state, "--cwd", root]);
+    },
     command: (script) => ({ cmd: bin, args: [script] }),
   };
 }
@@ -370,7 +392,7 @@ function createBrokenRuntime(name: RuntimeName | null, error: OrchConfigError): 
   return {
     name, binary: null, registry: fail, command: fail,
     routing: failAsync, cachedRouting: failAsync, effortFor: failAsync, budgetGate: failAsync,
-    mailboxPost: failAsync, mailboxList: failAsync, manifestCreate: failAsync, manifestVerify: failAsync, recordIncident: failAsync,
+    mailboxPost: failAsync, mailboxList: failAsync, manifestCreate: failAsync, manifestVerify: failAsync, recordIncident: failAsync, sessionBeat: failAsync,
   };
 }
 
@@ -383,6 +405,77 @@ async function createRuntime(options: any): Promise<OrchRuntime> {
     if (err instanceof OrchConfigError) return createBrokenRuntime(name, err);
     throw err;
   }
+}
+
+// One beat per 30 s per session at most (D14); only the tests shorten it.
+const BEAT_INTERVAL_MS = Number(process.env.ORCH_PLUGIN_BEAT_INTERVAL_MS) || 30 * 1000;
+
+type Heartbeat = {
+  working(sessionId: string): void;
+  idle(sessionId: string): void;
+  /** Starts no more writes and settles once the write in flight (and its failure report) has. */
+  stop(): Promise<void>;
+};
+
+/**
+ * The opencode door's heartbeat for one project. Requests only record the state wanted; a single
+ * writer turns them into beats, so the door file sees one write at a time, in request order, and at
+ * most one per BEAT_INTERVAL_MS per session. A request inside the interval is coalesced into one
+ * trailing write of the latest state, so an idle that follows a turn closely still lands. The
+ * session that last worked owns the door: an idle from any other session is stale and ignored.
+ * A failed write is reported and not retried by itself; the next request after the interval retries.
+ * Stopping waits for the write in flight: a reloaded plugin starts its own writer, which an unloaded
+ * one finishing late would otherwise overwrite.
+ */
+function createHeartbeat(write: (beat: SessionBeat) => Promise<void>, reportFailure: (beat: SessionBeat, err: unknown) => Promise<void>): Heartbeat {
+  let owner: string | null = null;
+  let wanted: SessionBeat | null = null;
+  let written: SessionBeat | null = null;
+  const attemptedAt = new Map<string, number>();
+  let inFlight: Promise<void> | null = null;
+  let trailing: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+
+  const sinceAttempt = (sessionId: string) => Date.now() - (attemptedAt.get(sessionId) ?? -Infinity);
+
+  function request(beat: SessionBeat) {
+    wanted = beat;
+    schedule();
+  }
+
+  function schedule() {
+    if (stopped || inFlight || trailing || !wanted) return;
+    const wait = BEAT_INTERVAL_MS - sinceAttempt(wanted.sessionId);
+    if (wait <= 0) { flush(); return; }
+    // The same state written within the interval needs no refresh yet.
+    if (written?.sessionId === wanted.sessionId && written.state === wanted.state) { wanted = null; return; }
+    trailing = setTimeout(() => { trailing = null; schedule(); }, wait);
+    trailing.unref?.();
+  }
+
+  function flush() {
+    const beat = wanted as SessionBeat;
+    wanted = null;
+    attemptedAt.set(beat.sessionId, Date.now());
+    inFlight = write(beat)
+      .then(() => { written = beat; }, (err) => reportFailure(beat, err))
+      .finally(() => { inFlight = null; schedule(); });
+  }
+
+  return {
+    working(sessionId) {
+      owner = sessionId;
+      request({ sessionId, state: "working" });
+    },
+    idle(sessionId) {
+      if (sessionId === owner) request({ sessionId, state: "waiting" });
+    },
+    async stop() {
+      stopped = true;
+      if (trailing) clearTimeout(trailing);
+      await inFlight;
+    },
+  };
 }
 
 const ROLE_TO_NATIVE_AGENT: Record<string, string> = { planner: "architect-oai", coder: "coder-oai", reviewer: "reviewer-oai", verifier: "verifier-oai", researcher: "researcher-oai", explorer: "explore", utility: "general" };
@@ -525,10 +618,10 @@ export default {
 
       add({
         name: "mailbox_post",
-        description: "Post a durable message to the project mailbox (.orchestrator/mailbox). Use kinds: brief, release, review, closure, question, handoff, blocked, note.",
-        input: { type: "object", required: ["from", "subject"], properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" }, kind: { type: "string" }, subject: { type: "string" }, body: { type: "string" }, refs: { type: "array", items: { type: "string" } }, thread: { type: "string" } } },
+        description: "Post a durable message to the project mailbox (.orchestrator/mailbox). Use kinds: brief, release, review, closure, question, handoff, blocked, note. A question requires `recommended`, a complete reply the human can accept as it stands, and takes `blocking` (default true): whether you are blocked until it is answered.",
+        input: { type: "object", required: ["from", "subject"], properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" }, kind: { type: "string" }, subject: { type: "string" }, body: { type: "string" }, refs: { type: "array", items: { type: "string" } }, thread: { type: "string" }, recommended: { type: "string", description: "For a question (required there): the answer you recommend" }, blocking: { type: "boolean", description: "For a question: whether it blocks you (default true)" } } },
         async execute(input: any, c: any) {
-          const m = await rt.mailboxPost(cwdOf(input, c), { from: input.from, to: input.to || "*", kind: input.kind || "note", subject: input.subject, body: input.body || "", refs: input.refs || [], thread: input.thread || null });
+          const m = await rt.mailboxPost(cwdOf(input, c), { from: input.from, to: input.to || "*", kind: input.kind || "note", subject: input.subject, body: input.body || "", refs: input.refs || [], thread: input.thread || null, recommended: input.recommended, blocking: input.blocking });
           return { content: `posted ${m.id}`, metadata: m };
         },
       });
@@ -621,6 +714,7 @@ export default {
     const PRIMARY = new Set(["conductor", "build", "plan"]);
     await ctx.session.hook("context", async (e: any) => {
       if (!PRIMARY.has(String(e.agent))) return;
+      if (String(e.agent) === "conductor" && e.sessionID) beatWorking(String(e.sessionID));
       try {
         const cached = await rt.cachedRouting();
         if (!cached || cached.stale) refreshSoon();
@@ -628,6 +722,40 @@ export default {
         if (lastSummary) e.system.push({ type: "text", text: `<orchestrator_budget updated="${cached?.usage.generated_at || "unknown"}">\n${lastSummary}\nRules: never start frontier-planning or large batches when the relevant window is red; prefer the vendor with headroom; schedule heavy work after the nearest reset; cross-vendor review is the default. Use orch_usage_status for fresh numbers.\n</orchestrator_budget>` });
       } catch { /* never block the turn on budget data */ }
     });
+
+    // ---- 2a. Conductor session heartbeat (the opencode twin of the Claude conductor's hooks) -
+    // opencode v2 has no per-user-message plugin hook, so `working` rides the context hook, which runs
+    // before every model call of a primary agent; `waiting` comes from the session.idle bus event.
+    const projectRoot = ctx.location?.directory || process.cwd();
+    const heartbeat = createHeartbeat(
+      (beat) => rt.sessionBeat(projectRoot, beat),
+      (beat, err) => reportPluginFailure(`session beat failed: ${errorText(err).slice(0, 160)}`, { session: beat.sessionId }),
+    );
+    // As in Claude Code hook mode, a chat outside a project must not create project state.
+    const isProject = () => fs.existsSync(path.join(projectRoot, ".orchestrator"));
+    function beatWorking(sessionId: string) {
+      if (isProject()) heartbeat.working(sessionId);
+    }
+    async function reportPluginFailure(summary: string, context: Record<string, unknown>) {
+      try {
+        await rt.recordIncident({ component: "plugin", kind: "bug", summary, detail: "", context, project: projectRoot });
+      } catch (incidentErr) {
+        console.warn(`[orchestrator] ${summary}; its incident was not recorded: ${errorText(incidentErr)}`);
+      }
+    }
+    // The promise API's event.subscribe returns an endless async iterable, so it is pumped in the
+    // background and ended through the signal when the plugin unloads.
+    const eventsLifetime = new AbortController();
+    async function pumpIdleEvents(signal: AbortSignal) {
+      try {
+        for await (const event of ctx.event.subscribe({ signal }) as AsyncIterable<any>) {
+          if (event?.type === "session.idle" && typeof event.data?.sessionID === "string") heartbeat.idle(event.data.sessionID);
+        }
+      } catch (err) {
+        if (!signal.aborted) await reportPluginFailure(`event subscription failed: ${errorText(err).slice(0, 160)}`, {});
+      }
+    }
+    void pumpIdleEvents(eventsLifetime.signal);
 
     // ---- 2b. Budget gate for native subagents + learn from provider limit errors ----------
     const NATIVE_OPENAI_AGENTS = new Set(Object.keys(NATIVE_AGENT_TIER));
@@ -702,6 +830,9 @@ export default {
       }
     }
 
-    return async () => { /* nothing to clean up */ };
+    return async () => {
+      eventsLifetime.abort();
+      await heartbeat.stop();
+    };
   },
 };

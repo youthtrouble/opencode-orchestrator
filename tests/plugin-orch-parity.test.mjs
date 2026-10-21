@@ -45,14 +45,14 @@ before(() => {
  * `seed(sandbox)` writes the case's project files; `run(plugin, sandbox)` drives the plugin.
  * The plugin reads HOME lazily, so each side runs to completion before the other is loaded.
  */
-async function differential(t, { usage = usageFixture("green"), seed = () => {}, run }) {
+async function differential(t, { usage = usageFixture("green"), seed = () => {}, run, env = {} }) {
   const sides = {};
   for (const runtime of ["js", "go"]) {
     const sandbox = createSandbox(t, { runtime, usage, cache: null, fakeOrchOnPath: false, realScripts: true });
     seed(sandbox);
     const plugin = runtime === "js"
-      ? await loadPlugin(t, sandbox)
-      : await loadPlugin(t, sandbox, { options: { runtime: "go", binary: orchBin }, env: { ORCH_HOME: sandbox.orchestrator, ORCH_REGISTRY: path.join(sandbox.orchestrator, "models.json") } });
+      ? await loadPlugin(t, sandbox, { env })
+      : await loadPlugin(t, sandbox, { options: { runtime: "go", binary: orchBin }, env: { ...env, ORCH_HOME: sandbox.orchestrator, ORCH_REGISTRY: path.join(sandbox.orchestrator, "models.json") } });
     sides[runtime] = { sandbox, result: await run(plugin, sandbox) };
     assert.deepEqual(poisonHits(sandbox), [], `${runtime}: no poisoned lib or script may run`);
   }
@@ -130,6 +130,19 @@ describe("plugin against the real orch", { skip }, () => {
       assert.match(at, ISO_MS);
       side.result = JSON.parse(JSON.stringify(side.result).replaceAll(id, "$ID").replaceAll(at, "$AT"));
     }
+    assertSameAfterNormalizing(sides);
+  });
+
+  test("mailbox_post of a question stores recommended and blocking the same way", async (t) => {
+    const sides = await differential(t, {
+      run: (plugin) => outcome(plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "ship?", recommended: "Ship it.", blocking: false })),
+    });
+    for (const side of Object.values(sides)) {
+      const { id, at } = side.result.metadata;
+      side.result = JSON.parse(JSON.stringify(side.result).replaceAll(id, "$ID").replaceAll(at, "$AT"));
+    }
+    assert.equal(sides.go.result.metadata.recommended, "Ship it.");
+    assert.equal(sides.go.result.metadata.blocking, false);
     assertSameAfterNormalizing(sides);
   });
 
@@ -231,6 +244,29 @@ describe("plugin against the real orch", { skip }, () => {
     const cacheWritten = (side) => fs.existsSync(stateFile(side.sandbox, "usage.json"));
     assert.ok(await waitFor(() => cacheWritten(sides.js) && cacheWritten(sides.go), 60000), "both runtimes collect when there is no cache");
     await new Promise((r) => setTimeout(r, 500));
+  });
+
+  // The idle follows at once, so the waiting beat is queued behind the working write in flight.
+  test("conductor heartbeat: working then an immediate idle writes the same sessions/opencode.json", async (t) => {
+    const readBeat = (sandbox) => {
+      try { return JSON.parse(fs.readFileSync(path.join(sandbox.project, ".orchestrator", "sessions", "opencode.json"), "utf8")); } catch { return null; }
+    };
+    const sides = await differential(t, {
+      env: { ORCH_PLUGIN_BEAT_INTERVAL_MS: "200" },
+      seed: (sandbox) => fs.mkdirSync(path.join(sandbox.project, ".orchestrator"), { recursive: true }),
+      run: async (plugin, sandbox) => {
+        await plugin.context("conductor", "ses_parity");
+        plugin.emit({ type: "session.idle", data: { sessionID: "ses_parity" } });
+        assert.ok(await waitFor(() => readBeat(sandbox)?.state === "waiting", 5000), "the waiting beat lands");
+        await new Promise((r) => setTimeout(r, 500));
+        assert.equal(readBeat(sandbox).state, "waiting", "no late working write overtakes it");
+        const record = readBeat(sandbox);
+        assert.match(record.updated_at, ISO_MS);
+        return { ...record, updated_at: "<at>" };
+      },
+    });
+    assert.deepEqual(sides.go.result, { door: "opencode", session_id: "ses_parity", state: "waiting", now: null, slice: null, progress: null, updated_at: "<at>" });
+    assert.deepEqual(sides.go.result, sides.js.result);
   });
 
   test("execute.before with a red OpenAI cache throws the same message", async (t) => {
