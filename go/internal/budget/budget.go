@@ -112,10 +112,10 @@ func (g gateRequest) decide(r *usage.Routing) Decision {
 	return Decision{Allowed: true, Level: level, Routing: r}
 }
 
-// confirmOnFreshReading is confirmOnFreshReading: the cached reading behind routing can be
-// minutes old, so a credit draw (OpenAI only) is decided again on a fresh one, which checks
-// the floor against the balance actually left. With no fresh Codex reading the draw is
-// refused (fail closed), as credits are money.
+// confirmOnFreshReading mirrors confirmOnFreshReading in orchestrator/lib/budget.mjs: the
+// cached reading behind routing can be minutes old, so a credit draw (OpenAI only) is decided
+// again on a fresh one, which checks the floor against the balance actually left. With no
+// fresh Codex reading the draw is refused (fail closed), as credits are money.
 func (g gateRequest) confirmOnFreshReading(cfg usage.Config) (Decision, error) {
 	r, err := usage.GetRouting(cfg, true)
 	var spawnErr *usage.SpawnError
