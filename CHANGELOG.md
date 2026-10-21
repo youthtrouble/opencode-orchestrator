@@ -18,6 +18,23 @@
   can't send answers" and the banner links to `PUBLIC_ORIGIN`; an unlisted email says so; a 403 without a reason says "Not
   allowed"; only a lapsed sign-in says "Signed out. Reload to sign in". Rollout: rebuild `orch` first, then deploy the Worker; in the other order,
   accepts tapped in between are refused, not misapplied.
+- remote: GitHub Actions deploys Work Trains (WT24). The new `.github/workflows/remote-deploy.yml` runs after the
+  Remote workflow passes on a push to main, and on demand with an optional `sha` (redeploy or roll back). It reads
+  everything from a GitHub environment, `work-trains-production` (secrets `CLOUDFLARE_API_TOKEN` and
+  `CLOUDFLARE_ACCOUNT_ID`; variables `WORK_TRAINS_D1_ID`, `WORK_TRAINS_HOSTNAME` and optional
+  `WORK_TRAINS_WORKERS_DEV`). A repository without that environment skips with a notice, and an incomplete one
+  fails. A run renders `wrangler.deploy.jsonc` from the example (`remote/worker/scripts/render-deploy-config.ts`),
+  and skips when nothing under `remote/worker/` or `remote/protocol/` changed since the live commit. Each deploy
+  records its commit as the version message, which is how the next run finds the live commit. The run refuses
+  an edited migration (`scripts/deploy-plan.sh`), applies D1 migrations, deploys, and runs a credential-free
+  smoke check (`scripts/smoke-check.ts`): the page must redirect to Access, and a machine route must refuse. If
+  the smoke check fails, the run rolls back to the previous version and fails. Worker secrets, Access and DNS
+  stay manual. `wrangler` 4.118.0 is now a devDependency of `remote/worker`, pinned by its lockfile, and the
+  e2e CI job uses it instead of `npm i -g`. Token scope, environment setup and rollback are in
+  [remote/README.md](remote/README.md#deploy-from-github-actions). The conductor contract (AGENTS.md and
+  `claude/agents/conductor.md`, "Keeping the live checkout current", now covered by the word-identical test) no
+  longer counts a deploy that a configured workflow runs after a push as an `ask` item: conductors push and watch
+  the run.
 - remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
   (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills
   every node through one helper that drops absent children the way `el` does. A new page test,

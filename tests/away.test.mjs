@@ -9,6 +9,7 @@ const repo = path.dirname(path.dirname(new URL(import.meta.url).pathname));
 const read = (rel) => fs.readFileSync(path.join(repo, rel), "utf8");
 const awayHeading = "## Going away (`/away`)";
 const questionsHeading = "## Questions for the human";
+const liveCheckoutHeading = "## Keeping the live checkout current";
 
 function frontmatter(rel) {
   const match = /^---\n([\s\S]*?)\n---\n/.exec(read(rel));
@@ -46,7 +47,7 @@ test("/away is an opencode command for the conductor and a Claude skill only the
   for (const rel of ["commands/away.md", "claude/skills/away/SKILL.md"]) assert.match(read(rel), /\$ARGUMENTS/);
 });
 
-for (const heading of [awayHeading, questionsHeading]) {
+for (const heading of [awayHeading, questionsHeading, liveCheckoutHeading]) {
   test(`"${heading}" is word-identical in both contracts`, () => {
     assert.equal(section("claude/agents/conductor.md", heading), section("AGENTS.md", heading));
   });

@@ -38,10 +38,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
-      - name: Install wrangler (the version the end-to-end test was written against)
-        run: npm i -g wrangler@4.118.0
-      - name: Install the Worker's dependencies
+      - name: Install the Worker's dependencies (wrangler pinned by package-lock.json)
         working-directory: remote/worker
-        run: npm ci
+        run: |
+          npm ci
+          echo "$PWD/node_modules/.bin" >>"$GITHUB_PATH"
       - name: End-to-end test
         run: node --test 'remote/e2e/*.test.ts'

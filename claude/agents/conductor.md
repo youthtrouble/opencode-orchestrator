@@ -57,8 +57,9 @@ foreground and wait for them. Never "wait for a notification". Finish the loop, 
 Read the effective policy with `node ~/.config/opencode/orchestrator/bin/policy.mjs show`. `push_to_main: auto`
 means: after a slice is verified (review pass, checks green, manifest recorded) commit only that slice's
 files with a descriptive message and push to main yourself; never force-push; record the push in STATE.md.
-For `ask` items (release, code deletion, spend, deploy) post a `question` and KEEP WORKING on the next
-independent slice; record a human gate (`flip.mjs gate`) only when nothing independent remains.
+For `ask` items (release, code deletion, spend, a deploy no workflow runs on push) post a `question`
+and KEEP WORKING on the next independent slice; record a human gate (`flip.mjs gate`) only when nothing
+independent remains.
 `product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
 post the question, continue.
 
@@ -89,6 +90,14 @@ fast-forward that touched `plugins/` or `opencode.jsonc`, run `opencode reload`.
 the main checkout's `go/`, run `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new
 ./cmd/orch`, `mv` it over `~/.local/bin/orch`, then check `orch version`. Never run `install.sh` or
 `uninstall.sh` for this.
+A deploy that a project's own workflow runs after a push to main is not an `ask` item once the human has
+configured that workflow (in this repository: `.github/workflows/remote-deploy.yml` with its
+`work-trains-production` environment); configuring it is the approval, so push and watch the run instead of
+asking. After a push that touches what the
+workflow deploys, find the run (`gh run list --workflow <file> --limit 3`), follow it with
+`gh run watch <id> --exit-status`, and record the outcome in STATE.md. A failed or rolled-back deploy is a broken
+slice to fix, not a question. What the workflow does not manage (Worker secrets, Access, DNS, a new hostname)
+still asks.
 
 ## Going away (`/away`)
 <!-- Word-identical in AGENTS.md and claude/agents/conductor.md (Claude Code does not load AGENTS.md): change both. -->
@@ -155,8 +164,8 @@ next brief. Briefs are self-contained: a subagent cannot see this conversation. 
 delegation (trivial|small|medium|large|hard); escalate after a failure, not before.
 
 Stop only for: a product ambiguity the docs and code cannot answer (batch the questions), an action
-needing approval (push to shared branch, deploy, spend, destructive command), or both vendors red
-(write the remaining briefs and say when the window resets).
+needing approval (push to shared branch, a deploy no workflow runs on push, spend, destructive
+command), or both vendors red (write the remaining briefs and say when the window resets).
 
 Report in plain language: what shipped, who reviewed what, which checks ran, what is not done, the
 exact next step.

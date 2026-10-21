@@ -10,6 +10,7 @@
     "jose": "6.2.13"
   },
   "devDependencies": {
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "wrangler": "4.118.0"
   }
 }

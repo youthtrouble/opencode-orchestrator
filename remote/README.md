@@ -2,7 +2,8 @@
 
 Work Trains is a private status page for your orchestrator projects, reachable from your phone. What it is, what it
 costs and what leaves your Mac are in the [root README](../README.md#remote-status-work-trains); this page is the
-operator detail: the Cloudflare Access setup, the deploy, the Mac side's files, and the tests.
+operator detail: the Cloudflare Access setup, the deploy (by hand or from GitHub Actions), the Mac side's files, and the
+tests.
 
 | Directory | What it is |
 |---|---|
@@ -17,7 +18,8 @@ your domain, team name, AUD tag, account or database id, email address or any to
 ## Before you start
 
 - A Cloudflare account with your domain on it. Every product used here has a free plan.
-- `wrangler` (checked with 4.118.0) and Node 26, for the deploy.
+- Node 26, for the deploy. `npm ci` in `remote/worker` installs the pinned `wrangler` (4.118.0, in its
+  `package-lock.json`); run it as `npx wrangler` there, or put `remote/worker/node_modules/.bin` on your PATH.
 - An `orch` that has `orch remote` (`orch remote --help` prints its usage): a release after v0.5.0, or one built from
   `main`.
 - Setup order: Access (1) -> D1 and deploy (2) -> machine token and Worker secrets (2) -> `orch remote init` (3) ->
@@ -106,6 +108,88 @@ never". `wrangler deployments list -c wrangler.deploy.jsonc` lists the deploymen
 **Roll back** with `wrangler rollback -c wrangler.deploy.jsonc` (the previous version). Access keeps the hostname
 closed either way.
 
+To deploy every verified push to main without running wrangler yourself, set up
+[Deploy from GitHub Actions](#deploy-from-github-actions) once.
+
+## Deploy from GitHub Actions
+
+Once set up, `.github/workflows/remote-deploy.yml` deploys the Worker whenever the Remote workflow passes on a push
+to main, and on demand. The workflow names no instance: everything comes from a GitHub **environment** called
+`work-trains-production`. A repository without that environment, such as a fork, skips the deploy with a notice
+and fails nothing.
+
+**What a run does.** It checks out the exact commit the Remote workflow tested (refusing one that is not on main),
+runs `npm ci` (wrangler is pinned by `remote/worker/package-lock.json`), and renders `wrangler.deploy.jsonc` from
+[`wrangler.deploy.example.jsonc`](worker/wrangler.deploy.example.jsonc) with `scripts/render-deploy-config.ts`.
+The rendered file is never committed or printed, and the D1 id and hostname are masked in the log. Then it reads
+which commit is live: every CI deploy stores its commit as the version's message (`wrangler deploy --message
+<sha>`). A push that changed nothing under `remote/worker/` or `remote/protocol/` since then deploys nothing.
+Otherwise the run applies D1 migrations (`wrangler d1 migrations apply --remote`), deploys, and runs a smoke
+check that uses no credentials. The check passes when `GET /` redirects to `*.cloudflareaccess.com` and
+`GET /api/v1/machine/pull` is refused. If the smoke check fails, the run rolls back to the version that was live
+before and fails. The run's summary has the commit and version ids.
+
+**Migrations are add-only.** The plan step fails the run if a migration file that is already live was edited:
+D1 records applied migrations by name, so an edit would never run. Add a new numbered file instead. A rollback
+does not undo migrations, so each one must keep the previous Worker version working (add tables and columns;
+do not rename or drop them in the same release).
+
+**What CI does not manage.** Worker secrets (`wrangler secret put`), the Access application and policies, the
+service token, DNS, and Email Routing. They stay as you set them in Cloudflare, and changing them is still done by
+hand as in steps 1 and 2. The custom domain is the exception: the deploy keeps it the way the hostname variable
+says (see [Moving to another hostname](#moving-to-another-hostname)).
+
+**API token.** Create a token limited to this account and zone. In the dashboard, open **My Profile > API Tokens >
+Create Token > Custom token > Get started** and set:
+
+| Permission | Why |
+|---|---|
+| Account / Workers Scripts / Edit | Upload and deploy the Worker, its versions and rollback, the custom domain, workers.dev on or off |
+| Account / D1 / Edit | `wrangler d1 migrations apply --remote` |
+| Zone / Zone / Read | Only when `workers_dev` is false: wrangler then finds the zone of each route, custom domain included (`GET /zones`) |
+| Zone / Workers Routes / Read | The same case: wrangler lists the zone's Worker routes to refuse one another Worker holds |
+
+Under **Account Resources** include only your account; under **Zone Resources** include only your domain's
+zone. Account Settings, Memberships and User Details are not needed, because `CLOUDFLARE_ACCOUNT_ID` is set and
+wrangler does not have to look the account up. Neither DNS nor Access permissions are needed: the custom domain
+and its DNS record already exist. Sources:
+[GitHub Actions for Workers](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/),
+[API token permissions](https://developers.cloudflare.com/fundamentals/api/reference/permissions/), and the API
+reference for [Attach to Domain](https://developers.cloudflare.com/api/resources/workers/subresources/domains/methods/update/)
+(Workers Scripts Write), [List Zones](https://developers.cloudflare.com/api/resources/zones/methods/list/) (Zone Read),
+[List Routes](https://developers.cloudflare.com/api/resources/workers/subresources/routes/methods/list/) (Workers
+Routes Read) and [D1 query](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/query/).
+The zone lookup is in wrangler 4.118's own deploy code, not in Cloudflare's docs. If a deploy fails with an
+authentication error at the "Custom domains" stage, add **Zone / Workers Routes / Edit** for the zone and say so in
+an issue.
+
+**Environment.** **GitHub > your repository > Settings > Environments > New environment** named
+`work-trains-production`. Under **Deployment branches and tags**, choose **Selected branches and tags** and add
+`main`. A required reviewer would hold every deploy until someone approves it, so add one only if you want that.
+Then add:
+
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `CLOUDFLARE_API_TOKEN` | The token above |
+| Secret | `CLOUDFLARE_ACCOUNT_ID` | Your account id (**Workers & Pages** overview, right column) |
+| Variable | `WORK_TRAINS_D1_ID` | The `database_id` that `wrangler d1 create` printed |
+| Variable | `WORK_TRAINS_HOSTNAME` | `trains.example.com` (yours; no scheme or slash) |
+| Variable | `WORK_TRAINS_WORKERS_DEV` | Optional: `true` keeps the workers.dev URL answering; unset means `false` |
+
+With `gh`, pass each value on stdin so it never appears in argv or shell history:
+`gh secret set CLOUDFLARE_API_TOKEN --env work-trains-production` (it prompts) and
+`printf '%s' "$value" | gh variable set WORK_TRAINS_D1_ID --env work-trains-production`. An environment that
+exists but lacks a secret or variable fails the run instead of skipping it.
+
+**First run.** **Actions > Remote deploy > Run workflow** on `main` (or `gh workflow run remote-deploy.yml --ref
+main`, then `gh run watch`). Its plan warns that the live version names no commit, since it was deployed by hand,
+and deploys the head of main. Compare `wrangler deployments status` before and after.
+
+**Redeploy or roll back.** Run the workflow by hand with the `sha` input set to the full SHA of any commit on main.
+An older commit rolls the code back, but not the migrations. For an immediate rollback without a build, run
+`wrangler rollback -c wrangler.deploy.jsonc` by hand: the next CI deploy then finds that the live version names an
+older commit and diffs against it.
+
 ## 3. Configure the Mac
 
 ```sh
@@ -150,7 +234,9 @@ resume, hide) from any other origin is refused, and notification emails link to 
    dashboard: `"routes": [{ "pattern": "trains.example.com", "custom_domain": true }]`. The config is the source of
    truth: a `wrangler deploy` whose `routes` list custom domains replaces the Worker's custom domains with that
    list (wrangler 4.118; with no `routes` it leaves them alone). Keep `"workers_dev": true` while you move if the
-   old URL should keep answering.
+   old URL should keep answering. If [GitHub Actions deploys](#deploy-from-github-actions) for you, set the
+   environment's `WORK_TRAINS_HOSTNAME` (and `WORK_TRAINS_WORKERS_DEV`) instead, and in step 4 set the secret,
+   then run the workflow rather than `wrangler deploy`.
 4. **Worker**: point it at the new origin and deploy:
 
    ```sh
@@ -221,12 +307,12 @@ resumes applied from the page. Field-level detail is in [go/README.md](../go/REA
 
 ```sh
 node --test 'remote/protocol/test/*.test.ts'          # protocol: schema, examples, Go goldens
-(cd remote/worker && npm ci && npm test && npm run typecheck)   # Worker; npm test includes the public-repo guard
+(cd remote/worker && npm ci && npm test && npm run typecheck)   # Worker and deploy scripts; includes the public-repo guard
 node --test 'remote/e2e/*.test.ts'                    # end to end, about 90 s
 ```
 
-Run them from the repository root. The end-to-end test needs Go, Node 26, `npm ci` in `remote/worker` and a
-`wrangler` on PATH (CI pins 4.118.0 with `npm i -g wrangler@4.118.0`); it uses no Cloudflare account. Name the files
+Run them from the repository root. The end-to-end test needs Go, Node 26, and `npm ci` in `remote/worker` with
+`remote/worker/node_modules/.bin` on PATH (the pinned wrangler, as CI does); it uses no Cloudflare account. Name the files
 with a glob as above: Node 26 does not accept a directory there. The guard (`worker/test/guard.test.ts`) fails on an
 email address, an Access team host, a UUID or long hex value, or a 32-hex Cloudflare id in config files, outside the
 placeholders, in tracked files under `remote/`; run it before every commit that touches them.

@@ -66,7 +66,9 @@ cannot ask you in a chat, so it uses the mailbox: a shared inbox file in your pr
 and for each other, and where your answers go. Questions come in two kinds:
 
 - **Blocking:** releases, deleting code, spending money, deploying. The conductor asks, keeps
-  working on anything independent, and stops at a human gate only when nothing else is left.
+  working on anything independent, and stops at a human gate only when nothing else is left. A
+  deploy that a configured workflow runs on its own after a push to main (such as Work Trains'
+  `remote-deploy.yml`) is not asked about: the conductor pushes and watches that run.
 - **Continuing with an assumption:** product questions. The conductor writes its assumption into
   `STATE.md` and the report, asks, and carries on. Answer when you can; it reads your reply on its
   next turn.
@@ -400,7 +402,8 @@ an hour of page use 240), under 5% of the allowance; even with every project cha
 under the allowance up to 67 projects. D1 writes stay well under 5,000/day (the worst case fits up to 34 projects);
 reads are under 0.1% for 10 projects. Notification emails are capped at 20 a day.
 
-**Set it up.** You need a Cloudflare account with your domain on it, `wrangler`, and an `orch` that has `orch remote`
+**Set it up.** You need a Cloudflare account with your domain on it, Node 26 (`npm ci` in `remote/worker` installs
+the pinned `wrangler`), and an `orch` that has `orch remote`
 (a release after v0.5.0, or built from `main`). Then, in order, following [remote/README.md](remote/README.md):
 
 1. Create the Access application, one-time PIN login and a service token; store the token with
@@ -411,6 +414,12 @@ reads are under 0.1% for 10 projects. Notification emails are capped at 20 a day
    `--root`).
 4. Install the LaunchAgent that `orch remote launchd` prints.
 5. First sync: `orch remote status` shows a recent `last push`, and the page lists your projects.
+
+Optionally, let GitHub Actions deploy the Worker after every push to main that passes the Remote workflow. Create a
+`work-trains-production` environment with a Cloudflare token and your instance's ids, as described in
+[Deploy from GitHub Actions](remote/README.md#deploy-from-github-actions). Without that environment, as in a fork,
+the deploy workflow skips. Conductors then push and watch the deploy run instead of asking you to deploy. Worker
+secrets, Access and DNS stay manual.
 
 **Daily use.** Open the page (add it to your home screen). On the Mac, `orch remote status` shows the config, the
 Keychain items, the last push, pull and error, and the projects found. The sync loop logs to
@@ -477,8 +486,8 @@ Keychain items, the last push, pull and error, and the projects found. The sync 
 | [go/README.md](go/README.md#orch-remote-go-only) | `orch remote`, the Mac side of Work Trains: `init`, `status`, `push --dry-run` (prints exactly what a push would send and sends nothing), `once` / `serve` (the sync loop) and `launchd` (prints the LaunchAgent plist that keeps `serve` running) |
 | [remote/protocol/README.md](remote/protocol/README.md) | The Work Trains wire protocol: the versioned v1 JSON Schema, its validator and examples; test with `node --test 'remote/protocol/test/*.test.ts'` |
 | [remote/README.md](remote/README.md) | Work Trains operator guide: Cloudflare Access steps, D1 and deploy, the Mac's config, Keychain items and state files, the tests |
-| [remote/worker/](remote/worker/) | The Work Trains Cloudflare Worker, which you deploy to your own account: the Access auth gate, the D1 migrations, the machine API (push, pull, ack), the browser API (summary, answer, pause/resume, undo, hide) and the email notifier; test with `npm ci && npm test && npm run typecheck` in that directory |
-| [remote/e2e/](remote/e2e/) | The Work Trains end-to-end test: the Worker under `wrangler dev --local` on a temp D1, behind a local Access emulator, driven by the real `orch remote once` and a simulated phone (about 90 s; needs Go, Node 26 and `npm ci` in `remote/worker`, plus a `wrangler` on PATH, which no package installs: CI pins 4.118.0 with `npm i -g wrangler@4.118.0`); run `node --test 'remote/e2e/*.test.ts'` |
+| [remote/worker/](remote/worker/) | The Work Trains Cloudflare Worker, which you deploy to your own account (by hand or with `.github/workflows/remote-deploy.yml`): the Access auth gate, the D1 migrations, the machine API (push, pull, ack), the browser API (summary, answer, pause/resume, undo, hide), the email notifier and the deploy scripts; test with `npm ci && npm test && npm run typecheck` in that directory |
+| [remote/e2e/](remote/e2e/) | The Work Trains end-to-end test: the Worker under `wrangler dev --local` on a temp D1, behind a local Access emulator, driven by the real `orch remote once` and a simulated phone (about 90 s; needs Go, Node 26 and `npm ci` in `remote/worker`, with `remote/worker/node_modules/.bin` on PATH for the wrangler that package pins); run `node --test 'remote/e2e/*.test.ts'` |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
