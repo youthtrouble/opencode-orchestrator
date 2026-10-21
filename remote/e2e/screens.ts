@@ -88,7 +88,6 @@ class Cleanup {
 async function main(): Promise<void> {
   const { out, chrome } = parseCli();
   validateFixtures();
-  mkdirSync(out, { recursive: true });
 
   const cleanup = new Cleanup();
   const stopOnSignal = (signal: keyof typeof SIGNAL_EXIT_CODES) => {
@@ -114,10 +113,12 @@ async function main(): Promise<void> {
         shots.push({ file: join(out, `${state}-${device.name}.png`), png: await shoot(tab, `${fixtureServer.origin}/`, device) });
       }
     }
-    // Checked before anything is written, so a run that left loopback leaves no shots behind.
+    // Checked before anything is written, so a run that left loopback leaves no shots behind. The output
+    // directory is created only now, so no failed run leaves an empty one either.
     if (foreignRequests.length > 0) {
       throw new ScreensError(`the page requested other origins than the fixture server: ${foreignRequests.join(", ")}`);
     }
+    mkdirSync(out, { recursive: true });
     for (const { file, png } of shots) {
       writeFileSync(file, png);
       console.log(file);

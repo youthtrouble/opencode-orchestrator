@@ -343,6 +343,7 @@ over the DevTools protocol, and writes `<state>-<phone|desktop>.png` for the sta
 fixture is not a valid `Summary`. Chrome runs with its background services off and a proxy that refuses every
 connection off loopback, so such a request fails instead of leaving the machine; if the page's tab requests
 anything off loopback, the run fails and writes no shots (other targets, such as service workers, are not watched).
+The output directory is created only once every shot is taken and checked, so a failed run leaves no empty one.
 Chrome is `--chrome`, else `$CHROME`, else, on macOS only, Google Chrome in `/Applications` or Playwright's
 `chrome-headless-shell` for Apple silicon; elsewhere pass `--chrome` or set `CHROME`. Ctrl-C or SIGTERM stops Chrome
 and removes its temporary profile. It is not a test, so CI never needs Chrome; and Chrome is not iOS Safari (no
