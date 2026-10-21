@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/ci"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/config"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/discover"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/keychain"
@@ -367,7 +369,19 @@ func remotePush(args []string, env remoteEnv, stdio Stdio) error {
 	for _, scanErr := range scanErrs {
 		fmt.Fprintf(stdio.Err, "orch remote: skipped %s\n", scanErr)
 	}
-	snapshots := buildSnapshots(projects, snapshot.Env{MachineID: st.MachineID, Home: env.home, Now: now, Alive: worker.Alive}, stdio.Err)
+	snapshotEnv := snapshot.Env{MachineID: st.MachineID, Home: env.home, Now: now, Alive: worker.Alive, CI: snapshot.NoCI{}}
+	var ciCache *ci.Cache
+	if cfg.CI {
+		// The cached runs, else gh's; the refreshed entries are not saved (a dry run writes nothing).
+		ciCache = ci.NewCache(context.Background(), st.MachineID, env.home, now, st.CI)
+		snapshotEnv.CI = ciCache
+	}
+	snapshots := buildSnapshots(projects, snapshotEnv, stdio.Err)
+	if ciCache != nil {
+		for _, note := range ciCache.Notes() {
+			fmt.Fprintf(stdio.Err, "orch remote: ci left out for %s\n", note)
+		}
+	}
 	budget, err := snapshot.Budget(usage.NewConfig(env.paths))
 	if err != nil {
 		fmt.Fprintf(stdio.Err, "orch remote: budget left out: %s\n", err)

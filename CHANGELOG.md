@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- go: Work Trains snapshots now carry each project's latest CI (WT15): with the config's `ci` on
+  (the default), a project whose origin is a github.com repository gets the newest GitHub Actions
+  run of each workflow on its default branch (at most 5), read with the owner's own `gh` (`gh run
+  list --repo owner/name --branch <origin HEAD, else main>`, with `GH_HOST=github.com`). Each
+  check times out after 10 s (killing gh's whole process group), all checks of a cycle share a 20 s
+  budget (projects not reached keep their previous runs and are checked next cycle), and checks
+  are cached per project for 5 minutes in `state.json` (new `ci` field), failures included. Run
+  links are sent only under `https://github.com/`. A failure (git refusing the repository, gh
+  missing or not logged in, an error, a timeout) never fails a cycle: the project gets
+  `ci: []`, the log says `ci left out for <name>: <reason>` once while it lasts, and a cycle that
+  otherwise succeeded records it as a `last_error` of kind `ci` that changes only with its message.
+  `orch remote push --dry-run` shows the same CI (and those notes on stderr) and still writes
+  nothing. Turning `ci` off runs no gh and drops the cached runs.
+
 - go: `orch remote once [--json]`, `orch remote serve` and `orch remote launchd [--label L]` (WT14).
   The Mac now syncs with the Work Trains Worker: each cycle pulls the page's answers and actions,
   applies them through the WT13 apply layer, acks every outcome in one request (an applied answer

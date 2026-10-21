@@ -22,6 +22,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/apply"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/ci"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/client"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/config"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/discover"
@@ -95,6 +96,7 @@ type cycle struct {
 	now      time.Time
 	remote   Remote
 	problems []string
+	ciNotes  []string // why CI was left out of a project, "<name>: <reason>"
 }
 
 // Cycle runs one full cycle: pull, apply, ack, then push what is due, and persists the state.
@@ -133,7 +135,7 @@ func (l *Loop) withState(ctx context.Context, work func(*cycle) (Report, error))
 	case err != nil:
 		st.LastError = &state.LastError{At: c.now, Kind: Kind(err), Message: l.Redact(err.Error())}
 	default:
-		st.LastError = nil
+		st.LastError = c.ciNote(st.LastError)
 	}
 	if current, encodeErr := json.Marshal(st); encodeErr == nil && bytes.Equal(current, loaded) {
 		return report, err
@@ -281,7 +283,7 @@ func countApplied(results []wire.AckResult) int {
 // push alone, so a reading that changed or expired would otherwise stay on the page for as long
 // as no project changed.
 func (c *cycle) push(ctx context.Context, projects []localProject, report *Report) error {
-	due := c.dueSnapshots(projects)
+	due := c.dueSnapshots(ctx, projects)
 	budget, budgetHash := c.budget()
 	if len(due) == 0 && !c.isBudgetDue(budgetHash) {
 		return nil
@@ -317,9 +319,17 @@ func (c *cycle) isBudgetDue(budgetHash string) bool {
 
 // dueSnapshots builds every project's snapshot and keeps those due, at most one push's worth.
 // A project is due when its hash differs from the last one the Worker took, its last accepted
-// push is at least pushSpacing old and any retry_after the Worker set has passed.
-func (c *cycle) dueSnapshots(projects []localProject) []wire.ProjectSnapshot {
-	env := snapshot.Env{MachineID: c.state.MachineID, Home: c.loop.Home, Now: c.now, Alive: c.loop.Alive}
+// push is at least pushSpacing old and any retry_after the Worker set has passed. With ci on,
+// each project's CI runs come through state.json's cache (package ci).
+func (c *cycle) dueSnapshots(ctx context.Context, projects []localProject) []wire.ProjectSnapshot {
+	env := snapshot.Env{MachineID: c.state.MachineID, Home: c.loop.Home, Now: c.now, Alive: c.loop.Alive, CI: snapshot.NoCI{}}
+	if c.loop.Config.CI {
+		cache := ci.NewCache(ctx, c.state.MachineID, c.loop.Home, c.now, c.state.CI)
+		defer c.keepCI(cache)
+		env.CI = cache
+	} else {
+		c.state.CI = nil // ci is off: cached repository names go too
+	}
 	due := []wire.ProjectSnapshot{}
 	for _, project := range projects {
 		built, err := snapshot.Build(project.Project, env)
@@ -332,6 +342,30 @@ func (c *cycle) dueSnapshots(projects []localProject) []wire.ProjectSnapshot {
 		}
 	}
 	return due
+}
+
+// keepCI stores the cache's entries in the state and notes why CI was left out of a project;
+// the log shows each note once while it lasts.
+func (c *cycle) keepCI(cache *ci.Cache) {
+	c.state.CI = cache.Entries()
+	c.ciNotes = cache.Notes()
+	for _, note := range c.ciNotes {
+		c.problems = append(c.problems, "ci left out for "+note)
+	}
+}
+
+// ciNote is last_error after a cycle that did not fail: the first project's reason CI was left
+// out, a note of kind "ci" rather than a failure, else nothing. An unchanged note keeps its time,
+// so a quiet check does not rewrite the state.
+func (c *cycle) ciNote(previous *state.LastError) *state.LastError {
+	if len(c.ciNotes) == 0 {
+		return nil
+	}
+	message := c.loop.Redact(c.ciNotes[0])
+	if previous != nil && previous.Kind == ciNoteKind && previous.Message == message {
+		return previous
+	}
+	return &state.LastError{At: c.now, Kind: ciNoteKind, Message: message}
 }
 
 func (c *cycle) isDue(built wire.ProjectSnapshot) bool {
@@ -453,6 +487,9 @@ type LocalError struct {
 
 func (e *LocalError) Error() string { return e.Op + ": " + e.Err.Error() }
 func (e *LocalError) Unwrap() error { return e.Err }
+
+// ciNoteKind is the last_error kind of a cycle that succeeded but left a project's CI out.
+const ciNoteKind = "ci"
 
 // Kind names the class of a cycle error for last_error and the log.
 func Kind(err error) string {

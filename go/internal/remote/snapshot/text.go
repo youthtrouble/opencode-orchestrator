@@ -21,6 +21,9 @@ const (
 	maxSubjectUnits     = 200 // a question subject
 	maxBodyUnits        = 2000
 	maxRecommendedUnits = 1000
+	maxRepoUnits        = 100
+	maxWorkflowUnits    = 100
+	maxURLUnits         = 300
 )
 
 // sendableID is the one message field sent without redaction, so only the form orch's writers
@@ -56,6 +59,19 @@ func (c cleaner) optional(s string, maxUnits int) *string {
 		return nil
 	}
 	return &cleaned
+}
+
+// githubPrefix is the only place a CI link may point. Ending in "/" pins the host, so neither
+// another host nor userinfo (which would precede the host) passes.
+const githubPrefix = "https://github.com/"
+
+// link is url when it is a github.com link within maxUnits that redaction leaves as it is, else
+// nil.
+func (c cleaner) link(url *string, maxUnits int) *string {
+	if url == nil || !strings.HasPrefix(*url, githubPrefix) || utf16Length(*url) > maxUnits || c.text(*url, maxUnits) != *url {
+		return nil
+	}
+	return url
 }
 
 // shorten cuts s to fewer than maxUnits UTF-16 code units and ends it with "…", within the

@@ -206,3 +206,20 @@ func TestOptionalIsNullForEmptyText(t *testing.T) {
 		t.Errorf("optional(\"x\") = %v", got)
 	}
 }
+
+func TestLinkKeepsOnlyGitHubLinks(t *testing.T) {
+	clean := cleaner{home: "/srv/owner-home"}
+	cases := map[string]bool{
+		"https://github.com/example/app/actions/runs/1":       true,
+		"http://github.com/example/app/actions/runs/1":        false,
+		"https://ci.example.com/runs/1":                       false,
+		"https://github.com.example.com/runs/1":               false,
+		"https://token@github.com/example/app/actions/runs/1": false,
+		"https://github.com@evil.example/runs/1":              false,
+	}
+	for url, kept := range cases {
+		if got := clean.link(&url, maxURLUnits); (got != nil) != kept {
+			t.Errorf("link(%q) = %v, want kept %v", url, got, kept)
+		}
+	}
+}

@@ -12,20 +12,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/ci/citest"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/keychain/keychaintest"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/version"
 )
 
 // remoteSandbox points HOME and the remote config at temp dirs and installs a fake security,
-// so no test reaches the real ~/.config/orch or login Keychain.
+// so no test reaches the real ~/.config/orch or login Keychain, and a fake git and gh under
+// which no project has a GitHub origin, so CI stays empty and the real gh is never run.
 func remoteSandbox(t *testing.T) (home, configPath string, fake *keychaintest.Fake) {
 	t.Helper()
 	home = t.TempDir()
 	configPath = filepath.Join(home, ".config", "orch", "remote.json")
 	t.Setenv("HOME", home)
 	t.Setenv("ORCH_REMOTE_CONFIG", configPath)
-	return home, configPath, keychaintest.Install(t)
+	fake = keychaintest.Install(t)
+	citest.Install(t, "", "")
+	return home, configPath, fake
 }
 
 func TestRemoteRefusesABadCommandLineWithExit2(t *testing.T) {
@@ -365,6 +369,37 @@ func TestRemotePushDryRunPrintsTheRedactedRequestAndWritesNothing(t *testing.T) 
 	}
 	if after := listTree(t, home); !maps.Equal(before, after) {
 		t.Error("push --dry-run changed files under HOME")
+	}
+}
+
+func TestRemotePushDryRunShowsTheLatestCIAndKeepsNoCache(t *testing.T) {
+	home, _, _ := remoteSandbox(t)
+	workTrainsProjects(t, home)
+	if code, _, stderr := run(t, Remote, []string{"init", "--url", "https://trains.example.com"}, ""); code != 0 {
+		t.Fatalf("init: %s", stderr)
+	}
+	fake := citest.Install(t, "git@github.com:example/app.git", "")
+	fake.PrintRuns(`[{"workflowName":"ci","status":"completed","conclusion":"failure","url":"https://github.com/example/app/actions/runs/9","createdAt":"2026-10-21T08:00:00Z"}]`)
+	before := listTree(t, home)
+
+	code, stdout, stderr := run(t, Remote, []string{"push", "--dry-run", "--json"}, "")
+	var request wire.PushRequest
+	if err := wire.Decode(strings.NewReader(stdout), &request); err != nil || code != 0 || stderr != "" {
+		t.Fatalf("push --dry-run --json: code %d, stderr %q, %v", code, stderr, err)
+	}
+	for _, project := range request.Projects {
+		if len(project.CI) != 1 || project.CI[0].Repo != "example/app" || *project.CI[0].Conclusion != "failure" {
+			t.Errorf("%s ci = %+v, want the red run", project.Name, project.CI)
+		}
+	}
+	if after := listTree(t, home); !maps.Equal(before, after) {
+		t.Error("push --dry-run saved the CI it checked")
+	}
+
+	fake.Fail(4, "To get started with GitHub CLI, please run:  gh auth login")
+	if code, _, stderr := run(t, Remote, []string{"push", "--dry-run", "--json"}, ""); code != 0 ||
+		!strings.Contains(stderr, "orch remote: ci left out for app: gh run list: exit status 4: To get started") {
+		t.Errorf("with gh failing: code %d, stderr %q", code, stderr)
 	}
 }
 

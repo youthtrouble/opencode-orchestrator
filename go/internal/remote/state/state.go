@@ -19,6 +19,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 )
 
 // State is the content of state.json.
@@ -31,6 +32,9 @@ type State struct {
 	// LastBudgetHash is the hash of the budget (null included) the last push the Worker
 	// answered carried; empty before the first push. The Worker stores the budget only on push.
 	LastBudgetHash string `json:"last_budget_hash"`
+	// CI caches each project's latest CI runs by project key, so a cycle (or a separate
+	// orch remote once) does not ask gh again within ci.RefreshAfter. Absent while CI is off.
+	CI map[string]CIEntry `json:"ci,omitempty"`
 }
 
 // Project is what the Worker last accepted for one project key.
@@ -38,6 +42,14 @@ type Project struct {
 	LastHash       string     `json:"last_hash"`
 	LastAcceptedAt *time.Time `json:"last_accepted_at"`
 	RetryAfter     *time.Time `json:"retry_after"`
+}
+
+// CIEntry is what one check of a project's CI found: its runs, or why there are none. Note
+// must be redacted before it is stored; it is empty when the project simply has no GitHub CI.
+type CIEntry struct {
+	CheckedAt time.Time    `json:"checked_at"`
+	Runs      []wire.CiRun `json:"runs"`
+	Note      string       `json:"note"`
 }
 
 // LastError is the most recent failure. Message must be redacted before it is stored.

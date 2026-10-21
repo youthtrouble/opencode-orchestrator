@@ -34,6 +34,7 @@ func testEnv() Env {
 		Home:      testHome,
 		Now:       testNow,
 		Alive:     func(pid any) bool { return pid == float64(livePID) },
+		CI:        NoCI{},
 	}
 }
 

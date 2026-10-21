@@ -60,7 +60,7 @@ with the Worker (`once`, `serve`), which launchd keeps running (`launchd`).
 |---|---|
 | `orch remote init --url URL [--root DIR]... [--exclude NAME]... [--force]` | Writes the config (refuses to replace it without `--force`) and creates the state file with a random machine id, kept across later `init --force` runs. `--url` must be `https://` (plain `http://` only for `127.0.0.1`, `localhost` or `[::1]`). `--root` defaults to `~/Developer`; `--exclude` takes directory names or absolute paths. Prints the config path, the machine id and the next steps; never a secret. |
 | `orch remote status [--json]` | The config, the machine id, whether each Keychain item exists (`yes`/`no`, or `unknown` with the error when the Keychain cannot be asked), the last push, pull and error, and the discovered projects: their count and names, plus each root or directory that could not be examined (`projects`, `project_names`, `discovery_errors` in JSON; `null` without a usable config). Never reads a secret. Exits 0 without a config. A refused config (insecure mode, inside a git work tree, invalid) is shown as `refused: <reason>` (`config_error` in JSON, `null` otherwise) with everything else still reported, and status exits 1. |
-| `orch remote push --dry-run [--json]` | Discovers the projects and prints, indented, the exact `PushRequest` a push would send (machine id, the release number from `VERSION` without the build's git revision, the cached budget and one snapshot per project), so the owner can audit what leaves the Mac. It sends nothing and writes nothing. Without `--json` two summary lines come first. A project whose state cannot be read, a root that cannot be scanned, or an unreadable usage registry is reported on stderr (`orch remote: skipped ...`) and left out; the exit is still 0. Needs the config and the machine id (`orch remote init`). Without `--dry-run` it is a usage error: `orch remote once` sends. |
+| `orch remote push --dry-run [--json]` | Discovers the projects and prints, indented, the exact `PushRequest` a push would send (machine id, the release number from `VERSION` without the build's git revision, the cached budget and one snapshot per project), so the owner can audit what leaves the Mac. With `ci` on it uses the cached CI runs, or asks `gh` for a project whose cache is older than 5 minutes (read only; why a project's CI was left out goes to stderr as `orch remote: ci left out for <name>: <reason>`). It sends nothing and writes nothing, not even the CI it checked. Without `--json` two summary lines come first. A project whose state cannot be read, a root that cannot be scanned, or an unreadable usage registry is reported on stderr (`orch remote: skipped ...`) and left out; the exit is still 0. Needs the config and the machine id (`orch remote init`). Without `--dry-run` it is a usage error: `orch remote once` sends. |
 | `orch remote once [--json]` | Runs one cycle of the sync loop (below) and prints `pulled N, applied N, pushed N, deferred N`; `--json` prints `{pulled, applied, pushed, deferred, error}` (`error` null on success). Log lines go to stderr. Exits 0 when the cycle succeeded, 1 otherwise (the error, redacted as in `last_error`, is printed and stored as `last_error`). It holds `serve.lock` for its cycle, so it never overlaps a `serve` cycle (both could pull and apply the same answer): while `serve` runs it exits 1 with `orch remote serve is running; it syncs on its own (pid N)` and sends nothing. Needs the config, the machine id and the three Keychain items; a missing item is named with the command that sets it. |
 | `orch remote serve` | Runs the sync loop until SIGINT or SIGTERM, which cancel the HTTP call in flight, save the state and exit 0. Logs one line per change (an applied answer or action, a push, a skipped project, an error, a recovery) to stdout, never one per quiet cycle. Holds `~/.local/state/opencode/orchestrator/remote/serve.lock`: a second `serve` exits 1 with `another orch remote serve is running (pid N)` (also while an `orch remote once` holds it for its cycle; launchd retries 30 s later). The lock is an `flock(2)`, which the kernel drops when its holder dies, so a lock file left by a dead serve is simply taken over. The config is read once at start; restart `serve` after changing it. |
 | `orch remote launchd [--label LABEL]` | Prints a LaunchAgent plist (Label `org.opencode-orchestrator.work-trains` unless `--label`; ProgramArguments this `orch`'s absolute path, `remote`, `serve`; `RunAtLoad`, `KeepAlive`, `ThrottleInterval` 30; stdout and stderr to `~/.local/state/opencode/orchestrator/remote/remote.log`, expanded; `PATH` `/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin`, for `security` and `gh`), then on stderr, as comments, where to save it and the `launchctl bootstrap gui/$(id -u) '<path>'` / `launchctl bootout gui/$(id -u)/<label>` commands (the path single-quoted for the shell, so a home with spaces or quotes copies whole). It writes and installs nothing. |
@@ -95,8 +95,31 @@ lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected
   message), and `slice`, `now`, `progress` from the newest heartbeat.
 - `questions`: the newest 20 questions to `human` or `*` not acked by `human`, newest first; a
   question posted without `recommended` has none and never blocks. `events`: the newest 10
-  messages as `{id, at, kind, from, subject}`, never a body. `ci` is empty for now. A message id
+  messages as `{id, at, kind, from, subject}`, never a body. A message id
   is sent as is, so a message whose id is not a lowercase uuid (the form orch writes) is left out.
+- `ci` (when the config's `ci` is true, the default): the newest GitHub Actions run of each
+  workflow on the default branch, newest first, at most 5, as `{repo, workflow, status,
+  conclusion, url, at}`. For a project whose `git remote get-url origin` is a github.com
+  repository (`https://`, `ssh://` or `git@github.com:` form; only `owner/name` is sent), orch runs
+  `gh run list --repo owner/name --branch <branch> --limit 10 --json
+  workflowName,status,conclusion,url,createdAt` in the project with your own `gh` login; the branch
+  is origin's HEAD (`git symbolic-ref refs/remotes/origin/HEAD`), else `main`. GitHub's waiting
+  states are sent as status `unknown`, a `startup_failure` as conclusion `failure`, and `stale` as
+  `null`; a `url` is sent only when it starts with `https://github.com/` and redaction leaves it
+  intact. gh always runs with `GH_HOST=github.com` (an enterprise `GH_HOST` in your environment is
+  ignored). The check (both git calls and gh) times out after 10 s, killing gh and anything it
+  started, and is cached per project in `state.json` for 5 minutes, failures included, so neither
+  `serve`'s 15 s checks nor repeated `once` runs ask gh more often. All checks of one cycle share
+  a 20 s budget: a project not checked within it keeps its previous runs (or `ci: []`) and is
+  checked next cycle, so hung `gh` calls never delay a cycle by more than 20 s. A project with no
+  `origin` (git's exit 2) or that is not inside a git checkout, or whose origin is not on
+  github.com, has `ci: []` and nothing to report. Any other failure (git refusing the repository,
+  such as a `safe.directory` error, gh not on PATH, not authenticated, a gh error, a timeout,
+  unexpected output) also gives
+  `ci: []`, never fails a cycle, is logged once while it lasts (`ci left out for <name>:
+  <reason>`) and, after a cycle that otherwise succeeded, is the `last_error` note of kind `ci`
+  (the first such project; its time changes only when its message does). With `ci` false gh is
+  never run and the cached runs are dropped from `state.json`.
 - Every free-text field is scrubbed, then redacted, then cut to the schema's cap, ending in `…`
   when cut. The scrub (Work Trains only; `incident.Redact` keeps its JS twin's rules) replaces
   credentials: GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), AWS access key ids,
@@ -147,7 +170,7 @@ The sync loop (`once` runs one cycle; `serve` repeats them):
    at least 60 s after the last push and never before a first push has landed (a projectless first
    push would end the Worker's first-push backlog window).
 5. Save the state (private temp file, then rename), with the cycle's error as `last_error`
-   (redacted) or none.
+   (redacted), else the `ci` note when a project's CI was left out, else none.
 
 `serve` pulls again after `poll_after_seconds` (the Worker's value clamped to 15..300 s; the config's
 `poll_seconds` until the first pull) and checks local state every 15 s in between, touching the network
@@ -192,9 +215,11 @@ Files:
   no secrets.
 - State: `~/.local/state/opencode/orchestrator/remote/state.json` (0600): `machine_id`, per-project
   `last_hash`, `last_accepted_at` and `retry_after`, `last_push_at`, `last_pull_at`, `last_error`
-  (`at`, `kind`: `network`, `access_denied`, `http_status`, `protocol`, `keychain` or `local`, and a
-  redacted `message`), and `last_budget_hash` (the sha256 of the budget last pushed; a file
-  without it still loads). The file is created
+  (`at`, `kind`: `network`, `access_denied`, `http_status`, `protocol`, `keychain` or `local`, or
+  `ci` for the note above, which is not a failure, and a redacted `message`), `last_budget_hash`
+  (the sha256 of the budget last pushed; a file without it still loads), and, while `ci` is
+  on, `ci`: per project key the last CI check's `checked_at`, `runs` and redacted `note` (empty
+  when the project simply has no GitHub CI), kept only for the projects of the last cycle. The file is created
   complete and only if absent (written to a private temp, then hard-linked into place), so
   concurrent `orch remote init` runs all report the one machine id that was stored. A state file
   that does not parse, has unknown fields, a `machine_id` that is not a lowercase UUID v4, or a

@@ -24,12 +24,36 @@ const (
 	maxEvents    = 10
 )
 
+// MaxCIRuns is how many CI runs a snapshot carries, the schema's maxItems.
+const MaxCIRuns = 5
+
+// CIProvider gives a project's latest CI runs, newest first, with schema-valid status,
+// conclusion and at. Build still redacts and caps what it gets.
+type CIProvider interface {
+	LatestRuns(project discover.Project) []wire.CiRun
+}
+
+// NoCI provides no runs: CI reporting is off.
+type NoCI struct{}
+
+// LatestRuns is always empty.
+func (NoCI) LatestRuns(discover.Project) []wire.CiRun { return nil }
+
 // Env is what Build needs besides the project. Tests fix every field.
 type Env struct {
 	MachineID string
 	Home      string             // redacted out of free text
 	Now       time.Time          // the clock that ages heartbeats
 	Alive     func(pid any) bool // whether a lane's pid is a live process (worker.Alive)
+	CI        CIProvider         // the project's latest CI runs; nil is NoCI
+}
+
+// ciProvider is env's CI provider, NoCI when none is set.
+func (env Env) ciProvider() CIProvider {
+	if env.CI == nil {
+		return NoCI{}
+	}
+	return env.CI
 }
 
 // Build reads project's state and returns its snapshot. Unreadable state is an *InputError.
@@ -52,7 +76,7 @@ func assemble(project discover.Project, in inputs, env Env) (wire.ProjectSnapsho
 		StateReason: clean.text(reason, maxReasonUnits),
 		Door:        doorOf(in),
 		Run:         runOf(in, env.Now),
-		CI:          []wire.CiRun{},
+		CI:          ciRuns(env.ciProvider().LatestRuns(project), clean),
 		Events:      recentEvents(in.messages, clean),
 		Questions:   questions,
 	}
@@ -131,6 +155,31 @@ func questionOf(msg message, clean cleaner) wire.Question {
 		Recommended: recommended,
 		Blocking:    recommended != nil && msg.blocking,
 	}
+}
+
+// ciRuns prepares the provider's runs for the wire: names redacted and cut, a url kept only
+// when it is a github.com link that redaction leaves intact (a cut or rewritten link is useless),
+// and a run whose repo cleans to nothing left out.
+func ciRuns(runs []wire.CiRun, clean cleaner) []wire.CiRun {
+	sendable := []wire.CiRun{}
+	for _, run := range runs {
+		if len(sendable) == MaxCIRuns {
+			break
+		}
+		repo := clean.text(run.Repo, maxRepoUnits)
+		if repo == "" {
+			continue
+		}
+		sendable = append(sendable, wire.CiRun{
+			Repo:       repo,
+			Workflow:   clean.text(run.Workflow, maxWorkflowUnits),
+			Status:     run.Status,
+			Conclusion: run.Conclusion,
+			URL:        clean.link(run.URL, maxURLUnits),
+			At:         run.At,
+		})
+	}
+	return sendable
 }
 
 // recentEvents are the newest messages of any kind, newest first, as headlines: never a body.

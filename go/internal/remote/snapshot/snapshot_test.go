@@ -274,3 +274,54 @@ func TestBuildScrubsCredentialsAndPathsFromEveryFreeTextField(t *testing.T) {
 		t.Errorf("body = %q, want it to end %q", got, want)
 	}
 }
+
+// fixedCI provides the same runs for every project.
+type fixedCI []wire.CiRun
+
+func (runs fixedCI) LatestRuns(discover.Project) []wire.CiRun { return runs }
+
+func TestBuildRedactsAndCapsTheProvidersCIRuns(t *testing.T) {
+	link := func(s string) *string { return &s }
+	success := "success"
+	run := wire.CiRun{Repo: "example/app", Workflow: "ci", Status: "completed", Conclusion: &success, URL: link("https://github.com/example/app/actions/runs/1"), At: "2026-10-20T11:00:00Z"}
+	runs := fixedCI{run, run, run, run, run, run}
+	token := fakeToken("ghp_", 36)
+	runs[1].Repo = ""                                       // nothing to name it by: left out
+	runs[2].Workflow = "deploy " + strings.Repeat("x", 120) // cut
+	runs[3].Workflow = "deploy " + testHome + "/keys, " + token
+	runs[3].URL = link("https://ci.example.com/runs/1") // not github.com
+	runs[4].URL = link("https://github.com" + testHome) // redaction would rewrite it
+	env := testEnv()
+	env.CI = runs
+
+	p := project(t, nil)
+	snapshot, err := Build(p, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.CI) != 5 || snapshot.CI[0] != run || snapshot.CI[4] != runs[5] {
+		t.Fatalf("ci = %+v, want five runs, the empty-repo one left out", snapshot.CI)
+	}
+	if workflow := snapshot.CI[1].Workflow; !strings.HasPrefix(workflow, "deploy x") || utf16Length(workflow) != maxWorkflowUnits || !strings.HasSuffix(workflow, "…") {
+		t.Errorf("workflow = %q, want it cut to %d", workflow, maxWorkflowUnits)
+	}
+	if workflow := snapshot.CI[2].Workflow; workflow != "deploy <path>, <token>" {
+		t.Errorf("workflow = %q, want the path and the credential scrubbed like every outbound text", workflow)
+	}
+	if snapshot.CI[2].URL != nil || snapshot.CI[3].URL != nil || snapshot.CI[0].URL == nil {
+		t.Errorf("urls = %v %v %v, want only the intact github.com link", snapshot.CI[0].URL, snapshot.CI[2].URL, snapshot.CI[3].URL)
+	}
+	without, _ := Build(p, testEnv())
+	if without.SnapshotHash == snapshot.SnapshotHash || len(without.CI) != 0 || without.CI == nil {
+		t.Errorf("without CI: ci %v, hash unchanged %v; want [] and a different hash", without.CI, without.SnapshotHash == snapshot.SnapshotHash)
+	}
+}
+
+func TestBuildTreatsANilCIProviderAsNoCI(t *testing.T) {
+	env := testEnv()
+	env.CI = nil
+	snapshot, err := Build(project(t, nil), env)
+	if err != nil || snapshot.CI == nil || len(snapshot.CI) != 0 {
+		t.Errorf("Build = ci %v, err %v; want [] and no error", snapshot.CI, err)
+	}
+}
