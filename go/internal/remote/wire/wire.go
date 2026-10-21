@@ -16,7 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -176,8 +178,9 @@ type AckResponse struct {
 // ErrTrailingData is returned by Decode when the reader holds more than one JSON value.
 var ErrTrailingData = errors.New("wire: unexpected data after the JSON value")
 
-// ShapeError is a payload that leaves out a required property or sets a non-nullable one to
-// null. Path names the property, as in "$.projects[0].run.kind".
+// ShapeError is a payload that leaves out a required property, sets a non-nullable one to null
+// or carries a property whose name is not exactly a declared one (a case variant such as
+// "Settled" included). Path names the property, as in "$.projects[0].run.kind".
 type ShapeError struct {
 	Path    string
 	Problem string
@@ -187,8 +190,9 @@ func (e *ShapeError) Error() string { return fmt.Sprintf("wire: %s: %s", e.Path,
 
 // Decode reads exactly one JSON value from r into v, a pointer to one of this package's
 // structs. It refuses a property the struct does not declare (the schema forbids additional
-// properties everywhere), a missing property and a null where the field is not a pointer,
-// since encoding/json alone would decode both of those to the zero value.
+// properties everywhere, and encoding/json would otherwise accept a case variant of a declared
+// name), a missing property and a null where the field is not a pointer, since encoding/json
+// alone would decode both of those to the zero value.
 func Decode(r io.Reader, v any) error {
 	decoder := json.NewDecoder(r)
 	var raw json.RawMessage
@@ -207,7 +211,7 @@ func Decode(r io.Reader, v any) error {
 }
 
 // checkShape walks raw, which already decoded into a value of type t, and reports the first
-// required property that is missing or null where t has no pointer for it.
+// undeclared property, or required property missing or null where t has no pointer for it.
 func checkShape(raw json.RawMessage, t reflect.Type, path string) error {
 	if isNull(raw) {
 		return nil // the caller has checked that null is allowed here
@@ -230,9 +234,12 @@ func checkShape(raw json.RawMessage, t reflect.Type, path string) error {
 		if err := json.Unmarshal(raw, &properties); err != nil {
 			return err
 		}
+		if err := refuseUndeclared(properties, t, path); err != nil {
+			return err
+		}
 		for i := range t.NumField() {
 			field := t.Field(i)
-			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			name := propertyName(field)
 			value, present := properties[name]
 			propertyPath := path + "." + name
 			if !present {
@@ -244,6 +251,27 @@ func checkShape(raw json.RawMessage, t reflect.Type, path string) error {
 		}
 	}
 	return nil
+}
+
+// refuseUndeclared reports the first property of an object whose name is not exactly one of
+// t's JSON tags. encoding/json matches names case-insensitively, so without this check
+// {"settled":0,"Settled":99} would pass DisallowUnknownFields and decode Settled as 99.
+func refuseUndeclared(properties map[string]json.RawMessage, t reflect.Type, path string) error {
+	declared := make(map[string]bool, t.NumField())
+	for i := range t.NumField() {
+		declared[propertyName(t.Field(i))] = true
+	}
+	for _, name := range slices.Sorted(maps.Keys(properties)) {
+		if !declared[name] {
+			return &ShapeError{Path: path + "." + name, Problem: "undeclared property"}
+		}
+	}
+	return nil
+}
+
+func propertyName(field reflect.StructField) string {
+	name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+	return name
 }
 
 // checkProperty refuses a null for a non-pointer type, then checks what is inside the value.

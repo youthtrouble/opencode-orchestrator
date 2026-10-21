@@ -72,7 +72,12 @@ Files:
   real path lies inside any git work tree, and one readable or writable by group or others. It holds
   no secrets.
 - State: `~/.local/state/opencode/orchestrator/remote/state.json` (0600): `machine_id`, per-project
-  last pushed hash and times, `last_push_at`, `last_pull_at`, `last_error`.
+  last pushed hash and times, `last_push_at`, `last_pull_at`, `last_error`. The file is created
+  complete and only if absent (written to a private temp, then hard-linked into place), so
+  concurrent `orch remote init` runs all report the one machine id that was stored. A state file
+  that does not parse, has unknown fields, a `machine_id` that is not a lowercase UUID v4, or a
+  missing or null `projects` (or a null or empty-keyed entry) is refused as corrupt and never
+  regenerated: move it aside and run `orch remote init` again.
 - Secrets: the login Keychain, service `opencode-orchestrator.work-trains`, accounts `machine-token`,
   `access-client-id` and `access-client-secret`. They are written by feeding the
   `add-generic-password` command line to `security -i` on stdin, so no secret appears in argv (`ps`).

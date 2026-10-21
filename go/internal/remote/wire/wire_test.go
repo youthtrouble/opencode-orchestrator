@@ -105,6 +105,27 @@ func TestDecodeRejectsAnUndeclaredProperty(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsACaseVariantOfADeclaredProperty(t *testing.T) {
+	cases := map[string]struct {
+		payload string
+		value   any
+		path    string
+	}{
+		"top level": {`{"v":1,"settled":0,"Settled":99}`, new(AckResponse), "$.Settled"},
+		"nested object": {`{"v":1,"server_time":"2026-01-01T00:00:00Z","poll_after_seconds":30,"answers":[],` +
+			`"actions":[{"id":"a","project_key":"k","kind":"pause","created_at":"2026-01-01T00:00:00Z","KIND":"resume"}]}`,
+			new(PullResponse), "$.actions[0].KIND"},
+		"alias alone": {`{"v":1,"Settled":99}`, new(AckResponse), "$.Settled"},
+	}
+	for name, c := range cases {
+		err := Decode(strings.NewReader(c.payload), c.value)
+		var shape *ShapeError
+		if !errors.As(err, &shape) || shape.Path != c.path || shape.Problem != "undeclared property" {
+			t.Errorf("%s: Decode = %v, want %s undeclared", name, err, c.path)
+		}
+	}
+}
+
 func TestDecodeRejectsTrailingData(t *testing.T) {
 	err := Decode(strings.NewReader(`{"v":1,"settled":0} {}`), new(AckResponse))
 	if !errors.Is(err, ErrTrailingData) {

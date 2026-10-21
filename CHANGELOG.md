@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- go: `orch remote` state and wire fixes (WT11 review R1-R3). Concurrent `orch remote init` runs
+  (separate processes included) now all get the same machine id: `state.json` is published
+  complete and only if absent, and a run that loses reads the winner's id. Before, each could
+  report a different id and the last write won. A state file that is valid JSON but has a missing,
+  null, empty or non-canonical `machine_id`, or a missing or null `projects` (or a null or
+  empty-keyed entry), is now refused as corrupt instead of yielding a blank machine id; it is
+  never regenerated. Wire decoding refuses a property whose name is only a case variant of a
+  declared one (`{"settled":0,"Settled":99}`), at any depth; before, it overrode the declared value.
 - remote/worker machine API fixes (WT8 review R1, R2): `GET /api/v1/machine/pull` now reads the due
   answers and actions and stamps their first delivery in one D1 batch (one transaction), so an Undo
   either lands first (the row is never delivered) or after (the Undo is 409 `too_late`). Before, an
