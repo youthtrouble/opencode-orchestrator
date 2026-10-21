@@ -24,6 +24,7 @@ func configWithCache(t *testing.T, claude, codex string) usage.Config {
 		UsageFile:    filepath.Join(home, "usage.json"),
 		RegistryFile: "../../../orchestrator/models.json",
 		CodexBin:     "codex",
+		CodexTimeout: time.Minute,
 		Now:          func() time.Time { return now },
 	}
 	doc := `{"generated_at":"2026-10-18T19:59:00.000Z","claude":` + claude + `,"codex":` + codex + `}`
@@ -102,18 +103,23 @@ func TestGateDrawsCreditsOnlyWithThePolicyAndARecordingCaller(t *testing.T) {
 		name                     string
 		policy                   string // the project's policy.json; "" for none
 		frontier, mayDrawCredits bool
+		codex                    func(*testing.T) string // the codex a fresh reading comes from
 		want                     string
 	}{
-		{"policy off refuses", "", false, true, refused},
-		{"policy on funds a recording caller", `{"openai_credits":"on"}`, false, true,
+		{"policy off refuses", "", false, true, codexAnswering("215.68"), refused},
+		{"policy on funds a recording caller", `{"openai_credits":"on"}`, false, true, codexAnswering("215.68"),
 			`{"allowed":true,"level":"red","note":"openai budget is red; drawing ChatGPT credits (openai_credits=on).","credit_funded":true,"credits_before":"215.68"}`},
-		{"a caller that records nothing is refused", `{"openai_credits":"on"}`, false, false, refused},
-		{"frontier work never runs on credits", `{"openai_credits":"on"}`, true, true, refused},
-		{"the floor is respected", `{"openai_credits":"on","openai_credits_floor":"300"}`, false, true, refused},
+		{"a caller that records nothing is refused", `{"openai_credits":"on"}`, false, false, codexAnswering("215.68"), refused},
+		{"frontier work never runs on credits", `{"openai_credits":"on"}`, true, true, codexAnswering("215.68"), refused},
+		{"the floor is respected", `{"openai_credits":"on","openai_credits_floor":"300"}`, false, true, codexAnswering("215.68"), refused},
+		{"the floor is checked against the fresh balance", `{"openai_credits":"on","openai_credits_floor":"20"}`, false, true, codexAnswering("10"), refused},
+		{"a failed fresh reading refuses the draw", `{"openai_credits":"on"}`, false, true, codexFailing,
+			`{"allowed":false,"level":"red","note":"openai budget is red and the ChatGPT credits balance could not be re-read (` + codexFailure + `); refusing to draw credits (pass --force to override)."}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := configWithCache(t, claudeGreen, codexLimitReached)
+			cfg.CodexBin = c.codex(t)
 			cfg.ProjectRoot = t.TempDir()
 			if c.policy != "" {
 				if err := os.MkdirAll(filepath.Join(cfg.ProjectRoot, ".orchestrator"), 0o755); err != nil {
@@ -136,6 +142,57 @@ func TestGateDrawsCreditsOnlyWithThePolicyAndARecordingCaller(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFreshCreditsBalance(t *testing.T) {
+	cfg := configWithCache(t, claudeGreen, codexLimitReached)
+	cfg.CodexBin = codexAnswering("190.5")(t)
+	if got := FreshCreditsBalance(cfg); got != "190.5" {
+		t.Errorf("fresh balance %v, want 190.5", got)
+	}
+	// A failed refresh keeps the last good reading (read_error set): its balance is stale.
+	cfg = configWithCache(t, claudeGreen, codexLimitReached)
+	cfg.CodexBin = codexFailing(t)
+	if got := FreshCreditsBalance(cfg); got != nil {
+		t.Errorf("balance after a failed refresh %v, want nil", got)
+	}
+}
+
+// codexAnswering is a fake `codex app-server` reporting the weekly plan limit reached with
+// balance ChatGPT credits left. It answers initialize, account/read and rateLimits/read by
+// line (the second line is the initialized notification); PATH is empty, so it uses no tool.
+func codexAnswering(balance string) func(*testing.T) string {
+	return func(t *testing.T) string {
+		limits := `{"ordinaryUsageAllowed":false,"rateLimits":{"primary":{"usedPercent":88,"windowDurationMins":300,"resetsAt":1792360800},` +
+			`"secondary":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":1792800000},"rateLimitReachedType":"rate_limit_reached","planType":"plus",` +
+			`"credits":{"hasCredits":true,"unlimited":false,"balance":"` + balance + `"}},"rateLimitResetCredits":{"availableCount":3}}`
+		return fakeCodex(t, `n=0
+while IFS= read -r line; do
+  n=$((n+1))
+  case $n in
+    1) echo '{"jsonrpc":"2.0","id":1,"result":{}}' ;;
+    3) echo '{"jsonrpc":"2.0","id":2,"result":{"account":{"planType":"plus"}}}' ;;
+    4) echo '{"jsonrpc":"2.0","id":3,"result":`+limits+`}' ;;
+  esac
+done`)
+	}
+}
+
+// codexFailure is the error of codexFailing, whose app-server refuses initialize (an exit
+// without an answer would only fail after the app-server timeout).
+const codexFailure = "not logged in"
+
+func codexFailing(t *testing.T) string {
+	return fakeCodex(t, `read -r line; echo '{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"`+codexFailure+`"}}'`)
+}
+
+func fakeCodex(t *testing.T, body string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
 }
 
 func TestGateProceedsWhenRoutingFails(t *testing.T) {

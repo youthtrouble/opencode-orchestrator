@@ -70,6 +70,7 @@ func (h *harness) testPolicy(t *testing.T) {
 		{name: "set/openai-credits-on", args: []string{"set", "openai_credits=on", "openai_credits_floor=20"}},
 		{name: "set/openai-credits-refused", args: []string{"set", "deploy=auto", "openai_credits=security-only"}},
 		{name: "set/openai-credits-floor-refused", args: []string{"set", "openai_credits_floor=lots"}},
+		{name: "set/openai-credits-floor-negative", args: []string{"set", "openai_credits_floor=-5"}},
 		{name: "unattended", args: []string{"unattended", "ignored=x"}, seed: seedPolicy(`{"deploy":"auto"}`)},
 		{name: "unattended/cwd", args: []string{"unattended", "--cwd", "sub"}},
 

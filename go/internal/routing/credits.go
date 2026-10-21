@@ -141,13 +141,14 @@ type CreditsPolicy struct {
 
 // CreditsPolicyOf is creditsPolicyOf over the effective policy: anything but "on" is off, as
 // credits are spend and are never drawn without the explicit setting; a floor that is not a
-// number is 0.
+// number is 0, and a negative one (a hand-edited policy.json) is 0 too, so a zero balance
+// never draws.
 func CreditsPolicyOf(policy any) CreditsPolicy {
 	floor, ok := DecimalOrNull(jsjson.Path(policy, "openai_credits_floor"))
 	if !ok {
 		floor = 0
 	}
-	return CreditsPolicy{On: jsjson.Path(policy, "openai_credits") == "on", Floor: floor}
+	return CreditsPolicy{On: jsjson.Path(policy, "openai_credits") == "on", Floor: math.Max(0, floor)}
 }
 
 func (p CreditsPolicy) mode() string {

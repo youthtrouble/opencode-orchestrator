@@ -32,7 +32,7 @@ type RefusedError struct {
 func (e *RefusedError) Error() string { return "refusing " + e.Key + "=never" }
 
 // InvalidValueError refuses a value its key does not take: openai_credits is off or on, and
-// openai_credits_floor is a number.
+// openai_credits_floor is a number, 0 or more.
 type InvalidValueError struct {
 	Message string
 }
@@ -44,8 +44,8 @@ func invalidValue(key, value string) error {
 	if key == "openai_credits" && value != "off" && value != "on" {
 		return &InvalidValueError{"openai_credits must be off or on"}
 	}
-	if _, isNumber := routing.DecimalOrNull(value); key == "openai_credits_floor" && !isNumber {
-		return &InvalidValueError{"openai_credits_floor must be a number"}
+	if floor, isNumber := routing.DecimalOrNull(value); key == "openai_credits_floor" && !(isNumber && floor >= 0) {
+		return &InvalidValueError{"openai_credits_floor must be a number, 0 or more"}
 	}
 	return nil
 }

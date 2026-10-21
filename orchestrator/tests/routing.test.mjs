@@ -116,6 +116,7 @@ test("credits policy: anything but on is off; the floor is a number or 0", () =>
   assert.deepEqual(creditsPolicyOf(undefined), { mode: "off", floor: 0 });
   assert.deepEqual(creditsPolicyOf({ openai_credits: "security-only", openai_credits_floor: "x" }), { mode: "off", floor: 0 });
   assert.deepEqual(creditsPolicyOf({ openai_credits: "on", openai_credits_floor: "25.5" }), { mode: "on", floor: 25.5 });
+  assert.deepEqual(creditsPolicyOf({ openai_credits: "on", openai_credits_floor: "-5" }), { mode: "on", floor: 0 }, "a negative floor is 0");
 });
 
 test("policy off (the default): a red Codex window with credits still fails over to Anthropic", () => {

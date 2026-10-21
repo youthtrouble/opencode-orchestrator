@@ -101,10 +101,12 @@ export function creditsText(fact) {
 }
 
 // The owner's credits setting (policy openai_credits, openai_credits_floor). Anything but "on"
-// is off: credits are spend, so they are never drawn without the explicit setting.
+// is off: credits are spend, so they are never drawn without the explicit setting. A floor
+// that is not a number is 0, and a negative one (a hand-edited policy.json) is 0 too, so a
+// zero balance never draws.
 export const CREDITS_OFF = Object.freeze({ mode: "off", floor: 0 });
 export function creditsPolicyOf(policy) {
-  return { mode: policy?.openai_credits === "on" ? "on" : "off", floor: decimalOrNull(policy?.openai_credits_floor) ?? 0 };
+  return { mode: policy?.openai_credits === "on" ? "on" : "off", floor: Math.max(0, decimalOrNull(policy?.openai_credits_floor) ?? 0) };
 }
 export const creditsPolicyText = (credits) => `openai_credits=${credits.mode}${credits.floor ? ` floor ${credits.floor}` : ""}`;
 

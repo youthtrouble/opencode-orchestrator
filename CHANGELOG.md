@@ -45,8 +45,10 @@
   window's colour is unchanged. A new policy key, `openai_credits` (`off` by default, or `on`) with an
   optional `openai_credits_floor`, lets OpenAI roles whose plan limit is reached run on credits
   through `codex-exec`, which records the balance before and after in the run record. With the
-  default nothing changes: a red Codex window means no OpenAI work. The v1 protocol's `Posture` gains
-  an optional `credits` object. See
+  default nothing changes: a red Codex window means no OpenAI work. Before drawing, the gate re-reads
+  usage and refuses if it cannot; a negative floor counts as 0. The v1 protocol's `Posture` gains an
+  optional `credits` object, which a Worker older than this release rejects: deploy the Worker
+  before updating `orch` on the Mac. See
   [OpenAI credits](orchestrator/README.md#openai-credits).
 - remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
   (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills

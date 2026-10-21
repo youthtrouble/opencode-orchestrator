@@ -4,9 +4,14 @@ import { getRouting, getUsage } from "./usage.mjs";
 
 // mayDrawCredits: the caller records credit-funded runs (balance before and after), so a red
 // OpenAI window whose work routing funds from ChatGPT credits is allowed instead of refused.
-export async function budgetGate(vendor, { force = false, frontier = false, cwd, mayDrawCredits = false } = {}) {
+export async function budgetGate(vendor, options = {}) {
   let routing;
-  try { routing = await getRouting({ cwd }); } catch (err) { return { allowed: true, note: `usage unavailable (${err.message}); proceeding` }; }
+  try { routing = await getRouting({ cwd: options.cwd }); } catch (err) { return { allowed: true, note: `usage unavailable (${err.message}); proceeding` }; }
+  const decision = decide(vendor, routing, options);
+  return decision.credit_funded ? confirmOnFreshReading(vendor, options) : decision;
+}
+
+function decide(vendor, routing, { force = false, frontier = false, mayDrawCredits = false }) {
   const p = routing.resolved.postures[vendor];
   if (!p || !p.available) return { allowed: true, note: `${vendor} usage unknown; proceeding`, routing };
   const level = frontier ? p.frontier : p.overall;
@@ -21,8 +26,25 @@ export async function budgetGate(vendor, { force = false, frontier = false, cwd,
   return { allowed: true, level, routing };
 }
 
+// The cached reading behind routing can be minutes old, so a credit draw (OpenAI only) is
+// decided again on a fresh one: the floor is checked against the balance actually left. With
+// no fresh Codex reading the draw is refused (fail closed), as credits are money.
+async function confirmOnFreshReading(vendor, options) {
+  let routing;
+  try { routing = await getRouting({ cwd: options.cwd, refresh: true }); } catch (err) { return refuseUnconfirmedDraw(vendor, err.message); }
+  const { codex } = routing.usage;
+  if (!codex?.ok || codex.read_error) return { ...refuseUnconfirmedDraw(vendor, codex?.read_error ?? codex?.error), routing };
+  return decide(vendor, routing, options);
+}
+
+const refuseUnconfirmedDraw = (vendor, why) => ({ allowed: false, level: "red", note: `${vendor} budget is red and the ChatGPT credits balance could not be re-read (${why}); refusing to draw credits (pass --force to override).` });
+
 // The ChatGPT credits balance from a fresh usage reading, for the run record of a credit-funded
-// run; null when it cannot be read (or the credits are unlimited).
+// run; null when it cannot be read (a failed refresh keeps the last good reading, marked
+// read_error, whose balance is stale) or the credits are unlimited.
 export async function freshCreditsBalance() {
-  try { return openaiCredits((await getUsage({ refresh: true })).codex)?.balance ?? null; } catch { return null; }
+  try {
+    const { codex } = await getUsage({ refresh: true });
+    return codex?.read_error ? null : openaiCredits(codex)?.balance ?? null;
+  } catch { return null; }
 }

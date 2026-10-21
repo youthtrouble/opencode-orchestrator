@@ -204,12 +204,17 @@ key, which this setup does not use.
   is red while Codex refuses ordinary usage may still route to OpenAI when credits are unlimited or
   the balance is above `openai_credits_floor` (default 0). Such a role is marked `credit_funded`,
   always runs through `codex-exec` (never natively in opencode), is never chosen to balance headroom,
-  and never uses a frontier tier. `codex-exec` (JS and `orch`) is the only bridge that draws credits:
-  its run record gains `credits: {before, after}` (the balance at the gate and from a fresh reading
-  after the run). `opencode-exec`, `codex_review` and native subagents still refuse a red window.
+  and never uses a frontier tier. `codex-exec` (JS and `orch`) is the only bridge that draws credits.
+  Before it draws, its gate re-reads usage and decides again on that fresh reading, so the floor is
+  checked against the balance actually left; if the re-read fails, it refuses. Its run record gains
+  `credits: {before, after}` (the balance at the gate and from a fresh reading after the run;
+  `after` is `null` when that reading failed). `opencode-exec`, `codex_review` and native subagents
+  still refuse a red window.
   There is no `security-only` mode: delegations carry no security/auth marker for routing to read.
   A `--force` Codex run past the plan limit spends credits regardless of the policy and records
-  nothing about them.
+  nothing about them. The policy gates only runs the orchestrator starts: Codex itself draws credits
+  once the plan limit is hit, so a run that starts on an unreadable usage feed (the gate then
+  proceeds) or on a reading that turned red since can spend credits with the policy off.
 
 The usage cache is `~/.local/state/opencode/orchestrator/usage.json` (not retargeted by
 `XDG_STATE_HOME`). A reading is reused for 5 minutes, or until a routing window it holds resets. If
@@ -245,7 +250,7 @@ every 5 minutes rather than on every read. Both runtimes share this cache.
 | `openai_credits_floor` | (unset: 0) | With `openai_credits=on`, stop drawing credits once the balance is at or below this number |
 
 `policy.mjs set` refuses `key=never` except for `force_push`, an `openai_credits` other than `off`
-or `on`, and an `openai_credits_floor` that is not a number. `policy.mjs unattended` (also
+or `on`, and an `openai_credits_floor` that is not a number, 0 or more. `policy.mjs unattended` (also
 `kickoff --unattended`) sets `push_to_main=auto` and `product_questions=continue_with_assumption`.
 
 A headless conductor that reaches a human gate with nothing independent left posts the question and

@@ -56,7 +56,7 @@ func (d *Decision) JSON() *jsjson.Object {
 //
 // mayDrawCredits says the caller records credit-funded runs (the balance before and after),
 // so a red, non-frontier OpenAI window whose work routing funds from ChatGPT credits is
-// allowed instead of refused.
+// allowed instead of refused, once a fresh reading confirms it (see confirmOnFreshReading).
 func Gate(cfg usage.Config, vendor string, force, frontier, mayDrawCredits bool) (Decision, error) {
 	r, err := usage.GetRouting(cfg, false)
 	var spawnErr *usage.SpawnError
@@ -66,36 +66,83 @@ func Gate(cfg usage.Config, vendor string, force, frontier, mayDrawCredits bool)
 	if err != nil {
 		return Decision{Allowed: true, Note: "usage unavailable (" + err.Error() + "); proceeding"}, nil
 	}
-	p := r.Resolved.Postures.ByVendor(vendor)
+	request := gateRequest{vendor, force, frontier, mayDrawCredits}
+	if decision := request.decide(r); !decision.CreditFunded {
+		return decision, nil
+	}
+	return request.confirmOnFreshReading(cfg)
+}
+
+// gateRequest is what a caller asks of the gate, decided on one routing or another.
+type gateRequest struct {
+	vendor                          string
+	force, frontier, mayDrawCredits bool
+}
+
+func (g gateRequest) decide(r *usage.Routing) Decision {
+	p := r.Resolved.Postures.ByVendor(g.vendor)
 	if p == nil || !p.Available {
-		return Decision{Allowed: true, Note: vendor + " usage unknown; proceeding", Routing: r}, nil
+		return Decision{Allowed: true, Note: g.vendor + " usage unknown; proceeding", Routing: r}
 	}
 	level := p.Overall
-	if frontier {
+	if g.frontier {
 		level = p.Frontier
 	}
-	if level == routing.Red && !force && mayDrawCredits && !frontier && p.CreditFunded {
+	if level == routing.Red && !g.force && g.mayDrawCredits && !g.frontier && p.CreditFunded {
 		return Decision{
 			Allowed:       true,
 			Level:         level,
-			Note:          vendor + " budget is red; drawing ChatGPT credits (" + r.CreditsPolicy.Text() + ").",
+			Note:          g.vendor + " budget is red; drawing ChatGPT credits (" + r.CreditsPolicy.Text() + ").",
 			CreditFunded:  true,
 			CreditsBefore: CreditsBalance(p.Detail),
 			Routing:       r,
-		}, nil
+		}
 	}
-	if level == routing.Red && !force {
-		resets, present := resetsAt(vendor, p.Detail)
+	if level == routing.Red && !g.force {
+		resets, present := resetsAt(g.vendor, p.Detail)
 		return Decision{
 			Allowed:     false,
 			Level:       level,
 			ResetsAt:    resets,
 			HasResetsAt: present,
-			Note:        vendor + " budget is red; refusing to start (pass --force to override). Resets " + jsjson.TemplateStringOf(resets, present) + ".",
+			Note:        g.vendor + " budget is red; refusing to start (pass --force to override). Resets " + jsjson.TemplateStringOf(resets, present) + ".",
 			Routing:     r,
-		}, nil
+		}
 	}
-	return Decision{Allowed: true, Level: level, Routing: r}, nil
+	return Decision{Allowed: true, Level: level, Routing: r}
+}
+
+// confirmOnFreshReading is confirmOnFreshReading: the cached reading behind routing can be
+// minutes old, so a credit draw (OpenAI only) is decided again on a fresh one, which checks
+// the floor against the balance actually left. With no fresh Codex reading the draw is
+// refused (fail closed), as credits are money.
+func (g gateRequest) confirmOnFreshReading(cfg usage.Config) (Decision, error) {
+	r, err := usage.GetRouting(cfg, true)
+	var spawnErr *usage.SpawnError
+	if errors.As(err, &spawnErr) {
+		return Decision{}, err
+	}
+	if err != nil {
+		return g.refuseUnconfirmedDraw(err.Error(), nil), nil
+	}
+	codex := jsjson.Path(r.Usage, "codex")
+	readError, present := jsjson.Lookup(codex, "read_error")
+	if !jsjson.Truthy(jsjson.Path(codex, "ok")) || jsjson.Truthy(readError) {
+		if readError == nil { // codex?.read_error ?? codex?.error
+			readError, present = jsjson.Lookup(codex, "error")
+		}
+		return g.refuseUnconfirmedDraw(jsjson.TemplateStringOf(readError, present), r), nil
+	}
+	return g.decide(r), nil
+}
+
+func (g gateRequest) refuseUnconfirmedDraw(why string, r *usage.Routing) Decision {
+	return Decision{
+		Allowed: false,
+		Level:   routing.Red,
+		Note:    g.vendor + " budget is red and the ChatGPT credits balance could not be re-read (" + why + "); refusing to draw credits (pass --force to override).",
+		Routing: r,
+	}
 }
 
 // resetsAt is the window whose reset ends the refusal: the session window, else Fable's
@@ -122,11 +169,16 @@ func CreditsBalance(codex any) any {
 }
 
 // FreshCreditsBalance is freshCreditsBalance: the balance from a fresh usage reading, for the
-// run record of a credit-funded run; nil when it cannot be read.
+// run record of a credit-funded run; nil when it cannot be read (a failed refresh keeps the
+// last good reading, marked read_error, whose balance is stale).
 func FreshCreditsBalance(cfg usage.Config) any {
 	current, err := usage.Get(cfg, true)
 	if err != nil {
 		return nil
 	}
-	return CreditsBalance(jsjson.Path(current, "codex"))
+	codex := jsjson.Path(current, "codex")
+	if jsjson.Truthy(jsjson.Path(codex, "read_error")) {
+		return nil
+	}
+	return CreditsBalance(codex)
 }

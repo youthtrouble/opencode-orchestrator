@@ -2,7 +2,7 @@
 // Effective autonomy policy for a project: models.json autonomy merged with <project>/.orchestrator/policy.json.
 //   policy.mjs show [--cwd DIR]            policy.mjs set key=value [key=value...] [--cwd DIR]
 //   policy.mjs unattended [--cwd DIR]      (push_to_main=auto, product_questions=continue_with_assumption)
-//   openai_credits is off | on; openai_credits_floor is a number.
+//   openai_credits is off | on; openai_credits_floor is a number, 0 or more.
 import fs from "node:fs";
 import path from "node:path";
 import { effectivePolicy, policyFile, readPolicyOverrides } from "../lib/policy.mjs";
@@ -13,10 +13,11 @@ const ci = argv.indexOf("--cwd"); const root = path.resolve(ci >= 0 ? argv[ci + 
 const file = policyFile(root);
 const read = () => readPolicyOverrides(root);
 const effective = () => effectivePolicy(root, loadRegistry());
+const isFloor = (v) => { const n = decimalOrNull(v); return n !== null && n >= 0; };
 // The message refusing a value the key does not take, or null when it takes it.
 const invalidValue = (k, v) => {
   if (k === "openai_credits" && v !== "off" && v !== "on") return "openai_credits must be off or on";
-  if (k === "openai_credits_floor" && decimalOrNull(v) === null) return "openai_credits_floor must be a number";
+  if (k === "openai_credits_floor" && !isFloor(v)) return "openai_credits_floor must be a number, 0 or more";
   return null;
 };
 if (cmd === "show" || !cmd) console.log(JSON.stringify(effective(), null, 2));

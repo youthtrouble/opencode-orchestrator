@@ -148,7 +148,8 @@ p {
   color: var(--failed-fg);
 }
 
-.level-unknown {
+.level-unknown,
+.level-credits {
   background: var(--paused-bg);
   color: var(--paused-fg);
 }

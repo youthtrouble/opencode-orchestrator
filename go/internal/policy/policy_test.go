@@ -94,8 +94,9 @@ func TestSetRefusesCreditsValuesItDoesNotTake(t *testing.T) {
 	for pair, want := range map[string]string{
 		"openai_credits=security-only": "openai_credits must be off or on",
 		"openai_credits=":              "openai_credits must be off or on",
-		"openai_credits_floor=lots":    "openai_credits_floor must be a number",
-		"openai_credits_floor=1e3":     "openai_credits_floor must be a number",
+		"openai_credits_floor=lots":    "openai_credits_floor must be a number, 0 or more",
+		"openai_credits_floor=1e3":     "openai_credits_floor must be a number, 0 or more",
+		"openai_credits_floor=-5":      "openai_credits_floor must be a number, 0 or more",
 	} {
 		var invalid *InvalidValueError
 		if _, err := Set(parse(t, `{}`), []string{pair}); !errors.As(err, &invalid) || err.Error() != want {
