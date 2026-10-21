@@ -132,6 +132,7 @@ func TestGoldenCasesShowTheirStates(t *testing.T) {
 		"done":                          {stateDone, "the last session finished", "claude", "none"},
 		"idle":                          {stateIdle, "nothing is running", "claude", "none"},
 		"legacy-question":               {stateIdle, "nothing is running", "opencode", "interactive"},
+		"action-question":               {stateNeedsYou, "1 blocking question", "claude", "interactive"},
 		"secrets":                       {stateNeedsYou, "1 blocking question", "claude", "interactive"},
 	}
 	for name, w := range want {

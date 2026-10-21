@@ -285,20 +285,11 @@ func nextAction(d Deps) ([]string, error) {
 		return nil, nil
 	}
 	section, _, _ := strings.Cut(after, "##")
-	next, _, _ := strings.Cut(strings.TrimFunc(section, isJSWhitespace), "\n")
+	next, _, _ := strings.Cut(jsstr.Trim(section), "\n")
 	if next == "" {
 		return nil, nil
 	}
 	return []string{"next: " + jsstr.Slice(next, 0, 160)}, nil
-}
-
-// isJSWhitespace is the set String.prototype.trim removes: WhiteSpace and LineTerminator.
-func isJSWhitespace(r rune) bool {
-	switch r {
-	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff':
-		return true
-	}
-	return r >= '\u2000' && r <= '\u200a'
 }
 
 // field is `${v.key}`.

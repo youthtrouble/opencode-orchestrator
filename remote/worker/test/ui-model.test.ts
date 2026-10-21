@@ -389,3 +389,14 @@ test("an unreadable later summary keeps the last good one and its clock offset",
     assert.equal(after.banner, model.UNREADABLE_SUMMARY);
   }
 });
+
+test("only a question that says ask: action is an action; one without ask is a decision", () => {
+  assert.equal(model.isAction({ ask: "action" }), true);
+  assert.equal(model.isAction({ ask: "decision" }), false);
+  assert.equal(model.isAction({}), false);
+});
+
+test("\"I've done it\" answers with typed text that marks the claim unverified", () => {
+  assert.deepEqual(model.OWNER_REPORTS_DONE, { kind: "typed", text: "Owner reports done (unverified)." });
+  assert.ok(Object.isFrozen(model.OWNER_REPORTS_DONE));
+});

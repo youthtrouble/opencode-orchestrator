@@ -108,8 +108,8 @@ function lastJson(text: string): Json | null {
 // ---- Runtime adapter: the JS libs or the Go `orch` binary behind one interface ------------
 type RuntimeName = "js" | "go";
 type CachedRouting = { usage: Json; stale: boolean; prompt: () => Promise<string> };
-/** `recommended` and `blocking` count only for a question; other kinds ignore them. */
-type MailboxMessage = { from: string; to: string; kind: string; subject: string; body: string; refs: string[]; thread: string | null; recommended: string | undefined; blocking: boolean | undefined };
+/** `recommended`, `blocking` and `ask` count only for a question; other kinds ignore them. */
+type MailboxMessage = { from: string; to: string; kind: string; subject: string; body: string; refs: string[]; thread: string | null; recommended: string | undefined; blocking: boolean | undefined; ask: string | undefined };
 type MailboxQuery = { to: string | null; unackedBy: string | null; kind: string | null; limit: number };
 type ManifestRequest = { task: string; author: string; paths: string[]; baseline: string | null };
 type ManifestCreated = { path: string; manifest_sha256: string; file_count: number };
@@ -334,10 +334,10 @@ function createGoRuntime(bin: string): OrchRuntime {
     },
     // The registry the spawned orch reads; no subcommand needed for a file read.
     registry: () => JSON.parse(fs.readFileSync(ORCH_PATH_ENV.ORCH_REGISTRY ?? path.join(ORCH_PATH_ENV.ORCH_HOME ?? ORCH, "models.json"), "utf8")),
-    async mailboxPost(root, { from, to, kind, subject, body, refs, thread, recommended, blocking }) {
-      // orch refuses --recommended and --blocking on any other kind, where the JS lib ignores them.
+    async mailboxPost(root, { from, to, kind, subject, body, refs, thread, recommended, blocking, ask }) {
+      // orch refuses --recommended, --blocking and --ask on any other kind, where the JS lib ignores them.
       const isQuestion = kind === "question";
-      refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs, ...(isQuestion ? { recommended } : {}) });
+      refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs, ...(isQuestion ? { recommended, ask } : {}) });
       // A missing from/subject is left out so orch reports it ("post needs from and subject"), as is
       // a question's missing recommended answer ("a question needs --recommended ...").
       const args = ["mailbox", "post", "--root", root, ...(from === undefined ? [] : ["--from", from]), "--to", to, "--kind", kind, ...(subject === undefined ? [] : ["--subject", subject])];
@@ -345,6 +345,7 @@ function createGoRuntime(bin: string): OrchRuntime {
       for (const ref of refs) args.push("--ref", ref);
       if (isQuestion && recommended !== undefined) args.push("--recommended", recommended);
       if (isQuestion && blocking !== undefined) args.push("--blocking", String(blocking));
+      if (isQuestion && ask !== undefined) args.push("--ask", ask);
       args.push("--body", "-", "--json"); // PE-3: only a bare, final --json counts
       return JSON.parse((await callOrch(args, { input: body })).stdout);
     },
@@ -618,10 +619,10 @@ export default {
 
       add({
         name: "mailbox_post",
-        description: "Post a durable message to the project mailbox (.orchestrator/mailbox). Use kinds: brief, release, review, closure, question, handoff, blocked, note. A question requires `recommended`, a complete reply the human can accept as it stands, and takes `blocking` (default true): whether you are blocked until it is answered.",
-        input: { type: "object", required: ["from", "subject"], properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" }, kind: { type: "string" }, subject: { type: "string" }, body: { type: "string" }, refs: { type: "array", items: { type: "string" } }, thread: { type: "string" }, recommended: { type: "string", description: "For a question (required there): the answer you recommend" }, blocking: { type: "boolean", description: "For a question: whether it blocks you (default true)" } } },
+        description: "Post a durable message to the project mailbox (.orchestrator/mailbox). Use kinds: brief, release, review, closure, question, handoff, blocked, note. A question requires `recommended`, a complete reply the human can accept as it stands, and takes `blocking` (default true): whether you are blocked until it is answered. A question that asks the human to DO something takes `ask: \"action\"` and no `recommended`, with the steps in `body`; a reply to it is a claim you verify before relying on it. A recommended answer never reports work as done.",
+        input: { type: "object", required: ["from", "subject"], properties: { cwd: { type: "string" }, from: { type: "string" }, to: { type: "string" }, kind: { type: "string" }, subject: { type: "string" }, body: { type: "string" }, refs: { type: "array", items: { type: "string" } }, thread: { type: "string" }, recommended: { type: "string", description: "For a decision question (required there): the answer you recommend" }, blocking: { type: "boolean", description: "For a question: whether it blocks you (default true)" }, ask: { type: "string", enum: ["decision", "action"], description: "For a question: decision (default) or action, for steps the human must do" } } },
         async execute(input: any, c: any) {
-          const m = await rt.mailboxPost(cwdOf(input, c), { from: input.from, to: input.to || "*", kind: input.kind || "note", subject: input.subject, body: input.body || "", refs: input.refs || [], thread: input.thread || null, recommended: input.recommended, blocking: input.blocking });
+          const m = await rt.mailboxPost(cwdOf(input, c), { from: input.from, to: input.to || "*", kind: input.kind || "note", subject: input.subject, body: input.body || "", refs: input.refs || [], thread: input.thread || null, recommended: input.recommended, blocking: input.blocking, ask: input.ask });
           return { content: `posted ${m.id}`, metadata: m };
         },
       });

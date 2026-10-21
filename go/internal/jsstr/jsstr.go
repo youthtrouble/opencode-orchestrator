@@ -138,3 +138,17 @@ func UndecodedTail(data []byte) int {
 	}
 	return 0
 }
+
+// Trim is String.prototype.trim: it removes WhiteSpace and LineTerminator code points from both
+// ends, a set unicode.IsSpace does not match (it omits U+FEFF and includes U+0085).
+func Trim(s string) string {
+	return strings.TrimFunc(s, isJSWhitespace)
+}
+
+func isJSWhitespace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', '\u00a0', '\u1680', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff':
+		return true
+	}
+	return r >= '\u2000' && r <= '\u200a'
+}

@@ -299,6 +299,14 @@
         },
         "blocking": {
           "type": "boolean"
+        },
+        "ask": {
+          "description": "Absent for a decision the owner may accept; \"action\" for steps the owner must do, which carry no recommendation.",
+          "type": "string",
+          "enum": [
+            "decision",
+            "action"
+          ]
         }
       }
     },
@@ -854,6 +862,9 @@
                     },
                     "blocking": {
                       "type": "boolean"
+                    },
+                    "ask": {
+                      "$ref": "#/$defs/Question/properties/ask"
                     },
                     "answer": {
                       "type": [

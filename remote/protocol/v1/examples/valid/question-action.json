@@ -1,0 +1,13 @@
+{
+  "def": "Question",
+  "value": {
+    "id": "m-0003",
+    "at": "2026-10-20T12:00:00Z",
+    "from": "conductor",
+    "subject": "Create the GitHub environment",
+    "body": "1. Open Settings > Environments.\n2. Add work-trains-production.",
+    "recommended": null,
+    "blocking": true,
+    "ask": "action"
+  }
+}

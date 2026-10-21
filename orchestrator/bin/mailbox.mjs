@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // mailbox.mjs post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
-//                  [--recommended TEXT] [--blocking true|false]
+//                  [--recommended TEXT] [--blocking true|false] [--ask decision|action]
 //                                                    (a question needs --recommended, the answer you recommend;
-//                                                     --blocking, default true, says whether it blocks you)
+//                                                     --blocking, default true, says whether it blocks you;
+//                                                     --ask action, for steps the human must do, takes no
+//                                                     --recommended: the body carries the steps)
 // mailbox.mjs list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
 // mailbox.mjs ack --id ID --by B [--note text]
 // mailbox.mjs reply ID-or-prefix "your answer"      (posts a threaded note from "human" and acks the message;
@@ -11,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import tty from "node:tty";
-import { post, list, ack, resolveId, mailboxDir, UnknownMessageError } from "../lib/mailbox.mjs";
+import { post, list, ack, resolveId, mailboxDir, readsAsCompletionClaim, ASKS, UnknownMessageError } from "../lib/mailbox.mjs";
 import { clearGate } from "../lib/flip.mjs";
 import { requireProject } from "../lib/project.mjs";
 
@@ -79,16 +81,24 @@ function exitWithUsage(line) {
   process.exit(2);
 }
 
-// The recommended answer and blocking state of a question, checked before anything is read or written.
-// A bare --blocking means true; other kinds take neither option.
+// The recommended answer, blocking state and ask of a question, checked before anything is read or written.
+// A bare --blocking means true; other kinds take none of the three options.
 function questionOptions(kind) {
   const given = (key) => Object.hasOwn(opts, key) || flags.has(key);
   if (kind !== "question") {
-    if (given("recommended") || given("blocking")) exitWithUsage("--recommended and --blocking are only for --kind question");
+    if (given("recommended") || given("blocking") || given("ask")) exitWithUsage("--recommended, --blocking and --ask are only for --kind question");
     return {};
   }
   const blocking = blockingOption();
+  if (given("ask") && !ASKS.includes(opts.ask)) exitWithUsage("--ask must be decision or action");
+  if (opts.ask === "action") {
+    if (given("recommended")) exitWithUsage("an --ask action question takes no --recommended: put the steps in --body; the owner's reply is a claim to verify");
+    return { blocking, ask: "action" };
+  }
   if (!opts.recommended) exitWithUsage('a question needs --recommended "<the answer you recommend>"');
+  if (readsAsCompletionClaim(opts.recommended)) {
+    exitWithUsage("--recommended reads as a report that work is done; recommended answers are for decisions. To ask the owner to do something, use --ask action with the steps in --body");
+  }
   return { recommended: opts.recommended, blocking };
 }
 

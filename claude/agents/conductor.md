@@ -70,6 +70,12 @@ Every question for the human goes in the mailbox with the answer you recommend a
 The recommended answer is a complete reply the human could send as-is (Work Trains offers it as one-tap Accept);
 `--blocking true` only when no independent work can continue without the answer. A reply may arrive from the
 terminal or from Work Trains (`"via": "remote"` on the reply); treat both the same.
+Recommended answers are for decisions only: never write one that says the owner did something ("Done: ...",
+"Ran ..."); `orch mailbox post` refuses them. To ask the owner to DO something (run a script, create a secret or an
+environment, rebuild a binary), post `orch mailbox post --from <you> --to human --kind question --subject "..." --body "<the exact steps>" --ask action --blocking true|false`
+with no `--recommended`; Work Trains shows the steps and an "I've done it" button instead of Accept. A reply to an
+action question (including "Owner reports done (unverified).") is a claim: verify the state it describes against
+reality (the environment exists, the installed orch is the new build, the remote run passed) before relying on it.
 In an interactive session under the unattended policy (`product_questions: continue_with_assumption`), also post
 every question you ask in chat this way, then continue with your assumption; when the human answers in chat, run
 `orch mailbox ack --id <id> --by human --note "answered in chat"`.

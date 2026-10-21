@@ -1,6 +1,7 @@
 // The Work Trains page (public/app.js) run once against a fake DOM and a fake fetch that serves one
-// summary. The fake follows the DOM where the page relies on it: append and replaceChildren turn any
-// argument that is not a node into text with String(), so a stray null shows as "null", as in a browser.
+// summary and records every request. The fake follows the DOM where the page relies on it: append and
+// replaceChildren turn any argument that is not a node into text with String(), so a stray null shows as
+// "null", as in a browser.
 
 type Child = FakeNode | FakeText;
 
@@ -66,8 +67,16 @@ export class FakeNode {
 const asChild = (node: unknown): Child =>
   node instanceof FakeNode || node instanceof FakeText ? node : new FakeText(String(node));
 
+/** A request the page sent: its method, path and parsed JSON body. */
+export interface SentRequest {
+  method: string;
+  path: string;
+  body: unknown;
+}
+
 export class FakeDocument {
   readonly activeElement = null;
+  readonly requests: SentRequest[] = [];
   // Hidden, so the page schedules no next poll and the test process can exit.
   readonly visibilityState = "hidden";
   private readonly byId = new Map<string, FakeNode>();
@@ -95,12 +104,13 @@ export const PAGE_ORIGIN = "https://trains.example.com";
 
 /**
  * Loads a fresh copy of the page from `origin`, lets it render `summary`, runs `interact` (clicks and
- * the like, while the page's globals are still in place), and returns its document.
+ * the like, while the page's globals are still in place), waits for what that started, and returns
+ * its document.
  */
 export async function pageShowing(
   summary: object,
   origin = PAGE_ORIGIN,
-  interact: (document: FakeDocument) => void = () => {},
+  interact: (document: FakeDocument) => void | Promise<void> = () => {},
 ) {
   const document = new FakeDocument();
   const globals = globalThis as Record<string, unknown>;
@@ -113,16 +123,25 @@ export async function pageShowing(
   Object.assign(globals, {
     document,
     location: { origin },
-    fetch: async () => ({ ok: true, status: 200, type: "basic", json: async () => summary }),
+    fetch: async (path: string, init: { method: string; body?: string }) => {
+      document.requests.push({ method: init.method, path, body: init.body === undefined ? undefined : JSON.parse(init.body) });
+      return { ok: true, status: 200, type: "basic", json: async () => summary };
+    },
     setInterval: () => 0,
   });
   try {
     // A distinct URL is a distinct module instance, so each load starts from an empty page.
     await import(`../../public/app.js?load=${++loads}`);
-    await new Promise((resolve) => setImmediate(resolve));
-    interact(document);
+    await settle();
+    await interact(document);
+    await settle();
   } finally {
     Object.assign(globals, saved);
   }
   return document;
+}
+
+/** Lets the page's pending promise chains run out. */
+async function settle() {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setImmediate(resolve));
 }

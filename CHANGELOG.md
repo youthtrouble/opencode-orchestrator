@@ -11,6 +11,21 @@
   iPhone's safe area (`viewport-fit=cover`), sets its theme colour, and has a 180x180 `apple-touch-icon.png` for the
   home screen. `test/ui-contrast.test.ts` checks every colour pair against WCAG AA from the tokens in `app.css`.
   Shots: `remote/docs/design/after/`.
+- mailbox, remote: Accept can no longer tell the conductor that work the owner was asked to do is done (WT25,
+  incident 2026-10-21: a question asked the owner to run setup scripts, its recommended answer read "Done: token
+  created, ... succeeded", and one tap on Accept reported work nobody had run). **Action questions:** `mailbox post
+  --kind question --ask action` (and the `mailbox_post` tool's `ask: "action"`) asks the owner to DO something; it
+  takes no `--recommended`, the body carries the steps, and the line records `"ask": "action"`. `--ask decision` is
+  the default and is not written, so existing questions are unchanged. **Lint:** a recommended answer that opens
+  with `done`, `ran`, `completed`, `finished`, `created`, `deployed`, `rebuilt`, `installed`, `I ran`, `I've done`,
+  `I have done` or `all done` is refused with exit 2 (JS and `orch`, with parity cases), as is `--recommended` with
+  `--ask action`. **Work Trains:** the snapshot carries `ask` (a new optional field of `Question` and of the
+  summary's questions) and never a recommendation for an action question; the Worker stores it (migration
+  `0003_questions_ask.sql`); the page shows an action question's steps in full with **I've done it** and Reply, no
+  Accept, and **I've done it** sends the typed answer "Owner reports done (unverified).". **Guidance:** AGENTS.md
+  and the Claude conductor's "Questions for the human" now say recommended answers are for decisions only and that
+  a reply to an action question is a claim to verify. **Rollout:** deploy the Worker first; an older Worker
+  rejects a push that carries `ask`.
 - remote: the deploy workflow leaves the `send_email` binding out of the rendered `wrangler.deploy.jsonc` unless
   the `work-trains-production` environment sets the new optional variable `WORK_TRAINS_SEND_EMAIL` to `true`, so an
   account without Email Routing deploys. Without the binding the Worker skips email notifications, as it does when

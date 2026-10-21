@@ -163,3 +163,46 @@ test("a project state the page does not know gets no state class on its pill or 
   assert.deepEqual([...pill, ...progress].map(classOf), ["pill", "progress"]);
   assert.equal(pill[0].textContent, "rebooting");
 });
+
+function summaryWithQuestion(question: object) {
+  const project = {
+    key: "0123456789abcdef0123456789abcdef", name: "demo", hidden: false, state: "needs_you", state_reason: "1 blocking question",
+    door: "claude", run: { kind: "none", since: null, last_activity_at: null }, slice: null, now: null, progress: null,
+    ci: [], events: [], received_at: new Date().toISOString(), sent_at: new Date().toISOString(), pending_action: null,
+    questions: [{ id: "q-1", at: new Date().toISOString(), from: "conductor", subject: "Set up", blocking: true, answer: null, ...question }],
+  };
+  return { ...summaryWithMacSeen(24), projects: [project] };
+}
+
+const buttons = (card: FakeNode) => card.findAll((node) => node.tagName === "button");
+const buttonText = (card: FakeNode) => buttons(card).map((button) => button.textContent);
+
+const STEPS = ["1. Open Settings > Environments.", "2. Add work-trains-production.", "3. Run: orch version", "4.", "5.", "6.", "7. last step"].join("\n");
+
+test("an action question shows its steps whole and offers \"I've done it\" and Reply, never Accept", async () => {
+  const document = await pageShowing(summaryWithQuestion({ body: STEPS, recommended: null, ask: "action" }));
+  const card = document.getElementById("questions");
+  assert.deepEqual(buttonText(card), ["I've done it", "Reply"]);
+  assert.ok(card.textContent.includes(STEPS), "the steps are shown in full, not clamped");
+  assert.doesNotMatch(card.textContent, /Recommended|Show more/);
+});
+
+test("\"I've done it\" sends the typed answer \"Owner reports done (unverified).\" through the answer route", async () => {
+  const document = await pageShowing(summaryWithQuestion({ body: STEPS, recommended: null, ask: "action" }), PAGE_ORIGIN, (page) =>
+    buttons(page.getElementById("questions"))
+      .find((button) => button.textContent === "I've done it")!
+      .dispatch("click"),
+  );
+  const [sent] = document.requests.filter((request) => request.method === "POST");
+  assert.equal(sent.path, "/api/v1/questions/q-1/answer");
+  const { client_key, ...answer } = sent.body as Record<string, unknown>;
+  assert.deepEqual(answer, { kind: "typed", text: "Owner reports done (unverified)." });
+  assert.equal(typeof client_key, "string");
+});
+
+test("a decision question keeps its Accept and recommendation", async () => {
+  const document = await pageShowing(summaryWithQuestion({ body: "Context.", recommended: "Yes, behind a flag." }));
+  const card = document.getElementById("questions");
+  assert.deepEqual(buttonText(card), ["Accept", "Type something else"]);
+  assert.match(card.textContent, /RecommendedYes, behind a flag\./);
+});

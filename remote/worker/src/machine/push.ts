@@ -12,7 +12,7 @@ import { jsonResponse } from "../http.ts";
 import { parseBody } from "../protocol.ts";
 import type { CountedDb } from "../queries.ts";
 import type { HandlerContext } from "../routes.ts";
-import type { ProjectPushResult, ProjectSnapshot, ProjectState, PushRequest, PushResult, Question } from "./wire.ts";
+import type { ProjectPushResult, ProjectSnapshot, ProjectState, PushRequest, PushResult, Question, QuestionAsk } from "./wire.ts";
 
 /** A little under the Mac's own 60 s spacing, so clock skew between the two never defers an honest push. */
 export const DEBOUNCE_SECONDS = 55;
@@ -58,6 +58,7 @@ interface StoredQuestion {
   body: string;
   recommended: string | null;
   blocking: number;
+  ask: QuestionAsk | null;
   closed_at: string | null;
 }
 
@@ -191,7 +192,7 @@ function thisPushWrote(run: PushRun, project: ProjectSnapshot): string[] {
 async function loadQuestions(db: CountedDb, projectKey: string): Promise<StoredQuestion[]> {
   const { results } = await db
     .prepare(
-      `SELECT id, asked_at, asked_by, subject, body, recommended, blocking, closed_at
+      `SELECT id, asked_at, asked_by, subject, body, recommended, blocking, ask, closed_at
        FROM questions WHERE project_key = ?`,
     )
     .bind(projectKey)
@@ -227,8 +228,14 @@ function sameFields(stored: StoredQuestion, question: Question): boolean {
     stored.subject === question.subject &&
     stored.body === question.body &&
     stored.recommended === question.recommended &&
-    stored.blocking === Number(question.blocking)
+    stored.blocking === Number(question.blocking) &&
+    stored.ask === storedAsk(question)
   );
+}
+
+/** A question's `ask` as its row holds it: a snapshot leaves it out for a decision. */
+function storedAsk(question: Question): QuestionAsk | null {
+  return question.ask ?? null;
 }
 
 function insertProject({ ctx, push, id }: PushRun, project: ProjectSnapshot): D1PreparedStatement {
@@ -279,11 +286,11 @@ function insertQuestion(run: PushRun, project: ProjectSnapshot, question: Questi
   return ctx.db
     .prepare(
       `INSERT INTO questions
-         (id, project_key, asked_at, asked_by, subject, body, recommended, blocking, first_seen_at, notify_state)
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${THIS_PUSH_WROTE_PROJECT}`,
+         (id, project_key, asked_at, asked_by, subject, body, recommended, blocking, ask, first_seen_at, notify_state)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${THIS_PUSH_WROTE_PROJECT}`,
     )
     .bind(question.id, project.key, question.at, question.from, question.subject, question.body,
-      question.recommended, Number(question.blocking), ctx.now.toISOString(), notifyState,
+      question.recommended, Number(question.blocking), storedAsk(question), ctx.now.toISOString(), notifyState,
       ...thisPushWrote(run, project));
 }
 
@@ -293,11 +300,11 @@ function reviseQuestion(run: PushRun, project: ProjectSnapshot, question: Questi
   return run.ctx.db
     .prepare(
       `UPDATE questions SET asked_at = ?, asked_by = ?, subject = ?, body = ?, recommended = ?, blocking = ?,
-         closed_at = NULL
+         ask = ?, closed_at = NULL
        WHERE id = ? AND ${THIS_PUSH_WROTE_PROJECT}`,
     )
     .bind(question.at, question.from, question.subject, question.body, question.recommended,
-      Number(question.blocking), question.id, ...thisPushWrote(run, project));
+      Number(question.blocking), storedAsk(question), question.id, ...thisPushWrote(run, project));
 }
 
 function closeQuestion(run: PushRun, project: ProjectSnapshot, id: string): D1PreparedStatement {

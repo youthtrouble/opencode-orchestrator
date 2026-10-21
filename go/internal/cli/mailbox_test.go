@@ -164,6 +164,9 @@ func TestMailboxPostRecordsAQuestionsRecommendationAndBlocking(t *testing.T) {
 		{"blocking by default", []string{"--recommended", "ship it"}, `"recommended":"ship it","blocking":true}`},
 		{"bare --blocking", []string{"--recommended", "ship it", "--blocking"}, `"recommended":"ship it","blocking":true}`},
 		{"--blocking false", []string{"--blocking", "false", "--recommended", "ship it"}, `"recommended":"ship it","blocking":false}`},
+		{"--ask decision is the default, not written", []string{"--ask", "decision", "--recommended", "ship it"}, `"recommended":"ship it","blocking":true}`},
+		{"a word that only begins like a claim", []string{"--recommended", "Donate it"}, `"recommended":"Donate it","blocking":true}`},
+		{"--ask action records ask, no recommendation", []string{"--ask", "action", "--blocking", "false"}, `"blocking":false,"ask":"action"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Setenv("ORCHESTRATOR_PROJECT", t.TempDir())
@@ -180,7 +183,12 @@ func TestMailboxPostRecordsAQuestionsRecommendationAndBlocking(t *testing.T) {
 }
 
 func TestMailboxPostRefusesMisusedQuestionOptionsAndWritesNothing(t *testing.T) {
-	const needsRecommendation = "mailbox post: a question needs --recommended \"<the answer you recommend>\"\n"
+	const (
+		needsRecommendation = "mailbox post: a question needs --recommended \"<the answer you recommend>\"\n"
+		onlyForQuestions    = "mailbox post: --recommended, --blocking and --ask are only for --kind question\n"
+		badAsk              = "mailbox post: --ask must be decision or action\n"
+		claimsDone          = "mailbox post: --recommended reads as a report that work is done; recommended answers are for decisions. To ask the owner to do something, use --ask action with the steps in --body\n"
+	)
 	for _, c := range []struct {
 		name, kind string
 		args       []string
@@ -190,8 +198,16 @@ func TestMailboxPostRefusesMisusedQuestionOptionsAndWritesNothing(t *testing.T) 
 		{"bare --recommended", "question", []string{"--recommended"}, needsRecommendation},
 		{"empty --recommended", "question", []string{"--recommended", ""}, needsRecommendation},
 		{"--blocking maybe", "question", []string{"--recommended", "r", "--blocking", "maybe"}, "mailbox post: --blocking must be true or false\n"},
-		{"--recommended on a note", "note", []string{"--recommended", "r"}, "mailbox post: --recommended and --blocking are only for --kind question\n"},
-		{"bare --blocking on a note", "note", []string{"--blocking"}, "mailbox post: --recommended and --blocking are only for --kind question\n"},
+		{"--recommended on a note", "note", []string{"--recommended", "r"}, onlyForQuestions},
+		{"bare --blocking on a note", "note", []string{"--blocking"}, onlyForQuestions},
+		{"--ask on a note", "note", []string{"--ask", "action"}, onlyForQuestions},
+		{"bare --ask", "question", []string{"--recommended", "r", "--ask"}, badAsk},
+		{"--ask other", "question", []string{"--ask", "both", "--recommended", "r"}, badAsk},
+		{"--ask decision without --recommended", "question", []string{"--ask", "decision"}, needsRecommendation},
+		{"--ask action with --recommended", "question", []string{"--ask", "action", "--recommended", "Yes"},
+			"mailbox post: an --ask action question takes no --recommended: put the steps in --body; the owner's reply is a claim to verify\n"},
+		{"a recommendation that reports work done", "question", []string{"--recommended", "Done: token created, scripts ran"}, claimsDone},
+		{"a padded, upper-case claim", "question", []string{"--recommended", " \u00a0I HAVE DONE the setup"}, claimsDone},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()

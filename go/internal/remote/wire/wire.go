@@ -80,7 +80,8 @@ type Event struct {
 	Subject string `json:"subject"`
 }
 
-// Question is an open question for the human, from the project mailbox.
+// Question is an open question for the human, from the project mailbox. Ask is "action" for
+// steps the owner must do, which carry no recommendation; it is left out for a decision.
 type Question struct {
 	ID          string  `json:"id"`
 	At          string  `json:"at"`
@@ -89,6 +90,7 @@ type Question struct {
 	Body        string  `json:"body"`
 	Recommended *string `json:"recommended"`
 	Blocking    bool    `json:"blocking"`
+	Ask         string  `json:"ask,omitempty"`
 }
 
 // ProjectSnapshot is one project's state as pushed by the Mac.

@@ -119,6 +119,25 @@ describe("mailbox_post", { skip }, () => {
     assert.deepEqual(orchCalls(sandbox, "mailbox"), []);
   });
 
+  test("js: an action question records ask and no recommendation; a recommendation that reports work done is a tool error", async (t) => {
+    const { sandbox, plugin } = await loadJs(t);
+    const r = await plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "run setup", body: "./setup.sh", ask: "action" });
+    assert.equal(r.metadata.ask, "action");
+    assert.equal(Object.hasOwn(r.metadata, "recommended"), false);
+    const claim = await plugin.toolResult("mailbox_post", { from: "conductor", kind: "question", subject: "set up?", recommended: "Done: scripts ran." });
+    assert.equal(claim.error.message, "a recommended answer is a decision to accept, not a report that work is done");
+    const lines = fs.readFileSync(path.join(sandbox.project, ".orchestrator", "mailbox", "messages.jsonl"), "utf8").trim().split("\n");
+    assert.equal(lines.length, 1);
+  });
+
+  test("go: an action question passes --ask after --blocking; an ask beginning with \"--\" is refused", async (t) => {
+    const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: { id: "m-4" } } });
+    await plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "run setup", body: "./setup.sh", blocking: true, ask: "action" });
+    assert.deepEqual(orchCalls(sandbox, "mailbox")[0].argv.slice(-7), ["--blocking", "true", "--ask", "action", "--body", "-", "--json"]);
+    const r = await plugin.toolResult("mailbox_post", { from: "conductor", kind: "question", subject: "hi", ask: "--x" });
+    assert.equal(String(r.error), 'OrchCommandError: ask may not begin with "--" in the go runtime');
+  });
+
   test("go: a question without a recommended answer surfaces orch's exit 2", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { code: 2, stderr: 'mailbox post: a question needs --recommended "<the answer you recommend>"\n' } });
     const r = await plugin.toolResult("mailbox_post", { from: "coder", kind: "question", subject: "hi" });

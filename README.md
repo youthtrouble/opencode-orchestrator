@@ -76,7 +76,10 @@ and for each other, and where your answers go. Questions come in two kinds:
 Every question carries the answer the conductor recommends and whether it blocks the conductor.
 `orch watch` lists them under "QUESTIONS FOR YOU"; `orch mailbox inbox` prints each with its reply
 command, marks blocking ones `(blocking)` and shows the recommended answer, so you can reply with
-it or with your own.
+it or with your own. A question that asks you to *do* something (run a script, create a secret,
+rebuild `orch`) is an action question: it lists the steps in its body and carries no recommended
+answer, so nothing you accept can claim the work is done. Reply once you have done it; the conductor
+checks the result before it relies on your reply.
 
 **...leave it running while I'm away?** From a terminal in the repo, with a brief written to
 `.orchestrator/briefs/<idea>.md`:
@@ -245,7 +248,8 @@ orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"   # the id or its first 8
 ```
 
 Every question shows the answer the conductor recommends and whether it is blocked on you; to accept
-the recommendation, reply with it as written.
+the recommendation, reply with it as written. An action question shows steps instead: do them, then
+reply.
 
 **Clearing a gate.** A conductor stopped at a human gate stays stopped until you clear the gate.
 Answer its question with `orch mailbox reply <id> "..."`, or do the thing it asked for and run
@@ -356,7 +360,9 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 Work Trains is an optional, private status page for every orchestrator project on your Mac, built for your phone.
 It shows each project's state (needs you, failed, paused, working, done, idle), its run, open questions, recent
 events, CI and both budgets. The page can do four things and nothing else: **answer** a question (accept the
-recommended reply or type one; it lands as `orch mailbox reply` would, with `"via": "remote"`), **pause** a project
+recommended reply or type one; it lands as `orch mailbox reply` would, with `"via": "remote"`; an action question
+offers no Accept, shows its steps in full and has an **I've done it** button that sends the typed answer "Owner
+reports done (unverified).", which the conductor verifies), **pause** a project
 (sets the human gate), **resume** it (clears the gate), and **hide** a project from the page (or show it again; this
 never reaches the Mac). An answer, pause or resume can be undone for 10 seconds before the Mac may pick it up. The page
 cannot start runs, run commands, read files or change code. It is macOS-only and self-hosted: you deploy the Worker

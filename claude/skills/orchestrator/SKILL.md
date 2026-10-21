@@ -17,6 +17,8 @@ All tooling lives in `~/.config/opencode/orchestrator` (README there). Shell com
 - Mailbox: `mailbox.mjs post --from claude --to coordinator --kind release --subject "..." --ref path`, `mailbox.mjs list --unacked-by claude`.
   A question carries the reply you recommend and whether it blocks you:
   `mailbox.mjs post --from claude --to human --kind question --subject "..." --body "..." --recommended "..." --blocking true|false`.
+  Recommended answers are for decisions only; to ask the human to DO something, post `--ask action` with the steps in
+  `--body` and no `--recommended`, and verify the state any reply claims before relying on it.
 - Session heartbeat (start of a task, every brief boundary): `session.mjs beat --door claude --now "<one line>" --slice <id> --progress <done>/<total>` (`--state done` when the plan is finished); `session.mjs show` reads it.
 - Manifests: `manifest.mjs create --task T --author claude --out .orchestrator/manifests/T.json <paths>`; `manifest.mjs verify file.json`.
 

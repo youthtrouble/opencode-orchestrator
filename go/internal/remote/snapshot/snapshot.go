@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/discover"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 )
@@ -118,7 +119,7 @@ func hashOf(snapshot wire.ProjectSnapshot) (string, error) {
 // acked, newest first, capped at maxQuestions, and how many of ALL of them are blocking: an
 // old blocking question still makes the project need you when newer ones fill the list. A
 // question posted before the recommended/blocking contract has no recommendation and never
-// blocks.
+// blocks; an action question has none either and blocks as its poster said.
 func openQuestions(messages []message, clean cleaner) (questions []wire.Question, blocking int) {
 	questions = []wire.Question{}
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -137,13 +138,16 @@ func openQuestions(messages []message, clean cleaner) (questions []wire.Question
 	return questions, blocking
 }
 
+// questionOf is msg for the wire. An action question never carries a recommendation, even one
+// written into its line by hand: the page must not offer to accept work as done.
 func questionOf(msg message, clean cleaner) wire.Question {
 	subject := clean.text(msg.subject, maxSubjectUnits)
 	if subject == "" {
 		subject = "(no subject)" // the schema requires one; hand-edited lines may lack it
 	}
+	isAction := msg.ask == mailbox.AskAction
 	var recommended *string
-	if msg.recommended != nil {
+	if msg.recommended != nil && !isAction {
 		recommended = clean.optional(*msg.recommended, maxRecommendedUnits)
 	}
 	return wire.Question{
@@ -153,7 +157,8 @@ func questionOf(msg message, clean cleaner) wire.Question {
 		Subject:     subject,
 		Body:        clean.text(msg.body, maxBodyUnits),
 		Recommended: recommended,
-		Blocking:    recommended != nil && msg.blocking,
+		Blocking:    (recommended != nil || isAction) && msg.blocking,
+		Ask:         msg.ask,
 	}
 }
 

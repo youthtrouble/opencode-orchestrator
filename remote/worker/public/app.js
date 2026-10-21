@@ -295,7 +295,7 @@ function questionCard({ projectName, question }) {
     el("p", { class: "eyebrow" }, projectName, question.blocking ? el("span", { class: "badge" }, "blocking") : null),
     el("h3", { id: headingId }, question.subject),
     questionBody(question),
-    question.recommended === null
+    question.recommended === null || model.isAction(question)
       ? null
       : el(
           "div",
@@ -310,8 +310,10 @@ function questionCard({ projectName, question }) {
   );
 }
 
+/** The body, clamped with Show more; an action's steps are shown whole, so each command can be copied. */
 function questionBody(question) {
   if (question.body === "") return null;
+  if (model.isAction(question)) return el("div", { class: "body" }, el("p", {}, question.body));
   const { preview, clamped } = model.clampBody(question.body);
   const expanded = page.expandedBodies.has(question.id);
   return el(
@@ -346,19 +348,7 @@ function answerControls(question) {
     el(
       "div",
       { class: "row" },
-      question.recommended === null
-        ? null
-        : el(
-            "button",
-            {
-              type: "button",
-              class: "primary",
-              disabled: busy,
-              "data-focus": `accept:${question.id}`,
-              onclick: () => answer(question.id, { kind: "accept" }),
-            },
-            busy ? "Sending…" : "Accept",
-          ),
+      primaryAnswer(question, busy),
       el(
         "button",
         {
@@ -372,6 +362,27 @@ function answerControls(question) {
       ),
     ),
     replying ? replyForm(question.id, replyId, busy) : null,
+  );
+}
+
+/** Accept for a decision with a recommendation, "I've done it" for an action, else nothing. */
+function primaryAnswer(question, busy) {
+  const choice = model.isAction(question)
+    ? { focus: "done", label: "I've done it", body: model.OWNER_REPORTS_DONE }
+    : question.recommended === null
+      ? null
+      : { focus: "accept", label: "Accept", body: { kind: "accept" } };
+  if (choice === null) return null;
+  return el(
+    "button",
+    {
+      type: "button",
+      class: "primary",
+      disabled: busy,
+      "data-focus": `${choice.focus}:${question.id}`,
+      onclick: () => answer(question.id, choice.body),
+    },
+    busy ? "Sending…" : choice.label,
   );
 }
 

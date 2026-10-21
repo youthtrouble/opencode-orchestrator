@@ -12,7 +12,11 @@ export interface Question {
   body: string;
   recommended: string | null;
   blocking: boolean;
+  /** Absent for a decision; "action" for steps the owner must do. */
+  ask?: QuestionAsk;
 }
+
+export type QuestionAsk = "decision" | "action";
 
 export interface ProjectSnapshot {
   key: string;

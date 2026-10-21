@@ -57,7 +57,9 @@ func TestPostRecordsAQuestionsRecommendationAndBlocking(t *testing.T) {
 	}{
 		{"blocking by default", Draft{Kind: "question", Recommended: &answer}, head + `question","subject":"s","body":"","refs":[],"thread":null,"recommended":"ship it","blocking":true}`},
 		{"not blocking", Draft{Kind: "question", Recommended: &answer, Blocking: &notBlocking}, head + `question","subject":"s","body":"","refs":[],"thread":null,"recommended":"ship it","blocking":false}`},
-		{"other kinds ignore both", Draft{Kind: "note", Recommended: &answer, Blocking: &notBlocking}, head + `note","subject":"s","body":"","refs":[],"thread":null}`},
+		{"other kinds ignore all three", Draft{Kind: "note", Recommended: &answer, Blocking: &notBlocking, Ask: AskAction}, head + `note","subject":"s","body":"","refs":[],"thread":null}`},
+		{"a decision is written without ask", Draft{Kind: "question", Recommended: &answer, Ask: AskDecision}, head + `question","subject":"s","body":"","refs":[],"thread":null,"recommended":"ship it","blocking":true}`},
+		{"an action records ask instead of a recommendation", Draft{Kind: "question", Blocking: &notBlocking, Ask: AskAction}, head + `question","subject":"s","body":"","refs":[],"thread":null,"blocking":false,"ask":"action"}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			draft := c.draft
@@ -83,6 +85,43 @@ func TestPostRefusesAQuestionWithoutARecommendation(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(box.Dir, "messages.jsonl")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("messages.jsonl exists after refused posts (stat: %v)", err)
+	}
+}
+
+// An action takes no recommendation, a decision's may not report work as done, and ask is one of
+// the two kinds; each refusal writes nothing.
+func TestPostRefusesARecommendationThatCannotStand(t *testing.T) {
+	box := testMailbox(t)
+	claim, answer := "Done: token created", "ship it"
+	for _, c := range []struct {
+		draft Draft
+		want  error
+	}{
+		{Draft{Recommended: &answer, Ask: AskAction}, ErrActionTakesNoRecommendation},
+		{Draft{Recommended: &claim}, ErrRecommendationClaimsDone},
+		{Draft{Recommended: &answer, Ask: "both"}, ErrUnknownAsk},
+	} {
+		draft := c.draft
+		draft.From, draft.Kind, draft.Subject = "a", "question", "s"
+		if _, err := box.Post(draft); !errors.Is(err, c.want) {
+			t.Errorf("Post(%+v) error = %v, want %v", c.draft, err, c.want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(box.Dir, "messages.jsonl")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("messages.jsonl exists after refused posts (stat: %v)", err)
+	}
+}
+
+func TestReadsAsCompletionClaim(t *testing.T) {
+	for text, want := range map[string]bool{
+		"Done": true, "done.": true, "  Ran the script": true, "COMPLETED": true, "Finished it": true,
+		"created the env": true, "Deployed": true, "rebuilt orch": true, "Installed": true, "I ran it": true,
+		"I've done it": true, "I’ve done it": true, "i have done it": true, "All done!": true, "\ufeffdone": true,
+		"Donate": false, "ranked": false, "Ship it; done later": false, "finiſhed": false, "\u0085done": false, "": false,
+	} {
+		if got := ReadsAsCompletionClaim(text); got != want {
+			t.Errorf("ReadsAsCompletionClaim(%q) = %v, want %v", text, got, want)
+		}
 	}
 }
 

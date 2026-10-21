@@ -78,6 +78,27 @@ test("the summary leaves closed questions out", async () => {
   assert.deepEqual(body!.projects[0].questions.map((q: Json) => q.id), ["q-2"]);
 });
 
+test("the summary carries an action question's ask and leaves it out for a decision; a re-push updates it", async () => {
+  const app = trainsApp();
+  const action = question("q-3", { recommended: null, ask: "action" });
+  await app.push([snapshot({ questions: [action, question("q-1")] })]);
+  const asks = async () => (await app.summary()).body!.projects[0].questions.map((q: Json) => [q.id, q.ask]);
+  assert.deepEqual(await asks(), [["q-1", undefined], ["q-3", "action"]]);
+
+  app.at(60);
+  await app.push([snapshot({ questions: [{ ...action, ask: "decision" }, question("q-1")] })]);
+  assert.deepEqual(await asks(), [["q-1", undefined], ["q-3", "decision"]]);
+});
+
+test("an action question has no recommendation, so accept is refused and a typed answer goes through", async () => {
+  const app = trainsApp();
+  await app.push([snapshot({ questions: [question("q-3", { recommended: null, ask: "action" })] })]);
+  assert.equal((await app.answer("q-3", { kind: "accept", client_key: clientKey(1) })).status, 400);
+  const typed = await app.answer("q-3", { kind: "typed", text: "Owner reports done (unverified).", client_key: clientKey(2) });
+  assert.equal(typed.status, 201);
+  assert.equal(typed.body!.answer.text, "Owner reports done (unverified).");
+});
+
 test("undo_seconds comes from UNDO_SECONDS, defaults to 10 and is clamped to 1..60", async () => {
   for (const [configured, expected] of [[undefined, 10], ["abc", 10], ["0", 1], ["25", 25], ["999", 60]] as const) {
     const app = trainsApp({ env: { UNDO_SECONDS: configured } });

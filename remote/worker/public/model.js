@@ -145,6 +145,17 @@ export function clampBody(body, maxLines = BODY_MAX_LINES, maxChars = BODY_MAX_C
   return { preview: clamped ? `${preview.trimEnd()}…` : body, clamped };
 }
 
+/**
+ * Whether a question asks the owner to do something rather than decide. Its body is the steps, and it
+ * offers no Accept: one tap must never tell the conductor that work it asked for is done.
+ */
+export function isAction(question) {
+  return question.ask === "action";
+}
+
+/** The typed answer "I've done it" sends: a claim the conductor checks against reality, never proof. */
+export const OWNER_REPORTS_DONE = Object.freeze({ kind: "typed", text: "Owner reports done (unverified)." });
+
 /** Whole seconds until `applyAfterIso` on the server's clock; 0 once the window has closed. */
 export function undoSecondsLeft(applyAfterIso, deviceNowMs, offsetMs) {
   const remainingMs = Date.parse(applyAfterIso) - serverNowMs(deviceNowMs, offsetMs);

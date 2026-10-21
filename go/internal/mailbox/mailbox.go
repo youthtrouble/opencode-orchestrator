@@ -12,20 +12,27 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsonl"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 )
 
 // The errors the JS throws, with its messages. ErrAmbiguousID and ErrNoMessage are wrapped
 // with the id or prefix asked for, so err.Error() is the full JS message.
-// ErrQuestionNeedsRecommendation is the JS QuestionNeedsRecommendationError.
+// ErrQuestionNeedsRecommendation is the JS QuestionNeedsRecommendationError; ErrActionTakesNoRecommendation
+// and ErrRecommendationClaimsDone are its RecommendationRefusedError.
 var (
 	ErrIncompletePost              = errors.New("post needs from and subject")
 	ErrQuestionNeedsRecommendation = errors.New("a question needs a recommended answer")
+	ErrActionTakesNoRecommendation = errors.New("an action question takes no recommended answer; its body carries the steps")
+	ErrRecommendationClaimsDone    = errors.New("a recommended answer is a decision to accept, not a report that work is done")
+	ErrUnknownAsk                  = errors.New("a question asks for a decision or an action")
 	ErrAmbiguousID                 = errors.New("ambiguous message id prefix")
 	ErrNoMessage                   = errors.New("no message with id")
 )
@@ -37,6 +44,38 @@ type ShapeError struct {
 }
 
 func (e *ShapeError) Error() string { return e.Detail }
+
+// What a question asks of the human: a decision they may accept as recommended (also when `ask`
+// is absent, as on every question posted before it), or an action they must perform, whose steps
+// the body carries.
+const (
+	AskDecision = "decision"
+	AskAction   = "action"
+)
+
+// Asks are the values `ask` may take, in the order the JS lists them.
+var Asks = []string{AskDecision, AskAction}
+
+// completionClaim matches a recommendation that opens with a report that work is done. Matched
+// against asciiLower(Trim(text)): JS's /i without the u flag folds ASCII letters only, where Go's
+// (?i) would also fold U+017F into "s". \b is an ASCII word boundary in both.
+var completionClaim = regexp.MustCompile(`^(?:done|ran|completed|finished|created|deployed|rebuilt|installed|i ran|i['’]ve done|i have done|all done)\b`)
+
+// ReadsAsCompletionClaim is the JS readsAsCompletionClaim: whether a recommended answer reports
+// work as done (incident 2026-10-21: an Accept told the conductor setup scripts had run when
+// nothing had).
+func ReadsAsCompletionClaim(recommended string) bool {
+	return completionClaim.MatchString(asciiLower(jsstr.Trim(recommended)))
+}
+
+func asciiLower(s string) string {
+	return strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, s)
+}
 
 // DefaultLimit is how many of the latest messages List returns unless asked otherwise.
 const DefaultLimit = 50
@@ -69,7 +108,9 @@ func NewUUID() string {
 // nil Body is the JS default "". An empty Thread is written as null.
 //
 // A question also records Recommended, the answer its poster recommends, and Blocking, whether
-// it blocks the poster (nil is true). Other kinds ignore both, so their lines stay as they were.
+// it blocks the poster (nil is true). Ask "" is a decision, written as before without `ask`; an
+// action records `ask` instead of a recommendation. Other kinds ignore all three, so their lines
+// stay as they were.
 //
 // A reply pulled from Work Trains carries Remote, written last as `"via": "remote"` and
 // `"remote": {"answer_id", "kind"}`. It is Go-only: the JS never writes it and its readers
@@ -84,6 +125,7 @@ type Draft struct {
 	Thread      string
 	Recommended *string
 	Blocking    *bool
+	Ask         string
 	Remote      *RemoteRef
 }
 
@@ -95,14 +137,17 @@ type RemoteRef struct {
 }
 
 // Post appends a message with a fresh id and timestamp and returns it. A falsy From (JS
-// `!from`) or an empty Subject is refused, then a question without a non-empty Recommended.
+// `!from`) or an empty Subject is refused, then a question whose fields cannot stand (see
+// checkQuestion).
 func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	if !jsjson.Truthy(d.From) || d.Subject == "" {
 		return nil, ErrIncompletePost
 	}
 	isQuestion := d.Kind == "question"
-	if isQuestion && (d.Recommended == nil || *d.Recommended == "") {
-		return nil, ErrQuestionNeedsRecommendation
+	if isQuestion {
+		if err := checkQuestion(d); err != nil {
+			return nil, err
+		}
 	}
 	refs := make([]any, len(d.Refs))
 	for i, ref := range d.Refs {
@@ -127,8 +172,13 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	msg.Set("refs", refs)
 	msg.Set("thread", thread)
 	if isQuestion {
-		msg.Set("recommended", *d.Recommended)
+		if d.Ask != AskAction {
+			msg.Set("recommended", *d.Recommended)
+		}
 		msg.Set("blocking", d.Blocking == nil || *d.Blocking)
+		if d.Ask == AskAction {
+			msg.Set("ask", AskAction)
+		}
 	}
 	if d.Remote != nil {
 		remote := jsjson.NewObject()
@@ -141,6 +191,24 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 		return nil, err
 	}
 	return msg, nil
+}
+
+// checkQuestion refuses an unknown Ask, an action with a Recommended, and a decision whose
+// Recommended is missing, empty or reports work as done.
+func checkQuestion(d Draft) error {
+	switch {
+	case d.Ask != "" && !slices.Contains(Asks, d.Ask):
+		return fmt.Errorf("%w, not %s", ErrUnknownAsk, d.Ask)
+	case d.Ask == AskAction && d.Recommended != nil:
+		return ErrActionTakesNoRecommendation
+	case d.Ask == AskAction:
+		return nil
+	case d.Recommended == nil || *d.Recommended == "":
+		return ErrQuestionNeedsRecommendation
+	case ReadsAsCompletionClaim(*d.Recommended):
+		return ErrRecommendationClaimsDone
+	}
+	return nil
 }
 
 // ResolveID accepts a full id or a unique prefix of one (list prints 8-character prefixes)

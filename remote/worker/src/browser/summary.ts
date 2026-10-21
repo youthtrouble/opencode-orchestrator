@@ -1,7 +1,7 @@
 // GET /api/v1/summary (plan D15): everything the page shows, in one read. Projects that need the owner
 // come first; each open question carries its live answer and each project its open action.
 import { jsonResponse } from "../http.ts";
-import type { ProjectState } from "../machine/wire.ts";
+import type { ProjectState, QuestionAsk } from "../machine/wire.ts";
 import type { HandlerContext } from "../routes.ts";
 import { answerView, type StoredAnswer } from "./answers.ts";
 import { undoSeconds } from "./lifecycle.ts";
@@ -19,7 +19,7 @@ const PROJECTS = `
   LIMIT ${MAX_PROJECTS}`;
 
 const OPEN_QUESTIONS = `
-  SELECT id, project_key, asked_at, asked_by, subject, body, recommended, blocking FROM questions
+  SELECT id, project_key, asked_at, asked_by, subject, body, recommended, blocking, ask FROM questions
   WHERE closed_at IS NULL
   ORDER BY asked_at, id`;
 
@@ -59,6 +59,7 @@ interface QuestionRow {
   body: string;
   recommended: string | null;
   blocking: number;
+  ask: QuestionAsk | null;
 }
 
 interface ActionRow {
@@ -142,6 +143,7 @@ function questionFields(question: QuestionRow) {
     body: question.body,
     recommended: question.recommended,
     blocking: question.blocking === 1,
+    ...(question.ask === null ? {} : { ask: question.ask }),
   };
 }
 

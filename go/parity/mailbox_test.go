@@ -188,6 +188,16 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "post/question-empty-recommended", args: append(postQuestion, "--recommended", "")},
 		{name: "post/note-with-recommended", args: []string{"post", "--from", "a", "--subject", "s", "--recommended", "r"}},
 		{name: "post/note-with-bare-blocking", args: []string{"post", "--from", "a", "--kind", "review", "--subject", "s", "--blocking"}},
+		{name: "post/note-with-ask", args: []string{"post", "--from", "a", "--subject", "s", "--ask", "action"}},
+		{name: "post/question-ask-action", args: append(postQuestion, "--ask", "action", "--body", "run ./setup.sh", "--blocking", "false")},
+		{name: "post/question-ask-action-bare-blocking", args: append(postQuestion, "--ask", "action", "--blocking")},
+		{name: "post/question-ask-decision", args: append(postQuestion, "--ask", "decision", "--recommended", "r")},
+		{name: "post/question-ask-decision-no-recommended", args: append(postQuestion, "--ask", "decision")},
+		{name: "post/question-ask-action-recommended", args: append(postQuestion, "--ask", "action", "--recommended", "Yes, go.")},
+		{name: "post/question-ask-action-bare-recommended", args: append(postQuestion, "--ask", "action", "--recommended")},
+		{name: "post/question-ask-other", args: append(postQuestion, "--ask", "Action", "--recommended", "r")},
+		{name: "post/question-ask-empty", args: append(postQuestion, "--ask", "", "--recommended", "r")},
+		{name: "post/question-bare-ask", args: append(postQuestion, "--recommended", "r", "--ask")},
 
 		{name: "list/empty", args: []string{"list"}, seed: seedProjectDir(".orchestrator")},
 		{name: "list/text", args: []string{"list"}, seed: seeded},
@@ -232,9 +242,21 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "inbox/limit-before-filter", args: []string{"inbox"}, seed: seedMailbox(manyQuestions(), "")},
 		{name: "inbox/all-hidden-by-limit", args: []string{"inbox"}, seed: seedMailbox(hiddenQuestions(), "")},
 		{name: "inbox/blocking-recommended-legacy", args: []string{"inbox"}, seed: seedMailbox(mailboxMessages+recommendedQuestions, mailboxAcks)},
+		{name: "inbox/action", args: []string{"inbox"}, seed: seedMailbox(actionQuestions, "")},
+		{name: "list/json-action", args: []string{"list", "--json"}, seed: seedMailbox(actionQuestions, "")},
 
 		{name: "unknown-command", args: []string{"frob"}},
 		{name: "no-command", args: nil},
+	}
+	// Each completion claim is refused however it is cased and padded; a word that only begins
+	// like one, or a claim later in the text, is not.
+	for _, claim := range []string{
+		"Done: token created", "  ran the script", "COMPLETED.", "finished", "Created the env", "deployed it",
+		"Rebuilt orch", "installed", "I ran it", "I've done it", "i’ve done it", "I have done it", "All done!",
+		"\ufeff\u00a0done", "\u0085done", "Done", "ranked first", "Donate", "createdAt is fine", "finiſhed",
+		"Ship it; done later", "I'd ran", "I've  done it",
+	} {
+		cases = append(cases, mailboxCase{name: fmt.Sprintf("post/question-claim=%q", claim), args: append(postQuestion, "--recommended", claim)})
 	}
 	for _, limit := range []string{"0", "abc", "-5", "2.5", "Infinity", "-Infinity", "", " 7 ", "0x10", "-0", "1e0", "0.4", "-0.4"} {
 		cases = append(cases, mailboxCase{name: fmt.Sprintf("list/limit=%q", limit), args: []string{"list", "--limit", limit, "--json"}, seed: seedMailbox(numberedMessages(20), "")})
@@ -307,6 +329,12 @@ var recommendedQuestions = lines(
 // Questions for the several-questions inbox: long bodies with newlines and an emoji across
 // the 400-unit cut (stdout is identical: Node prints the lone surrogate as U+FFFD), no body,
 // one already answered by the human, one to someone else.
+// Action questions: the steps in the body, no recommendation, blocking or not.
+var actionQuestions = lines(
+	`{"id":"13131313-0000-0000-0000-000000000001","at":"2026-10-18T17:00:00.000Z","from":"conductor","to":"human","kind":"question","subject":"run setup","body":"1. ./setup.sh\n2. orch version","refs":[],"thread":null,"blocking":true,"ask":"action"}`,
+	`{"id":"13131313-0000-0000-0000-000000000002","at":"2026-10-18T17:01:00.000Z","from":"conductor","to":"human","kind":"question","subject":"rotate key","body":"b","refs":[],"thread":null,"blocking":false,"ask":"action"}`,
+)
+
 var inboxExtras = lines(
 	`{"id":"eeeeeeee-0000-0000-0000-000000000008","at":"2026-10-18T17:00:00.000Z","from":"coder","to":"human","kind":"question","subject":"long","body":"`+strings.Repeat("ab\\n", 133)+`😀tail","refs":[]}`,
 	`{"id":"eeeeeeee-0000-0000-0000-000000000009","at":"2026-10-18T18:00:00.000Z","from":"coder","to":"human","kind":"question","subject":"no body","refs":[]}`,

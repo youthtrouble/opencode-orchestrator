@@ -345,7 +345,7 @@ The mailbox is append-only JSONL under `.orchestrator/mailbox/`. Kinds in use in
 
 ```sh
 node $ORCH/mailbox.mjs post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
-                           [--recommended TEXT] [--blocking true|false]   # question only
+                           [--recommended TEXT] [--blocking true|false] [--ask decision|action]   # question only
 node $ORCH/mailbox.mjs list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
 node $ORCH/mailbox.mjs ack --id ID --by B [--note text]
 node $ORCH/mailbox.mjs inbox                       # open questions for you, each with its reply command
@@ -362,7 +362,18 @@ bare means `true`) says whether it blocks the poster. The message line gains `"r
 `"blocking"` after `"thread"`; other kinds take neither option. A question without a non-empty
 `--recommended`, a `--blocking` other than `true` or `false`, or either option on another kind is
 refused with a usage line (exit 2, nothing written). `lib/mailbox.mjs` `post()` throws
-`QuestionNeedsRecommendationError` for a question without one. `inbox` ends the header of a blocking
+`QuestionNeedsRecommendationError` for a question without one.
+
+`--ask` says what a question asks of the human: `decision` (the default, also when the line has no
+`ask`) or `action`, for steps the human must do. An action question takes no `--recommended` (the
+body carries the steps) and is written with `"blocking"` then `"ask": "action"` after `"thread"`;
+Work Trains offers it no Accept, only an "I've done it" button and Reply. A recommended answer that
+opens, after trimming and ASCII case aside, with `done`, `ran`, `completed`, `finished`, `created`,
+`deployed`, `rebuilt`, `installed`, `I ran`, `I've done`, `I have done` or `all done` reads as a report
+that work is done and is refused: recommended answers are for decisions. Each of these, a `--ask`
+other than `decision` or `action`, and `--ask` on another kind is a usage line (exit 2, nothing
+written); `post()` throws `RecommendationRefusedError` for the first two. A reply to an action
+question is a claim the conductor verifies before relying on it. `inbox` ends the header of a blocking
 question with ` (blocking)` and prints `recommended: <first 200 UTF-16 units, newlines as spaces>` under its body; older
 questions without these keys print as before.
 

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { post, list, QuestionNeedsRecommendationError } from "../lib/mailbox.mjs";
+import { post, list, readsAsCompletionClaim, QuestionNeedsRecommendationError, RecommendationRefusedError } from "../lib/mailbox.mjs";
 import { runWithLateStdin } from "./late-stdin.mjs";
 
 const mailboxCli = fileURLToPath(new URL("../bin/mailbox.mjs", import.meta.url));
@@ -141,6 +141,8 @@ test("mailbox post records a question's recommended answer and blocking state af
     [["--recommended", "ship it"], '"thread":null,"recommended":"ship it","blocking":true}'],
     [["--recommended", "ship it", "--blocking"], '"thread":null,"recommended":"ship it","blocking":true}'],
     [["--blocking", "false", "--recommended", "ship it"], '"thread":null,"recommended":"ship it","blocking":false}'],
+    [["--ask", "decision", "--recommended", "ship it"], '"thread":null,"recommended":"ship it","blocking":true}'],
+    [["--ask", "action", "--blocking", "false"], '"thread":null,"blocking":false,"ask":"action"}'],
   ]) {
     const project = tempProject(t);
     const r = postQuestion(project, ...args);
@@ -151,7 +153,9 @@ test("mailbox post records a question's recommended answer and blocking state af
 
 test("mailbox post refuses misused question options, exits 2 and writes nothing", (t) => {
   const needsRecommendation = 'mailbox post: a question needs --recommended "<the answer you recommend>"\n';
-  const onlyForQuestions = "mailbox post: --recommended and --blocking are only for --kind question\n";
+  const onlyForQuestions = "mailbox post: --recommended, --blocking and --ask are only for --kind question\n";
+  const badAsk = "mailbox post: --ask must be decision or action\n";
+  const claimsDone = "mailbox post: --recommended reads as a report that work is done; recommended answers are for decisions. To ask the owner to do something, use --ask action with the steps in --body\n";
   for (const [args, stderr] of [
     [["--kind", "question"], needsRecommendation],
     [["--kind", "question", "--recommended"], needsRecommendation],
@@ -159,11 +163,38 @@ test("mailbox post refuses misused question options, exits 2 and writes nothing"
     [["--kind", "question", "--recommended", "r", "--blocking", "maybe"], "mailbox post: --blocking must be true or false\n"],
     [["--recommended", "r"], onlyForQuestions],
     [["--kind", "note", "--blocking"], onlyForQuestions],
+    [["--ask", "action"], onlyForQuestions],
+    [["--kind", "question", "--recommended", "r", "--ask"], badAsk],
+    [["--kind", "question", "--ask", "task", "--recommended", "r"], badAsk],
+    [["--kind", "question", "--ask", "decision"], needsRecommendation],
+    [["--kind", "question", "--ask", "action", "--recommended", "Yes"],
+      "mailbox post: an --ask action question takes no --recommended: put the steps in --body; the owner's reply is a claim to verify\n"],
+    [["--kind", "question", "--recommended", "Done: token created, wt-24-owner.sh succeeded, orch rebuilt"], claimsDone],
+    [["--kind", "question", "--recommended", "  i've DONE it"], claimsDone],
   ]) {
     const project = tempProject(t);
     const r = mailbox(project, "post", "--from", "conductor", "--subject", "s", ...args);
     assert.deepEqual([r.status, r.stdout, r.stderr], [2, "", stderr], args.join(" "));
     assert.equal(fs.existsSync(path.join(project, ".orchestrator")), false);
+  }
+});
+
+test("post() refuses an action with a recommendation and a recommendation that reports work done, writing nothing", (t) => {
+  const project = tempProject(t);
+  const question = { from: "conductor", kind: "question", subject: "set up?" };
+  assert.throws(() => post(project, { ...question, ask: "action", recommended: "Yes" }), RecommendationRefusedError);
+  assert.throws(() => post(project, { ...question, recommended: "Ran the setup." }), RecommendationRefusedError);
+  assert.throws(() => post(project, { ...question, ask: "task", recommended: "Yes" }), /a question asks for a decision or an action, not task/);
+  assert.equal(fs.existsSync(messagesFile(project)), false);
+});
+
+// The incident's recommendation and each listed opener are claims; words that only begin like one are not.
+test("readsAsCompletionClaim matches the openers that report work done, ASCII case and padding aside", () => {
+  const claims = ["Done", "done.", " Ran it", "COMPLETED", "finished", "Created the env", "deployed", "Rebuilt orch", "installed it",
+    "I ran it", "I've done it", "I’ve done it", "I have done it", "all done", "\ufeffDone"];
+  for (const text of claims) assert.equal(readsAsCompletionClaim(text), true, text);
+  for (const text of ["Donate", "ranked", "Ship it; done later", "finiſhed", "Create the env first", ""]) {
+    assert.equal(readsAsCompletionClaim(text), false, text);
   }
 });
 

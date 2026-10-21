@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
@@ -52,7 +53,7 @@ func Mailbox(args []string, stdio Stdio) int {
 // ignores --json). As in list, only a bare --json counts.
 func mailboxPost(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) int {
 	kind := valueOr(parsed.Values["kind"], "note")
-	recommended, blocking, usage := questionOptions(parsed, kind)
+	question, usage := questionOptions(parsed, kind)
 	if usage != "" {
 		fmt.Fprintf(stdio.Err, "mailbox post: %s\n", usage)
 		return 2
@@ -72,8 +73,9 @@ func mailboxPost(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) 
 		Body:        body,
 		Refs:        parsed.Refs,
 		Thread:      parsed.Values["thread"],
-		Recommended: recommended,
-		Blocking:    blocking,
+		Recommended: question.recommended,
+		Blocking:    question.blocking,
+		Ask:         question.ask,
 	})
 	if err != nil {
 		return crash(stdio, err)
@@ -87,19 +89,26 @@ func mailboxPost(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) 
 	return printLine(stdio, receipt)
 }
 
-// questionOptions is the recommended answer and blocking state of a question, checked before
-// anything is read or written, or the usage line that refuses the post. A bare --blocking
-// means true; other kinds take neither option.
-func questionOptions(parsed cliargs.MailboxArgs, kind string) (recommended *string, blocking *bool, usage string) {
+// questionFields are the options only a question takes; the zero value is another kind's.
+type questionFields struct {
+	recommended *string
+	blocking    *bool
+	ask         string
+}
+
+// questionOptions is the recommended answer, blocking state and ask of a question, checked
+// before anything is read or written, or the usage line that refuses the post. A bare
+// --blocking means true; other kinds take none of the three options.
+func questionOptions(parsed cliargs.MailboxArgs, kind string) (questionFields, string) {
 	given := func(key string) bool {
 		_, hasValue := parsed.Values[key]
 		return hasValue || parsed.Flags[key]
 	}
 	if kind != "question" {
-		if given("recommended") || given("blocking") {
-			return nil, nil, "--recommended and --blocking are only for --kind question"
+		if given("recommended") || given("blocking") || given("ask") {
+			return questionFields{}, "--recommended, --blocking and --ask are only for --kind question"
 		}
-		return nil, nil, ""
+		return questionFields{}, ""
 	}
 	isBlocking := true
 	switch value, hasValue := parsed.Values["blocking"]; {
@@ -107,13 +116,26 @@ func questionOptions(parsed cliargs.MailboxArgs, kind string) (recommended *stri
 	case value == "false":
 		isBlocking = false
 	default:
-		return nil, nil, "--blocking must be true or false"
+		return questionFields{}, "--blocking must be true or false"
+	}
+	ask, hasAsk := parsed.Values["ask"]
+	if given("ask") && !(hasAsk && slices.Contains(mailbox.Asks, ask)) {
+		return questionFields{}, "--ask must be decision or action"
+	}
+	if ask == mailbox.AskAction {
+		if given("recommended") {
+			return questionFields{}, "an --ask action question takes no --recommended: put the steps in --body; the owner's reply is a claim to verify"
+		}
+		return questionFields{blocking: &isBlocking, ask: mailbox.AskAction}, ""
 	}
 	answer := parsed.Values["recommended"]
 	if answer == "" {
-		return nil, nil, `a question needs --recommended "<the answer you recommend>"`
+		return questionFields{}, `a question needs --recommended "<the answer you recommend>"`
 	}
-	return &answer, &isBlocking, ""
+	if mailbox.ReadsAsCompletionClaim(answer) {
+		return questionFields{}, "--recommended reads as a report that work is done; recommended answers are for decisions. To ask the owner to do something, use --ask action with the steps in --body"
+	}
+	return questionFields{recommended: &answer, blocking: &isBlocking}, ""
 }
 
 func mailboxList(box *mailbox.Mailbox, parsed cliargs.MailboxArgs, stdio Stdio) int {

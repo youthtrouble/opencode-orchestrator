@@ -147,3 +147,19 @@ func TestUndecodedTailHoldsBackAnIncompleteCharacter(t *testing.T) {
 		}
 	}
 }
+
+// TestTrimMatchesNode checks Trim against String.prototype.trim for every code point Go's
+// unicode.IsSpace or the JS whitespace set might disagree on.
+func TestTrimMatchesNode(t *testing.T) {
+	var inputs []string
+	for r := rune(0); r <= 0x3000; r++ {
+		inputs = append(inputs, string(r)+"x"+string(r))
+	}
+	inputs = append(inputs, "\ufeff x \ufeff", "\u205f\u3000x")
+	got := nodeJSON(t, `console.log(JSON.stringify(JSON.parse(process.argv[1]).map(s => s.trim().toWellFormed())))`, inputs)
+	for i, s := range inputs {
+		if Trim(s) != got[i] {
+			t.Errorf("Trim(%q) = %q, Node says %q", s, Trim(s), got[i])
+		}
+	}
+}

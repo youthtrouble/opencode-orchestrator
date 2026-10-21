@@ -24,17 +24,44 @@ export class QuestionNeedsRecommendationError extends Error {
   constructor() { super("a question needs a recommended answer"); }
 }
 
-// A question also records the answer its poster recommends and whether it blocks the poster (default true).
-// Other kinds ignore both, so their lines stay as they were.
-export function post(projectRoot, { from, to = "*", kind = "note", subject, body = "", refs = [], thread = null, recommended, blocking = true }) {
+// Thrown when a question's recommended answer cannot stand: an action question takes none, and a decision's
+// recommendation must not report work as done (incident 2026-10-21: an Accept told the conductor that setup
+// scripts had run when nothing had).
+export class RecommendationRefusedError extends Error {}
+
+// What a question asks of the human: a `decision` they may accept as recommended (also when `ask` is absent,
+// as on every question posted before it), or an `action` they must perform, whose steps the body carries.
+export const ASKS = ["decision", "action"];
+
+// A recommended answer that opens (after trimming, ASCII case aside) with one of these claims work is done.
+// The /i is ASCII-only without the u flag, and \b is an ASCII word boundary; package mailbox in Go matches alike.
+const COMPLETION_CLAIM = /^(?:done|ran|completed|finished|created|deployed|rebuilt|installed|i ran|i['’]ve done|i have done|all done)\b/i;
+
+export function readsAsCompletionClaim(recommended) {
+  return COMPLETION_CLAIM.test(recommended.trim());
+}
+
+// A question also records the answer its poster recommends and whether it blocks the poster (default true);
+// an action question records `ask` instead of a recommendation. Other kinds ignore all three, so their lines
+// stay as they were.
+export function post(projectRoot, { from, to = "*", kind = "note", subject, body = "", refs = [], thread = null, recommended, blocking = true, ask }) {
   if (!from || !subject) throw new Error("post needs from and subject");
   const msg = { id: crypto.randomUUID(), at: new Date().toISOString(), from, to, kind, subject, body, refs, thread };
-  if (kind === "question") {
-    if (typeof recommended !== "string" || !recommended) throw new QuestionNeedsRecommendationError();
-    Object.assign(msg, { recommended, blocking });
-  }
+  if (kind === "question") Object.assign(msg, questionFields({ recommended, blocking, ask }));
   appendJsonl(path.join(mailboxDir(projectRoot), "messages.jsonl"), msg);
   return msg;
+}
+
+// A decision (the default) is written as before, without `ask`, so absent and "decision" mean one thing.
+function questionFields({ recommended, blocking, ask = "decision" }) {
+  if (!ASKS.includes(ask)) throw new Error(`a question asks for a decision or an action, not ${ask}`);
+  if (ask === "action") {
+    if (recommended !== undefined) throw new RecommendationRefusedError("an action question takes no recommended answer; its body carries the steps");
+    return { blocking, ask };
+  }
+  if (typeof recommended !== "string" || !recommended) throw new QuestionNeedsRecommendationError();
+  if (readsAsCompletionClaim(recommended)) throw new RecommendationRefusedError("a recommended answer is a decision to accept, not a report that work is done");
+  return { recommended, blocking };
 }
 
 // Thrown when no message matches an id or prefix, so a command can name the mailbox it searched.

@@ -64,6 +64,7 @@ type message struct {
 	id, kind, from, to, subject, body string
 	at                                time.Time
 	recommended                       *string // nil for questions posted before the contract
+	ask                               string  // mailbox.AskAction, or "" for a decision
 	blocking, ackedByHuman            bool
 }
 
@@ -234,6 +235,9 @@ func readMessages(root string) ([]message, error) {
 		}
 		if recommended := text("recommended"); recommended != "" {
 			msg.recommended = &recommended
+		}
+		if text("ask") == mailbox.AskAction {
+			msg.ask = mailbox.AskAction
 		}
 		ackedBy, _ := jsjson.Path(line, "acked_by").([]any)
 		msg.ackedByHuman = slices.Contains(ackedBy, any("human"))
