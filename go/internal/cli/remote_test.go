@@ -272,7 +272,7 @@ func workTrainsProjects(t *testing.T, home string) (root string) {
 	t.Helper()
 	root = filepath.Join(home, "Developer")
 	question := `{"id":"00000000-0000-4000-8000-000000000101","at":"2026-10-20T11:00:00.000Z","from":"conductor-claude",` +
-		`"to":"human","kind":"question","subject":"Push from ` + home + `/Developer/app for owner@example.com?",` +
+		`"to":"human","kind":"question","subject":"Push from ` + home + `/Developer/app, for owner@example.com?",` +
 		`"body":"token sk-test000000000000000000000000FAKE","refs":[],"thread":null,"recommended":"Yes","blocking":true}` + "\n"
 	for path, content := range map[string]string{
 		"app/.orchestrator/mailbox/messages.jsonl": question,
@@ -348,7 +348,7 @@ func TestRemotePushDryRunPrintsTheRedactedRequestAndWritesNothing(t *testing.T) 
 			t.Errorf("the dry run shows %q:\n%s", leak, stdout)
 		}
 	}
-	if !strings.Contains(stdout, `"Push from ~/Developer/app for <email>?"`) {
+	if !strings.Contains(stdout, `"Push from <path>, for <email>?"`) {
 		t.Errorf("the question subject is not redacted as expected:\n%s", stdout)
 	}
 

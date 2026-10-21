@@ -93,13 +93,31 @@ lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected
 - `questions`: the newest 20 questions to `human` or `*` not acked by `human`, newest first; a
   question posted without `recommended` has none and never blocks. `events`: the newest 10
   messages as `{id, at, kind, from, subject}`, never a body. `ci` is empty for now. A message id
-  is sent as is, so a message whose id is not 1-64 of `A-Z a-z 0-9 -` (orch writes uuids), or
-  looks like a token, is left out.
-- Every free-text field is redacted (`incident.Redact` then `ScrubTokens`: home directory, user
-  paths, emails, tokens, uuids and session ids become placeholders) and cut to the schema's cap,
-  ending in `…` when cut.
-- `budget`: both vendors' postures from the cached usage reading; `null` when there is no cache or
-  it is more than 30 minutes old.
+  is sent as is, so a message whose id is not a lowercase uuid (the form orch writes) is left out.
+- Every free-text field is scrubbed, then redacted, then cut to the schema's cap, ending in `…`
+  when cut. The scrub (Work Trains only; `incident.Redact` keeps its JS twin's rules) replaces
+  credentials: GitHub (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), AWS access key ids,
+  Slack, Google API, Stripe and npm tokens (matched wherever the prefix starts, even glued to a
+  word as in `backup_ghp_...`), JWTs, PEM private key blocks and `Bearer` values become
+  placeholders, the value of a credential assignment (`password=`, `token:`, `secret=`,
+  `api_key=`, ...) becomes `<redacted>`, and URL user info becomes `<credentials>@`. Any other run
+  of `A-Z a-z 0-9 _ -` with a piece (between `-` and `_`) of 24 or more characters mixing letters
+  and digits becomes `<token>`: this takes full 40-hex commit SHAs too, while short SHAs, uuids,
+  words, slugs and `ses_` ids stay. It also replaces every absolute filesystem path with `<path>`:
+  a quoted path (`"..."`, `'...'`, `` `...` ``) whole, spaces included; an unquoted Unix path
+  (`/x`, `/x/y`, `file://...`, `~/...`, escaped spaces included), Windows drive path (`C:\x`,
+  `C:/x`) or UNC share (`\\server\share`), together with the rest of its clause: everything up to
+  the next newline, comma, semicolon, quote, closing bracket or parenthesis, or the end of the text,
+  whatever its case, because a final component may hold a space (`see /Volumes/Private client now`
+  is sent as `see <path>`). An `http://` or `https://` URL ends the clause early and is kept. A path
+  counts only where one can start, so a lone `/`, URLs (`https://host/a/b`), words joined by a slash
+  (`and/or`, `w/o`, `1/2`) and relative paths (`go/internal`) stay; the prose swallowed after an
+  unquoted path is a loss D11 accepts.
+  `incident.Redact` then replaces the home directory, user paths, emails, tokens, uuids and
+  session ids.
+- `budget`: both vendors' postures from the cached usage reading and the registry's thresholds;
+  `null` when there is no cache or it is more than 30 minutes old. It runs no program: unlike
+  `orch routing`, it does not detect opencode's channels (`sqlite3`, `opencode auth list`).
 
 The snapshot goldens in `internal/remote/snapshot/testdata/*.golden.json` are built from the fixture
 projects under `testdata/projects/` with a fixed clock and machine id; `go test` compares them byte

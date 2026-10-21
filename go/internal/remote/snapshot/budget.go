@@ -1,10 +1,10 @@
 package snapshot
 
 import (
-	"errors"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/registry"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
@@ -17,20 +17,25 @@ const maxBudgetAge = 30 * time.Minute
 
 // Budget maps the cached usage reading to both vendors' postures, without collecting or
 // refreshing it. It is nil when there is no cache or it is older than 30 minutes (by its
-// generated_at, read with cfg.Now). A registry or cache that cannot be read is an error.
+// generated_at, read with cfg.Now). A registry that cannot be read is an error.
+//
+// It reads two files and runs nothing: the postures need only the reading and the registry's
+// thresholds, so it skips usage.CachedRouting, whose role routing detects opencode's channels
+// with sqlite3 or `opencode auth list` (and a dry run must not touch opencode's database).
 func Budget(cfg usage.Config) (*wire.Budget, error) {
-	cached, err := usage.CachedRouting(cfg)
-	switch {
-	case errors.Is(err, usage.ErrNoCache):
-		return nil, nil
-	case err != nil:
+	reg, err := registry.Load(cfg.RegistryFile)
+	if err != nil {
 		return nil, err
 	}
-	generatedAt, ok := parseTime(jsjson.Path(cached.Usage, "generated_at"))
+	cached := usage.ReadCached(cfg, maxBudgetAge)
+	if cached == nil {
+		return nil, nil
+	}
+	generatedAt, ok := parseTime(jsjson.Path(cached, "generated_at"))
 	if !ok || cfg.Now().Sub(generatedAt) > maxBudgetAge {
 		return nil, nil
 	}
-	postures := cached.Resolved.Postures
+	postures := routing.VendorPostures(cached, reg, cfg.Now())
 	return &wire.Budget{
 		Anthropic: postureOf(postures.Anthropic, "session"),
 		OpenAI:    postureOf(postures.OpenAI, "five_hour"),

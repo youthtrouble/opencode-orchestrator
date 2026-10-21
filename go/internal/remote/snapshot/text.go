@@ -23,16 +23,10 @@ const (
 	maxRecommendedUnits = 1000
 )
 
-// sendableIDPattern is the charset of the mailbox ids orch writes (uuids from randomUUID and
-// mailbox.NewUUID), up to the schema's 64. An id is the one message field sent without
-// redaction, so a hand-edited id outside it (a path, an email) is not sent at all.
-var sendableIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-
-// sendableID reports an id that may go on the wire verbatim: in the mailbox charset and not
-// shaped like a token (sk-..., which the charset alone would admit).
-func sendableID(id string) bool {
-	return sendableIDPattern.MatchString(id) && incident.ScrubTokens(id) == id
-}
+// sendableID is the one message field sent without redaction, so only the form orch's writers
+// generate goes verbatim: a lowercase uuid (randomUUID in JS, mailbox.NewUUID in Go). A
+// hand-edited id (a path, an email, a credential) is not sent at all.
+var sendableID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`).MatchString
 
 // redactCutUnits is where incident.Redact cuts its result. A redacted text that long may have
 // been cut there, so it is marked as cut even when it fits its cap.
@@ -40,13 +34,15 @@ const redactCutUnits = 2000
 
 const ellipsis = "…"
 
-// cleaner prepares free text for the wire: it strips what may identify the owner (the home
-// directory, user paths, emails, tokens, uuids, session ids) and cuts it to a schema cap.
+// cleaner prepares free text for the wire: it strips what may identify the owner or open
+// their accounts (credentials, filesystem paths, the home directory, emails, uuids, session
+// ids) and cuts it to a schema cap.
 type cleaner struct{ home string }
 
-// text redacts s and cuts it to maxUnits.
+// text redacts s and cuts it to maxUnits. incident.Redact runs last, so its own cut is the
+// one redactCutUnits detects.
 func (c cleaner) text(s string, maxUnits int) string {
-	redacted := incident.ScrubTokens(incident.Redact(c.home, s))
+	redacted := incident.Redact(c.home, scrubOutbound(s))
 	if length := utf16Length(redacted); length > maxUnits || length >= redactCutUnits {
 		return shorten(redacted, maxUnits)
 	}

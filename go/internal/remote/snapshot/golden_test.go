@@ -40,7 +40,6 @@ func testEnv() Env {
 func testUsageConfig(t *testing.T, usageFile string) usage.Config {
 	t.Helper()
 	return usage.Config{
-		Home:         t.TempDir(), // no opencode credentials: channel detection finds none
 		UsageFile:    usageFile,
 		RegistryFile: filepath.Join("testdata", "usage", "models.json"),
 		Now:          func() time.Time { return testNow },

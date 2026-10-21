@@ -53,3 +53,36 @@ func TestBudgetReportsAnUnreadableRegistry(t *testing.T) {
 		t.Errorf("Budget = %v, %v; want the registry error", budget, err)
 	}
 }
+
+// A dry run must run nothing: with opencode's database present, role routing would detect
+// channels with sqlite3 (and then `opencode auth list`), so both are planted on an otherwise
+// empty PATH and must never be called.
+func TestBudgetRunsNoProgramWithAFreshCache(t *testing.T) {
+	home := t.TempDir()
+	database := filepath.Join(home, ".local", "share", "opencode", "opencode.db")
+	if err := os.MkdirAll(filepath.Dir(database), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(database, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	invocations := filepath.Join(t.TempDir(), "invocations")
+	for _, program := range []string{"sqlite3", "opencode"} {
+		script := "#!/bin/sh\necho " + program + " >> '" + invocations + "'\n"
+		if err := os.WriteFile(filepath.Join(bin, program), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+
+	cfg := testUsageConfig(t, writeUsage(t, `{"generated_at":"2026-10-20T11:59:00.000Z",
+		"claude":{"ok":true,"session":{"pct":10}},"codex":{"ok":true,"five_hour":{"pct":10}}}`))
+	cfg.Home = home
+	if budget, err := Budget(cfg); budget == nil || err != nil {
+		t.Fatalf("Budget = %v, %v; want the fresh cache's postures", budget, err)
+	}
+	if ran, err := os.ReadFile(invocations); err == nil {
+		t.Errorf("Budget ran %q", ran)
+	}
+}

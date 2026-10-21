@@ -8,8 +8,11 @@
   direct children with a `.orchestrator/` directory; linked worktrees and `exclude` matches
   skipped; one per real path). Each snapshot derives the project state (`needs_you`, `failed`,
   `paused`, `working`, `done`, `idle`), door, run, slice and progress, the open questions to the
-  human and the last 10 message headlines; free text is redacted and capped, paths are never sent,
-  a message whose id is not mailbox-shaped is left out, `orch_version` is the bare release number
+  human and the last 10 message headlines; free text is scrubbed of credentials (provider tokens,
+  JWTs, private keys, `Bearer` values, `password=`-style assignments, URL user info, any other long
+  letter-and-digit run) and every absolute filesystem path (quoted, with spaces, single-component,
+  Windows and UNC, an unquoted one with the rest of its clause), then redacted and capped, a
+  message whose id is not a lowercase uuid is left out, the budget is read without running any program, `orch_version` is the bare release number
   and the project is keyed by an opaque hash. `orch remote status` now shows the discovered
   projects' count and names and any root it could not scan. Snapshot goldens are checked against
   the protocol schema by `remote/protocol/test/go-goldens.test.ts`.

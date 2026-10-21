@@ -78,23 +78,24 @@ func TestQuestionsAndEventsFollowTheContract(t *testing.T) {
 		return `{"id":"` + id + `","at":"2026-10-20T11:00:00.000Z","from":"conductor","to":"` + to + `","kind":"` + kind +
 			`","subject":"s-` + id + `","body":"secret body ` + id + `","refs":[],"thread":null` + extra + "}\n"
 	}
+	legacy, toCoder, acked, noTime := testID(26), testID(27), testID(28), testID(29)
 	var messages strings.Builder
 	for i := range 25 {
-		messages.WriteString(line("q"+string(rune('a'+i)), "question", "human", `,"recommended":"yes","blocking":false`))
+		messages.WriteString(line(testID(i+1), "question", "human", `,"recommended":"yes","blocking":false`))
 	}
-	messages.WriteString(line("legacy", "question", "*", ``))
-	messages.WriteString(line("to-coder", "question", "coder", `,"recommended":"yes","blocking":true`))
-	messages.WriteString(line("acked", "question", "human", `,"recommended":"yes","blocking":true`))
-	messages.WriteString(`{"id":"no-time","at":"yesterday","from":"x","to":"*","kind":"note","subject":"s"}` + "\n")
+	messages.WriteString(line(legacy, "question", "*", ``))
+	messages.WriteString(line(toCoder, "question", "coder", `,"recommended":"yes","blocking":true`))
+	messages.WriteString(line(acked, "question", "human", `,"recommended":"yes","blocking":true`))
+	messages.WriteString(`{"id":"` + noTime + `","at":"yesterday","from":"x","to":"*","kind":"note","subject":"s"}` + "\n")
 	messages.WriteString(`not json at all` + "\n")
 	snapshot, err := Build(project(t, map[string]string{
 		"mailbox/messages.jsonl": messages.String(),
-		"mailbox/acks.jsonl":     `{"id":"acked","by":"human","at":"2026-10-20T11:01:00.000Z","note":"replied"}` + "\n",
+		"mailbox/acks.jsonl":     `{"id":"` + acked + `","by":"human","at":"2026-10-20T11:01:00.000Z","note":"replied"}` + "\n",
 	}), testEnv())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Questions) != maxQuestions || snapshot.Questions[0].ID != "legacy" || snapshot.Questions[1].ID != "qy" {
+	if len(snapshot.Questions) != maxQuestions || snapshot.Questions[0].ID != legacy || snapshot.Questions[1].ID != testID(25) {
 		t.Fatalf("questions: %d, first %q then %q; want the newest %d open ones, newest first", len(snapshot.Questions),
 			snapshot.Questions[0].ID, snapshot.Questions[1].ID, maxQuestions)
 	}
@@ -104,7 +105,7 @@ func TestQuestionsAndEventsFollowTheContract(t *testing.T) {
 	if snapshot.State != stateIdle {
 		t.Errorf("state %q: only non-blocking questions are open", snapshot.State)
 	}
-	if len(snapshot.Events) != maxEvents || snapshot.Events[0].ID != "acked" {
+	if len(snapshot.Events) != maxEvents || snapshot.Events[0].ID != acked {
 		t.Errorf("events: %d, first %q; want the newest %d carried lines", len(snapshot.Events), snapshot.Events[0].ID, maxEvents)
 	}
 	for _, event := range snapshot.Events {
@@ -112,6 +113,11 @@ func TestQuestionsAndEventsFollowTheContract(t *testing.T) {
 			t.Errorf("event %q carries a body", event.ID)
 		}
 	}
+}
+
+// testID is the n-th id in the lowercase uuid form orch's writers generate.
+func testID(n int) string {
+	return fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
 }
 
 // mailboxLine is a mailbox message line at the given minute past 11:00 on the test day.
@@ -125,11 +131,14 @@ func TestMessagesWithUnsendableIDsAreLeftOut(t *testing.T) {
 		"/Users/someone/secret-plan",
 		"owner@example.com",
 		"sk-test0123456789abcdefghijklmnop",
+		fakeToken("AK"+"IA", 16),
 		"has space",
 		"dotted.name",
+		"id-1",
+		"00000000-0000-4000-8000-0000000000AB", // uppercase hex
 		strings.Repeat("a", 65),
 	}
-	sendable := []string{"00000000-0000-4000-8000-000000000101", "id-1"}
+	sendable := []string{testID(101), testID(102)}
 	var messages strings.Builder
 	for i, id := range append(planted, sendable...) {
 		messages.WriteString(mailboxLine(id, i, ""))
@@ -142,14 +151,14 @@ func TestMessagesWithUnsendableIDsAreLeftOut(t *testing.T) {
 	for _, event := range snapshot.Events {
 		ids = append(ids, event.ID)
 	}
-	if want := []string{"id-1", sendable[0]}; !slices.Equal(ids, want) || len(snapshot.Questions) != len(want) {
+	if want := []string{sendable[1], sendable[0]}; !slices.Equal(ids, want) || len(snapshot.Questions) != len(want) {
 		t.Errorf("event ids = %q and %d questions, want only %q", ids, len(snapshot.Questions), want)
 	}
 	body, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, leak := range []string{"/Users/someone", "owner@example.com", "sk-test", "dotted.name"} {
+	for _, leak := range []string{"/Users/someone", "owner@example.com", "sk-test", "AK" + "IA", "dotted.name", "id-1"} {
 		if strings.Contains(string(body), leak) {
 			t.Errorf("the snapshot carries %q", leak)
 		}
@@ -158,9 +167,9 @@ func TestMessagesWithUnsendableIDsAreLeftOut(t *testing.T) {
 
 func TestBlockingQuestionsCountBeyondTheListCap(t *testing.T) {
 	var messages strings.Builder
-	messages.WriteString(mailboxLine("old-blocker", 0, `,"recommended":"approve","blocking":true`))
+	messages.WriteString(mailboxLine(testID(1), 0, `,"recommended":"approve","blocking":true`))
 	for i := range maxQuestions + 5 {
-		messages.WriteString(mailboxLine(fmt.Sprintf("newer-%d", i), i+1, `,"recommended":"yes","blocking":false`))
+		messages.WriteString(mailboxLine(testID(i+2), i+1, `,"recommended":"yes","blocking":false`))
 	}
 	snapshot, err := Build(project(t, map[string]string{"mailbox/messages.jsonl": messages.String()}), testEnv())
 	if err != nil {
@@ -216,5 +225,52 @@ func TestSnapshotHashChangesWithContentOnly(t *testing.T) {
 	later.Now = testNow.Add(20 * time.Minute) // the heartbeat goes stale: working -> idle
 	if aged, _ := Build(p, later); aged.SnapshotHash == first.SnapshotHash {
 		t.Error("the hash did not change when the state did")
+	}
+}
+
+// Credentials and complete paths planted in every free-text field never reach the wire.
+func TestBuildScrubsCredentialsAndPathsFromEveryFreeTextField(t *testing.T) {
+	github, aws, slack := fakeToken("ghp_", 36), fakeToken("AK"+"IA", 16), fakeToken("xo"+"xp-", 30)
+	backup := fakeToken("gh"+"o_", 36) // glued to a word: backup_gho_…
+	question, err := json.Marshal(map[string]any{
+		"id": testID(1), "at": "2026-10-20T11:00:00.000Z", "from": "conductor", "to": "human", "kind": "question",
+		"subject": "Rotate " + github + "?", "body": "It sits in /Volumes/PrivateClient/keys with password=fake-pass-1, backup_" + backup +
+			` in "/Volumes/Private Client/a b.txt" and /Volumes/Private Client/keys/old.txt; also /Volumes/Private Client` +
+			"\nthen /Volumes/Private client, /srv/private customer; (/Volumes/Private Client) ['/srv/private customer']" +
+			" and /srv/private customer at https://trains.example.com/docs/setup and 1/2 done\n/Volumes/Private client",
+		"recommended": "Revoke " + aws + " and backup_" + backup + " under ~/creds/aws, then /private-client.env", "blocking": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := `{"id":"` + testID(2) + `","at":"2026-10-20T11:01:00.000Z","from":"conductor","to":"*","kind":"note",` +
+		`"subject":"Posted ` + slack + ` from /private/tmp/x/run"}` + "\n"
+	snapshot, err := Build(project(t, map[string]string{
+		"mailbox/messages.jsonl": string(question) + "\n" + event,
+		"flip.json":              `{"awaiting_human":{"reason":"check /srv/app/secrets token=fake-2"}}`,
+		"sessions/claude.json": `{"state":"working","now":"Editing /opt/client/plan.md","slice":"S1 ` + github + `",` +
+			`"updated_at":"2026-10-20T11:59:00.000Z"}`,
+	}), testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{github, aws, slack, "fake-pass-1", "fake-2", backup, "/Volumes", "PrivateClient", "Private Client", "Private client", "private customer", "private-client.env", "~/creds", "/private", "/srv/app", "/opt/client"} {
+		if strings.Contains(string(body), leak) {
+			t.Errorf("the snapshot carries %q: %s", leak, body)
+		}
+	}
+	if len(snapshot.Questions) != 1 || len(snapshot.Events) != 2 {
+		t.Fatalf("%d questions and %d events, want the planted 1 and 2", len(snapshot.Questions), len(snapshot.Events))
+	}
+	if got := *snapshot.Questions[0].Recommended; got != "Revoke <token> and backup_<token> under <path>, then <path>" {
+		t.Errorf("recommended = %q", got)
+	}
+	if got, want := snapshot.Questions[0].Body, "; also <path>\nthen <path>, <path>; (<path>) ['<path>']"+
+		" and <path> https://trains.example.com/docs/setup and 1/2 done\n<path>"; !strings.HasSuffix(got, want) {
+		t.Errorf("body = %q, want it to end %q", got, want)
 	}
 }
