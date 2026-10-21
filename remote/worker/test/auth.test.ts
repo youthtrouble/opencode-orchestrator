@@ -135,6 +135,37 @@ for (const [name, reason, run] of forbiddenCases) {
   });
 }
 
+test("a correctly signed JWT without exp is refused before any handler or asset", async (t) => {
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: string) => logged.push(line));
+  const reached: string[] = [];
+  const reach = (name: string) => async () => (reached.push(name), new Response(name));
+  const spyWorker = createWorker({
+    keysFor: () => keys,
+    routes: [
+      { method: "GET", pattern: "/api/v1/ping", class: "browser", handler: reach("browser") },
+      { method: "POST", pattern: "/api/v1/machine/ping", class: "machine", handler: reach("machine") },
+    ],
+    now: () => NOW,
+  });
+  const env = { ...(testEnv() as object), ASSETS: { fetch: reach("assets") } } as never;
+  const noExp = { exp: undefined };
+  const requests = [
+    new Request(`${ORIGIN}/api/v1/ping`, { headers: { "Cf-Access-Jwt-Assertion": await browserJwt(noExp) } }),
+    new Request(`${ORIGIN}/api/v1/machine/ping`, {
+      method: "POST",
+      headers: { "Cf-Access-Jwt-Assertion": await serviceJwt(noExp), Authorization: bearer },
+    }),
+    new Request(`${ORIGIN}/`, { headers: { "Cf-Access-Jwt-Assertion": await browserJwt(noExp) } }),
+  ];
+  for (const request of requests) {
+    const response = await spyWorker.fetch!(request as never, env, {} as never);
+    assertForbidden({ status: response.status, body: await response.text() });
+  }
+  assert.deepEqual(reached, []);
+  assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [CLAIMS_FAILED, CLAIMS_FAILED, CLAIMS_FAILED]);
+});
+
 test("auth failure logs carry a reason code and the path, never the JWT or bearer token", async (t) => {
   const logged: string[] = [];
   t.mock.method(console, "log", (line: string) => logged.push(line));

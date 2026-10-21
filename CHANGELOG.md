@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- remote/worker: an Access JWT without `exp` is now refused (403) instead of never expiring, and the public-repo guard matches Access team hosts in any case and flags 32-hex Cloudflare account/zone/D1 ids in config files and `account_id`-style lines.
 - go: new Go-only `orch remote init|status|token rotate|token revoke|service-token set` sets up
   this Mac for Work Trains (no network yet). The config lives in `~/.config/orch/remote.json`
   (owner-only, refused inside a git work tree or when group/other can access it; override

@@ -14,13 +14,17 @@ export interface AccessVerification {
 
 export type Identity = { kind: "browser"; email: string } | { kind: "machine"; clientId: string };
 
-/** Verifies signature (RS256 only), iss, aud, exp and nbf with 30 s of clock skew. */
+/**
+ * Verifies signature (RS256 only), iss, aud, exp and nbf with 30 s of clock skew. `exp` is
+ * required: jose checks it only when present, and a token without one would never expire.
+ */
 export async function verifyAccessJwt(token: string, check: AccessVerification): Promise<JWTPayload> {
   try {
     const { payload } = await jwtVerify(token, check.keys, {
       algorithms: ["RS256"],
       issuer: check.issuer,
       audience: check.audience,
+      requiredClaims: ["exp"],
       clockTolerance: 30,
       currentDate: check.now,
     });
