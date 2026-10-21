@@ -1,0 +1,178 @@
+# Work Trains: operator guide
+
+Work Trains is a private status page for your orchestrator projects, reachable from your phone. What it is, what it
+costs and what leaves your Mac are in the [root README](../README.md#remote-status-work-trains); this page is the
+operator detail: the Cloudflare Access setup, the deploy, the Mac side's files, and the tests.
+
+| Directory | What it is |
+|---|---|
+| [`protocol/`](protocol/README.md) | The versioned v1 wire protocol (JSON Schema, validator, examples) shared by the Worker and `orch` |
+| [`worker/`](worker/) | The Cloudflare Worker and its page: the Access check, the D1 migrations, the machine and browser APIs, the email notifier |
+| [`e2e/`](e2e/) | The end-to-end test: the Worker under `wrangler dev --local` behind a local Access emulator, driven by the real `orch remote once` |
+| [`../go/README.md`](../go/README.md#orch-remote-go-only) | `orch remote`, the Mac side: every subcommand, the snapshot, the sync loop |
+
+Every value below in angle brackets or under `example.com` is a placeholder. This repository is public: never commit
+your domain, team name, AUD tag, account or database id, email address or any token. Keep them in a password manager.
+
+## Before you start
+
+- A Cloudflare account with your domain on it. Every product used here has a free plan.
+- `wrangler` (checked with 4.118.0) and Node 26, for the deploy.
+- An `orch` that has `orch remote` (`orch remote --help` prints its usage): a release after v0.5.0, or one built from
+  `main`.
+- Setup order: Access (1) -> D1 and deploy (2) -> machine token and Worker secrets (2) -> `orch remote init` (3) ->
+  LaunchAgent (4) -> first sync (5).
+
+Cloudflare's dashboard labels change. The pages linked below were checked on 2026-10-20; if a label differs, follow
+the linked page.
+
+## 1. Cloudflare Access
+
+Access stands in front of the whole hostname: you sign in with a one-time PIN sent to your email, and the Mac
+presents a service token. The Worker checks the Access assertion on every request as well.
+
+1. **Zero Trust** (Free plan, up to 50 users, $0: <https://www.cloudflare.com/plans/sase-zero-trust/>). In the
+   Cloudflare dashboard open **Zero Trust**. If asked, pick a team name and the Free plan. Your team domain is
+   `https://<team>.cloudflareaccess.com` (shown under Zero Trust **Settings**).
+2. **One-time PIN login**: **Zero Trust > Integrations > Identity providers > Add new identity provider > One-time
+   PIN** (<https://developers.cloudflare.com/cloudflare-one/identity/one-time-pin/>).
+3. **Service token for the Mac**: **Zero Trust > Access controls > Service credentials > Service Tokens > Create
+   Service Token**. Name `work-trains-mac`; duration 1 year (8760h) unless you prefer otherwise; put the expiry in
+   your calendar (or add the **Expiring Access Service Token** notification, which warns a week ahead). The Client
+   Secret is shown once. Immediately, in Terminal, run `orch remote service-token set` and paste the Client ID (first
+   line) and the Client Secret (second line) at its prompts. Close the dialog only after `orch remote status` shows
+   `access-client-id` and `access-client-secret` as `yes`.
+   (<https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/>: clients send `CF-Access-Client-Id`
+   and `CF-Access-Client-Secret`; the policy action must be **Service Auth**.)
+4. **Application**: **Zero Trust > Access controls > Applications > Create new application > Self-hosted and
+   private > Add public hostname**: subdomain `trains`, domain `example.com` (yours), path empty
+   (<https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/self-hosted-public-app/>).
+   - Policy 1 "owner": Action **Allow**; Include **Emails** = `owner@example.com` (yours). Session duration 24 hours
+     (longer means fewer PIN prompts).
+   - Policy 2 "mac": Action **Service Auth**; Include **Service Token** = `work-trains-mac`.
+   - Login methods: One-time PIN only. Optionally enable instant authentication when it is the only method.
+   - Save. On the application's overview copy the **Application Audience (AUD) Tag**
+     (<https://developers.cloudflare.com/cloudflare-one/identity/authorization-cookie/validating-json/>).
+5. Keep privately: the team domain, the AUD tag, the service token's Client ID and your email. Step 2 sets them as
+   Worker secrets.
+
+If the dashboard refuses an application for a hostname that has no DNS record yet, do the first deploy in step 2
+first: until its secrets are set the Worker answers 503 on every route, so nothing is exposed. Then come back here.
+
+## 2. D1, deploy and Worker secrets
+
+From a checkout of this repository:
+
+```sh
+cd remote/worker
+npm ci
+wrangler login                      # browser OAuth to your account
+wrangler d1 create work-trains      # prints a database_id
+cp wrangler.deploy.example.jsonc wrangler.deploy.jsonc   # gitignored
+# edit wrangler.deploy.jsonc: set database_id, and routes[0].pattern = "trains.example.com" (yours)
+git status --porcelain              # must NOT list wrangler.deploy.jsonc
+wrangler d1 migrations apply work-trains --remote -c wrangler.deploy.jsonc
+orch remote token rotate            # stores the machine token in your Keychain; prints only its SHA-256
+wrangler deploy -c wrangler.deploy.jsonc   # 503 on every route until the secrets below exist
+# Each command prompts for its value; paste it at the prompt, never as an argument:
+wrangler secret put ACCESS_TEAM_DOMAIN       -c wrangler.deploy.jsonc   # https://<team>.cloudflareaccess.com
+wrangler secret put ACCESS_AUD               -c wrangler.deploy.jsonc   # the AUD tag
+wrangler secret put OWNER_EMAIL              -c wrangler.deploy.jsonc   # the email in the Access policy
+wrangler secret put ACCESS_SERVICE_CLIENT_ID -c wrangler.deploy.jsonc   # the service token's Client ID
+wrangler secret put PUBLIC_ORIGIN            -c wrangler.deploy.jsonc   # https://trains.example.com, no trailing slash
+wrangler secret put MACHINE_TOKEN_SHA256     -c wrangler.deploy.jsonc   # the hash token rotate printed
+```
+
+The deploy config keeps `workers_dev: false` and `preview_urls: false`, so the Worker is reachable only on your
+hostname, behind Access. `UNDO_SECONDS` (default 10) is how long the page offers Undo before the Mac may pull an
+answer or action.
+
+**Email notifications (optional).** After a push, a new blocking question sends one email (never the question's
+text; at most 20 a day). If your domain already receives mail elsewhere, enable Email Routing only on a subdomain
+(**your domain > Email > Email Routing > Settings > Subdomains**, for example `notify.example.com`); if the dashboard
+wants to change your apex MX records, stop and skip notifications. Add your address under **Destination addresses**
+and click the verification link
+(<https://developers.cloudflare.com/email-routing/setup/email-routing-addresses/>). Then:
+
+```sh
+wrangler secret put NOTIFY_FROM -c wrangler.deploy.jsonc   # a sender address on the Email Routing subdomain
+wrangler secret put NOTIFY_TO   -c wrangler.deploy.jsonc   # your verified address
+```
+
+**Check it.** Opening `https://trains.example.com/` in a private window redirects to
+`https://<team>.cloudflareaccess.com/...`. On your phone, sign in with the PIN: the page loads and shows "Mac seen
+never". `wrangler deployments list -c wrangler.deploy.jsonc` lists the deployment.
+
+**Roll back** with `wrangler rollback -c wrangler.deploy.jsonc` (the previous version). Access keeps the hostname
+closed either way.
+
+## 3. Configure the Mac
+
+```sh
+orch remote init --url https://trains.example.com            # roots default to ~/Developer
+orch remote init --url https://trains.example.com --root ~/Work --exclude scratch --force   # example: other roots
+orch remote push --dry-run                                     # exactly what would be sent; sends nothing
+orch remote status
+```
+
+A project is any root, or direct child of a root, that has a `.orchestrator/` directory.
+
+## 4. Keep it running (LaunchAgent)
+
+```sh
+orch remote launchd > ~/Library/LaunchAgents/org.opencode-orchestrator.work-trains.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.opencode-orchestrator.work-trains.plist
+```
+
+`orch remote launchd` writes nothing itself; it prints the plist on stdout and these install and uninstall commands
+on stderr. The agent runs `orch remote serve` at login and restarts it at most every 30 s. Rerun both commands after
+moving or replacing the `orch` binary, since the plist holds its absolute path.
+
+## 5. First sync
+
+`orch remote once` runs one cycle and prints `pulled N, applied N, pushed N, deferred N`; it refuses to run while
+`serve` holds the lock, and then `serve` syncs on its own. `orch remote status` should show a recent `last push` and
+`last pull` and `last error: none`, and the page lists your projects.
+
+## Reference
+
+**Config** `~/.config/orch/remote.json` (override with `ORCH_REMOTE_CONFIG`; directory 0700, file 0600; no secrets):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `url` | (required) | The Worker's origin, `https://` |
+| `roots` | `["~/Developer"]` | Directories scanned for projects (each root and its direct children) |
+| `exclude` | `[]` | Directory names or absolute paths to skip |
+| `include_worktrees` | `false` | Also list linked git worktrees |
+| `ci` | `true` | Send each project's latest GitHub Actions runs, read with your own `gh` |
+| `poll_seconds` | `30` | Pull interval (15..300) until the Worker sends its own |
+
+orch refuses a config inside any git work tree or readable by group or others. `serve` reads it once at start:
+restart the LaunchAgent after editing it (`launchctl kickstart -k gui/$(id -u)/org.opencode-orchestrator.work-trains`).
+
+**Keychain** (login keychain, service `opencode-orchestrator.work-trains`): `machine-token` (written by `orch remote
+token rotate`), `access-client-id` and `access-client-secret` (written by `orch remote service-token set`). They are
+written without ever appearing in argv, and never printed.
+
+**State** in `~/.local/state/opencode/orchestrator/remote/`: `state.json` (machine id, per-project push bookkeeping,
+the last push, pull and error, cached CI), `serve.lock` (one sync loop at a time), `remote.log` (the LaunchAgent's
+output; never rotated). Each project also keeps `.orchestrator/remote/actions.json`, the journal of pauses and
+resumes applied from the page. Field-level detail is in [go/README.md](../go/README.md#orch-remote-go-only).
+
+**Protocol**: [protocol/README.md](protocol/README.md).
+
+**Worker secrets**: listed at the top of [`worker/wrangler.deploy.example.jsonc`](worker/wrangler.deploy.example.jsonc).
+
+## Tests
+
+```sh
+node --test 'remote/protocol/test/*.test.ts'          # protocol: schema, examples, Go goldens
+(cd remote/worker && npm ci && npm test && npm run typecheck)   # Worker; npm test includes the public-repo guard
+node --test 'remote/e2e/*.test.ts'                    # end to end, about 90 s
+```
+
+Run them from the repository root. The end-to-end test needs Go, Node 26, `npm ci` in `remote/worker` and a
+`wrangler` on PATH (CI pins 4.118.0 with `npm i -g wrangler@4.118.0`); it uses no Cloudflare account. Name the files
+with a glob as above: Node 26 does not accept a directory there. The guard (`worker/test/guard.test.ts`) fails on an
+email address, an Access team host, a UUID or long hex value, or a 32-hex Cloudflare id in config files, outside the
+placeholders, in tracked files under `remote/`; run it before every commit that touches them.

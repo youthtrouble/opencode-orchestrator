@@ -54,7 +54,9 @@ The hidden `orch json-echo [--indent N]` exists for the parity harness.
 `bin/*.mjs` script) and so no parity group: it uses the standard `flag` package and plain
 `encoding/json`. Usage errors exit 2 with the usage text; runtime errors exit 1 with one line
 `orch remote: <message>`. It sets up the machine, shows what it would push, and runs the sync loop
-with the Worker (`once`, `serve`), which launchd keeps running (`launchd`).
+with the Worker (`once`, `serve`), which launchd keeps running (`launchd`). Setting up, rotating and
+turning off Work Trains is in the [root README](../README.md#remote-status-work-trains) and
+[remote/README.md](../remote/README.md).
 
 | Command | Behaviour |
 |---|---|
@@ -236,8 +238,8 @@ Files:
 - Not yet verified: a `resume` applied by `serve` may start `orch supervisor start`, which runs
   detached in a session of its own. Whether launchd still ends it when it stops or restarts the
   agent (launchd may kill the job's whole process group unless the plist sets
-  `AbandonProcessGroup`) has not been tested; WT16 checks it, and the plist gains
-  `AbandonProcessGroup` if the supervisor dies with `serve`.
+  `AbandonProcessGroup`) has not been tested: the end-to-end test runs `once` without launchd. If
+  the supervisor dies with `serve`, the plist needs `AbandonProcessGroup`.
 
 ## Build
 

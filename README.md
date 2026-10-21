@@ -96,6 +96,10 @@ running, tells you how to check in, and then stops, so only one conductor drives
 <brief>` names the brief to continue with; `/away --dry-run` only shows the door and prompt
 kickoff would use, changes nothing in the project, and keeps the session going.
 
+**...check on it from my phone?** Set up [Work Trains](#remote-status-work-trains), an optional private
+status page on your own Cloudflare account: it lists every project's state and lets you answer questions, pause and
+resume from the phone.
+
 **...check in, answer, or unblock it?**
 
 ```sh
@@ -132,6 +136,7 @@ your `PATH`). Run these from inside your project.
 | Supervisor | `orch supervisor status` / `start` / `stop` |
 | Recent orchestrator defects | `orch incident report` |
 | Health check | `orch doctor` |
+| Work Trains sync status (if set up) | `orch remote status` |
 
 Without `orch`, every command also exists as `node ~/.config/opencode/orchestrator/bin/<name>.mjs`.
 
@@ -343,6 +348,107 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
   (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
   usually means the id belongs to another project.
 
+## Remote status (Work Trains)
+
+Work Trains is an optional, private status page for every orchestrator project on your Mac, built for your phone.
+It shows each project's state (needs you, failed, paused, working, done, idle), its run, open questions, recent
+events, CI and both budgets. The page can do four things and nothing else: **answer** a question (accept the
+recommended reply or type one; it lands as `orch mailbox reply` would, with `"via": "remote"`), **pause** a project
+(sets the human gate), **resume** it (clears the gate), and **hide** a project from the page (or show it again; this
+never reaches the Mac). An answer, pause or resume can be undone for 10 seconds before the Mac may pick it up. The page
+cannot start runs, run commands, read files or change code. It is macOS-only and self-hosted: you deploy the Worker
+to your own Cloudflare account.
+
+```text
+  Mac: orch remote serve (LaunchAgent)            phone: browser
+        |  push snapshots, pull answers                 |  one-time PIN login
+        v  HTTPS, service token + machine token         v
+  Cloudflare Access (trains.example.com)  <-------------+
+        |
+        v
+  Worker  <-->  D1 (latest snapshots; answers and actions waiting for the Mac)
+```
+
+The Mac only makes outbound requests; nothing on the internet reaches it. It pulls every 30 s by default and pushes a
+project only when it changed, at most once a minute.
+
+**What leaves your Mac.** Per project: an opaque key (a hash of the machine id and the path) and the directory name;
+its state and a short reason; the door, run kind, slice, `now` line and progress from the latest heartbeat; the
+newest 20 open questions to you (body and recommended answer); the last 10 mailbox messages as id, time, kind, sender
+and subject (never bodies); with `ci` on, the latest GitHub Actions run of up to 5 workflows (repository
+`owner/name`, workflow, status, link). Plus this Mac's random machine id, the cached budget postures and the `orch` version. Every free-text field
+is scrubbed of credentials, absolute paths, your home directory, emails and tokens, then cut to the schema's limits.
+**Never sent:** paths, `STATE.md`, plans, briefs, prompts, file contents, environment, run records, transcripts or
+secrets. Audit it any time with `orch remote push --dry-run`: it prints the exact request body and sends nothing.
+
+**Cost.** One person fits Cloudflare's free tier with a wide margin (figures checked 2026-10-20):
+
+| Product | Free allowance | Source (page last updated) |
+|---|---|---|
+| Workers | 100,000 requests/day; 10 ms CPU per invocation | <https://developers.cloudflare.com/workers/platform/pricing/> (2026-10-02) |
+| D1 | 5 million rows read/day; 100,000 rows written/day; 5 GB. Over a limit, queries fail until the daily reset | <https://developers.cloudflare.com/d1/platform/pricing/> (2026-04-21) |
+| Email | Sending to verified destination addresses is free on all plans | <https://developers.cloudflare.com/email-service/platform/pricing/> (2026-06-09) |
+| Access (Zero Trust) | Free plan, $0, up to 50 users | <https://www.cloudflare.com/plans/sase-zero-trust/> |
+
+Estimated use for one Mac with 5 active projects: about 4,000-5,000 requests/day (pulls 2,880, pushes about 1,000,
+an hour of page use 240), under 5% of the allowance; even with every project changing every minute all day it stays
+under the allowance up to 67 projects. D1 writes stay well under 5,000/day (the worst case fits up to 34 projects);
+reads are under 0.1% for 10 projects. Notification emails are capped at 20 a day.
+
+**Set it up.** You need a Cloudflare account with your domain on it, `wrangler`, and an `orch` that has `orch remote`
+(a release after v0.5.0, or built from `main`). Then, in order, following [remote/README.md](remote/README.md):
+
+1. Create the Access application, one-time PIN login and a service token; store the token with
+   `orch remote service-token set`.
+2. Create the D1 database, deploy the Worker, run `orch remote token rotate`, and set the Worker secrets with
+   `wrangler secret put`.
+3. `orch remote init --url https://trains.example.com` (projects are found under `~/Developer` unless you pass
+   `--root`).
+4. Install the LaunchAgent that `orch remote launchd` prints.
+5. First sync: `orch remote status` shows a recent `last push`, and the page lists your projects.
+
+**Daily use.** Open the page (add it to your home screen). On the Mac, `orch remote status` shows the config, the
+Keychain items, the last push, pull and error, and the projects found. The sync loop logs to
+`~/.local/state/opencode/orchestrator/remote/remote.log`.
+
+**Rotate credentials.**
+
+- Machine token: `orch remote token rotate`, then paste the printed hash at
+  `wrangler secret put MACHINE_TOKEN_SHA256 -c wrangler.deploy.jsonc` (in `remote/worker`). Pushes get 403 until
+  the secret holds the new hash.
+- Access service token: it expires (after 1 year if you followed the guide). Before then, in **Zero Trust > Access
+  controls > Service credentials > Service Tokens**, choose **Refresh** to extend it, or **Rotate secret** for a new
+  secret (the old one stays valid for the grace period you pick); after a rotation run
+  `orch remote service-token set` and paste the same Client ID and the new secret.
+
+**Turn it off.**
+
+- For now: `launchctl bootout gui/$(id -u)/org.opencode-orchestrator.work-trains`. Back on:
+  `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.opencode-orchestrator.work-trains.plist`.
+- For good: run that `bootout` and delete the plist; `orch remote token revoke` (deletes the three Keychain items);
+  delete `~/.config/orch/remote.json` and `~/.local/state/opencode/orchestrator/remote/`. Then, in `remote/worker`:
+  `wrangler delete -c wrangler.deploy.jsonc`; to keep the data,
+  `wrangler d1 export work-trains --remote --output work-trains.sql -c wrangler.deploy.jsonc` (store the file
+  outside the repository); `wrangler d1 delete work-trains -c wrangler.deploy.jsonc`. Finally remove the Access
+  application and the `work-trains-mac` service token in Zero Trust.
+
+**Troubleshooting.**
+
+- *The page shows 403, or keeps returning to the Access login.* The email you sign in with must be the one in the
+  Access policy and in the `OWNER_EMAIL` secret, and `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and `PUBLIC_ORIGIN` must
+  match the application exactly. A 503 means a Worker secret is missing.
+- *`orch remote` reports `access_denied`.* Access refused the Mac before the Worker saw it: the service token expired
+  or its secret was rotated (`orch remote service-token set`), or the application lacks the **Service Auth** policy
+  for `work-trains-mac`. A 403 from the Worker itself (`HTTP 403 forbidden`) usually means `MACHINE_TOKEN_SHA256`
+  does not hold the hash of the current machine token.
+- *Keychain errors after a reboot.* The login keychain unlocks when you log in; until then cycles fail with a
+  `keychain` error and retry with backoff. Log in; `orch remote status` shows each item as `yes`, `no` or `unknown`.
+- *"Mac seen" is stale (over 3 minutes).* The Mac is asleep or offline, or `serve` is not running: check
+  `launchctl print gui/$(id -u)/org.opencode-orchestrator.work-trains`, `orch remote status` and `remote.log`.
+- *A free-tier limit was reached.* Requests or D1 queries fail until Cloudflare's daily reset, and `orch remote`
+  records the errors meanwhile; the Cloudflare dashboard shows the usage. Fewer roots, `"ci": false` or a larger
+  `poll_seconds` reduce it.
+
 ## Documentation map
 
 | Document | Covers |
@@ -352,7 +458,8 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 | [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
 | [go/README.md](go/README.md#orch-remote-go-only) | `orch remote`, the Mac side of Work Trains: `init`, `status`, `push --dry-run` (prints exactly what a push would send and sends nothing), `once` / `serve` (the sync loop) and `launchd` (prints the LaunchAgent plist that keeps `serve` running) |
 | [remote/protocol/README.md](remote/protocol/README.md) | The Work Trains wire protocol: the versioned v1 JSON Schema, its validator and examples; test with `node --test 'remote/protocol/test/*.test.ts'` |
-| [remote/worker/](remote/worker/) | The Work Trains Cloudflare Worker, not yet deployed: the Access auth gate, the D1 migrations, the machine API (push, pull, ack), the browser API (summary, answer, pause/resume, undo, hide) and the email notifier; test with `npm ci && npm test && npm run typecheck` in that directory |
+| [remote/README.md](remote/README.md) | Work Trains operator guide: Cloudflare Access steps, D1 and deploy, the Mac's config, Keychain items and state files, the tests |
+| [remote/worker/](remote/worker/) | The Work Trains Cloudflare Worker, which you deploy to your own account: the Access auth gate, the D1 migrations, the machine API (push, pull, ack), the browser API (summary, answer, pause/resume, undo, hide) and the email notifier; test with `npm ci && npm test && npm run typecheck` in that directory |
 | [remote/e2e/](remote/e2e/) | The Work Trains end-to-end test: the Worker under `wrangler dev --local` on a temp D1, behind a local Access emulator, driven by the real `orch remote once` and a simulated phone (about 90 s; needs Go, Node 26 and `npm ci` in `remote/worker`, plus a `wrangler` on PATH, which no package installs: CI pins 4.118.0 with `npm i -g wrangler@4.118.0`); run `node --test 'remote/e2e/*.test.ts'` |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |

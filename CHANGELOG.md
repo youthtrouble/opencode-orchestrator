@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Work Trains (WT1-WT17): an optional, private, self-hosted status page for every orchestrator project
+  on a Mac, built for a phone. A Cloudflare Worker with D1 behind Cloudflare Access holds the latest
+  snapshots; the Mac runs `orch remote serve` (Go-only, kept running by a LaunchAgent), which pushes
+  scrubbed snapshots and pulls answers, pauses and resumes. The page answers questions, pauses,
+  resumes and hides projects, nothing else. It fits Cloudflare's free tier. Setup, privacy, cost,
+  credential rotation, turning it off and troubleshooting are in the README's
+  [Remote status (Work Trains)](README.md#remote-status-work-trains) section, with the operator detail
+  in the new [remote/README.md](remote/README.md). The per-slice entries below give the details.
 - remote: an end-to-end test of Work Trains (WT16), `node --test 'remote/e2e/*.test.ts'`, and a CI job
   `e2e` running it. It starts the real Worker under `wrangler dev --local` (miniflare and a temp D1, no
   Cloudflare account) through a new test-only entry, `remote/worker/test/e2e-entry.ts` with
