@@ -422,9 +422,11 @@ Optionally, let GitHub Actions deploy the Worker after every push to main that p
 the deploy workflow skips. Conductors then push and watch the deploy run instead of asking you to deploy. Worker
 secrets, Access and DNS stay manual.
 
-**Daily use.** Open the page (add it to your home screen). On the Mac, `orch remote status` shows the config, the
-Keychain items, the last push, pull and error, and the projects found. The sync loop logs to
-`~/.local/state/opencode/orchestrator/remote/remote.log`.
+**Daily use.** Open the page (add it to your home screen; it has its own icon there). The page is light only, and
+colour means status alone: blue-teal working, amber needs you (and a stale Mac), red failed, green done, grey paused
+or idle. A recommended answer is one tap on **Accept**; **Type something else** opens a reply. On the Mac,
+`orch remote status` shows the config, the Keychain items, the last push, pull and error, and the projects found.
+The sync loop logs to `~/.local/state/opencode/orchestrator/remote/remote.log`.
 
 **Rotate credentials.**
 

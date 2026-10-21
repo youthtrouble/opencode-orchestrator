@@ -51,3 +51,84 @@ test("a page open on PUBLIC_ORIGIN, or given none, shows no banner", async () =>
     assert.equal(banner.textContent, "");
   }
 });
+
+const RECOMMENDED = "Yes, behind a flag.";
+
+function questionFor(id: string, recommended: string | null) {
+  const at = new Date(Date.now() - 60_000).toISOString();
+  return { id, at, blocking: false, from: "conductor", subject: id, body: "", recommended, answer: null };
+}
+
+function ciRun(status: string, conclusion: string | null) {
+  return { repo: "example/app", workflow: "ci", status, conclusion, url: null, at: new Date().toISOString() };
+}
+
+/** One working project with two questions (one with a recommendation), two CI runs and one event. */
+function summaryWithProject() {
+  const now = new Date().toISOString();
+  return {
+    ...summaryWithMacSeen(24),
+    projects: [
+      {
+        key: "p1",
+        name: "atlas-api",
+        hidden: false,
+        state: "working",
+        state_reason: "",
+        door: "opencode",
+        run: { kind: "headless", since: now, last_activity_at: now },
+        slice: null,
+        now: null,
+        progress: { done: 6, total: 8 },
+        ci: [ciRun("completed", "success"), ciRun("completed", "failure")],
+        events: [{ id: "m-1", at: now, kind: "note", from: "conductor", subject: "Slice merged" }],
+        received_at: now,
+        sent_at: now,
+        pending_action: null,
+        questions: [questionFor("with-rec", RECOMMENDED), questionFor("without-rec", null)],
+      },
+    ],
+  };
+}
+
+const byTag = (tag: string) => (node: FakeNode) => node.tagName === tag;
+const classOf = (node: FakeNode) => node.attributes.get("class");
+
+test("the Needs-you count is a plain number", async () => {
+  const document = await pageShowing(summaryWithProject());
+  assert.equal(document.getElementById("needs-you-count").textContent, "2");
+});
+
+test("the second answer button reads 'Type something else' beside a recommendation, else 'Reply'", async () => {
+  const questions = (await pageShowing(summaryWithProject())).getElementById("questions");
+  const labels = questions.findAll(byTag("button")).map((button) => button.textContent);
+  assert.deepEqual(labels, ["Accept", "Type something else", "Reply"]);
+});
+
+test("each CI run carries its tone class and the progress bar its project's state", async () => {
+  const projects = (await pageShowing(summaryWithProject())).getElementById("project-list");
+  assert.deepEqual(
+    projects
+      .findAll(byTag("li"))
+      .filter((li) => classOf(li)?.startsWith("ci-"))
+      .map(classOf),
+    ["ci-ok", "ci-fail"],
+  );
+  assert.deepEqual(projects.findAll((node) => classOf(node)?.startsWith("progress") ?? false).map(classOf), [
+    "progress state-working",
+  ]);
+});
+
+test("Recent events opened by the owner stay open across the next re-render", async () => {
+  let reopened: FakeNode | undefined;
+  await pageShowing(summaryWithProject(), PAGE_ORIGIN, (document) => {
+    const [events] = document.getElementById("project-list").findAll(byTag("details"));
+    assert.equal(events.open, false, "closed until opened");
+    events.open = true;
+    events.dispatch("toggle");
+    document.getElementById("hidden-toggle").dispatch("click"); // any re-render will do
+    [reopened] = document.getElementById("project-list").findAll(byTag("details"));
+  });
+  assert.ok(reopened);
+  assert.equal(reopened.open, true);
+});

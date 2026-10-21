@@ -164,6 +164,19 @@ test("CI lines name the run and its outcome", () => {
   assert.equal(model.ciLine({ ...run, workflow: "" }), "example/app: failure");
 });
 
+test("a CI run's tone is red only for a real failure, and neutral for anything without an outcome", () => {
+  const tone = (status: string, conclusion: string | null) =>
+    model.ciTone({ repo: "example/app", workflow: "ci", status, conclusion, url: null, at: "" });
+  assert.equal(tone("completed", "success"), "ok");
+  for (const conclusion of ["failure", "timed_out", "startup_failure"])
+    assert.equal(tone("completed", conclusion), "fail");
+  for (const status of ["in_progress", "queued", "waiting", "pending", "requested"])
+    assert.equal(tone(status, null), "running");
+  for (const conclusion of ["cancelled", "skipped", "neutral", "action_required", "stale", null])
+    assert.equal(tone("completed", conclusion), "neutral", String(conclusion));
+  assert.equal(tone("expected", null), "neutral", "a status the page does not know");
+});
+
 test("failures carry the server's message; only a login redirect, a 401 or an expired token asks for a sign-in", () => {
   const failure = (status: number, error: object | null, opaqueRedirect = false) =>
     model.failureMessage({ status, opaqueRedirect, error });

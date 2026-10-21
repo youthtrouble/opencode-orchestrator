@@ -19,7 +19,10 @@ export class FakeNode {
   readonly attributes = new Map<string, string>();
   readonly dataset: Record<string, string> = {};
   readonly tagName: string;
+  private readonly listeners = new Map<string, ((event: { target: FakeNode }) => void)[]>();
   hidden = false;
+  /** A `details` element's open state, which the browser flips before it fires `toggle`. */
+  open = false;
 
   constructor(tagName: string) {
     this.tagName = tagName;
@@ -45,13 +48,25 @@ export class FakeNode {
     this.attributes.set(name, String(value));
   }
 
-  addEventListener() {}
+  addEventListener(type: string, listener: (event: { target: FakeNode }) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  dispatch(type: string) {
+    for (const listener of this.listeners.get(type) ?? []) listener({ target: this });
+  }
+
+  /** This node and every element under it that `matches`, in document order. */
+  findAll(matches: (node: FakeNode) => boolean): FakeNode[] {
+    const below = this.children.flatMap((child) => (child instanceof FakeNode ? child.findAll(matches) : []));
+    return matches(this) ? [this, ...below] : below;
+  }
 }
 
 const asChild = (node: unknown): Child =>
   node instanceof FakeNode || node instanceof FakeText ? node : new FakeText(String(node));
 
-class FakeDocument {
+export class FakeDocument {
   readonly activeElement = null;
   // Hidden, so the page schedules no next poll and the test process can exit.
   readonly visibilityState = "hidden";
@@ -78,8 +93,15 @@ let loads = 0;
 /** Where the page is open unless a test says otherwise: the summaries' PUBLIC_ORIGIN, when they name one. */
 export const PAGE_ORIGIN = "https://trains.example.com";
 
-/** Loads a fresh copy of the page from `origin`, lets it render `summary`, and returns its document. */
-export async function pageShowing(summary: object, origin = PAGE_ORIGIN) {
+/**
+ * Loads a fresh copy of the page from `origin`, lets it render `summary`, runs `interact` (clicks and
+ * the like, while the page's globals are still in place), and returns its document.
+ */
+export async function pageShowing(
+  summary: object,
+  origin = PAGE_ORIGIN,
+  interact: (document: FakeDocument) => void = () => {},
+) {
   const document = new FakeDocument();
   const globals = globalThis as Record<string, unknown>;
   const saved = {
@@ -98,6 +120,7 @@ export async function pageShowing(summary: object, origin = PAGE_ORIGIN) {
     // A distinct URL is a distinct module instance, so each load starts from an empty page.
     await import(`../../public/app.js?load=${++loads}`);
     await new Promise((resolve) => setImmediate(resolve));
+    interact(document);
   } finally {
     Object.assign(globals, saved);
   }

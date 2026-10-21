@@ -18,6 +18,8 @@ const page = {
   openReplies: new Set(),
   expandedBodies: new Set(),
   openMenus: new Set(),
+  /** Projects whose "Recent events" are open, so the open list survives the next poll's re-render. */
+  openEvents: new Set(),
   /** One keyed write per question or project, sending or unconfirmed (model.writeToSend). */
   writes: new Map(),
   /** Undo requests in flight, by answer or action id. */
@@ -278,7 +280,7 @@ function renderHeader(summary) {
 
 function renderNeedsYou(projects) {
   const stack = model.needsYouStack(projects);
-  $("needs-you-count").textContent = stack.length === 0 ? "" : `(${stack.length})`;
+  $("needs-you-count").textContent = stack.length === 0 ? "" : String(stack.length);
   setChildren(
     $("questions"),
     ...(stack.length === 0 ? [el("p", { class: "empty" }, "Nothing needs you.")] : stack.map(questionCard)),
@@ -366,7 +368,7 @@ function answerControls(question) {
           "data-focus": `reply:${question.id}`,
           onclick: () => toggle(page.openReplies, question.id),
         },
-        "Reply",
+        question.recommended === null ? "Reply" : "Type something else",
       ),
     ),
     replying ? replyForm(question.id, replyId, busy) : null,
@@ -481,10 +483,14 @@ function projectCard(project) {
     project.state_reason ? el("p", { class: "reason" }, project.state_reason) : null,
     el("p", { class: "meta" }, `${project.door ?? "no door"} · ${model.runKindLabel(project.run)}`),
     sliceLine(project),
-    progressLine(project.progress),
+    progressLine(project.progress, project.state),
     project.ci.length === 0
       ? null
-      : el("ul", { class: "ci" }, ...project.ci.map((run) => el("li", {}, model.ciLine(run)))),
+      : el(
+          "ul",
+          { class: "ci" },
+          ...project.ci.map((run) => el("li", { class: `ci-${model.ciTone(run)}` }, model.ciLine(run))),
+        ),
     el("p", { class: "meta" }, `updated ${model.relativeTime(project.received_at, now)}`),
     eventList(project, now),
     actionArea(project),
@@ -497,12 +503,13 @@ function sliceLine(project) {
   return parts.length === 0 ? null : el("p", { class: "now" }, parts.join(": "));
 }
 
-function progressLine(progress) {
+/** The bar takes the project's state colour from its `state-*` class. */
+function progressLine(progress, state) {
   const text = model.progressText(progress);
   if (text === null) return null;
   return el(
     "div",
-    { class: "progress" },
+    { class: `progress state-${state}` },
     el("progress", {
       max: String(progress.total),
       value: String(Math.min(progress.done, progress.total)),
@@ -516,7 +523,14 @@ function eventList(project, now) {
   if (project.events.length === 0) return null;
   return el(
     "details",
-    { class: "events" },
+    {
+      class: "events",
+      open: page.openEvents.has(project.key),
+      ontoggle: (event) => {
+        if (event.target.open) page.openEvents.add(project.key);
+        else page.openEvents.delete(project.key);
+      },
+    },
     el("summary", {}, `Recent events (${project.events.length})`),
     el(
       "ol",

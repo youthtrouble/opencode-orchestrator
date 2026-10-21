@@ -333,13 +333,14 @@ placeholders, in tracked files under `remote/`; run it before every commit that 
 **Screenshots** of the page, for design review, come from fixtures, not from a deployment:
 
 ```sh
-node remote/e2e/screens.ts --out remote/docs/design/before [--chrome <path>]
+node remote/e2e/screens.ts --out remote/docs/design/after [--chrome <path>]
 ```
 
 It serves `worker/public/` and fixture summaries (`e2e/screens/fixtures.ts`, fake projects only, each checked
 against the protocol's `Summary` first) on loopback with the Worker's security headers, drives headless Chrome
 over the DevTools protocol, and writes `<state>-<phone|desktop>.png` for the states `needs-you`, `calm`,
-`stale-mac`, `failed-ci-paused` and `budget-credits` (phone 390x844, desktop 1280x900, both at 2x, light mode). It fails if a
+`stale-mac`, `failed-ci-paused` and `budget-credits` (`docs/design/before/` is the page before the WT22 redesign,
+`docs/design/after/` the page now; phone 390x844, desktop 1280x900, both at 2x, light mode). It fails if a
 fixture is not a valid `Summary`. Chrome runs with its background services off and a proxy that refuses every
 connection off loopback, so such a request fails instead of leaving the machine; if the page's tab requests
 anything off loopback, the run fails and writes no shots (other targets, such as service workers, are not watched).

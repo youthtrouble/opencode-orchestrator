@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- remote: the Work Trains page is restyled, light only (WT22-B): a warm off-white ground, one accent for Accept,
+  Send, Retry, links and the focus ring, and colour only for status (a dot and a word on a tint per project, the
+  progress bar in the project's state colour, a dot per CI run that is red only for a real failure). The Needs-you
+  count is a large plain number (`3`, not `(3)`); beside a recommendation the second button reads **Type something
+  else**; the undo window is a dark bar inside its card; a stale Mac is amber, not red. Projects sit as rows on one
+  grouped surface. **Recent events** stay open across the 15 s refresh. The dark scheme is gone. The page fills the
+  iPhone's safe area (`viewport-fit=cover`), sets its theme colour, and has a 180x180 `apple-touch-icon.png` for the
+  home screen. `test/ui-contrast.test.ts` checks every colour pair against WCAG AA from the tokens in `app.css`.
+  Shots: `remote/docs/design/after/`.
 - remote: the deploy workflow leaves the `send_email` binding out of the rendered `wrangler.deploy.jsonc` unless
   the `work-trains-production` environment sets the new optional variable `WORK_TRAINS_SEND_EMAIL` to `true`, so an
   account without Email Routing deploys. Without the binding the Worker skips email notifications, as it does when

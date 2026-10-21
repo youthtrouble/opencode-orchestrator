@@ -119,6 +119,18 @@ export function ciLine(run) {
   return `${name}: ${outcome}`;
 }
 
+const CI_FAILED = new Set(["failure", "timed_out", "startup_failure"]);
+const CI_RUNNING = new Set(["in_progress", "queued", "waiting", "pending", "requested"]);
+
+/** The colour of a CI run's mark: red only for a real failure; a cancelled or skipped run stays neutral. */
+export function ciTone(run) {
+  if (run.status === "completed") {
+    if (run.conclusion === "success") return "ok";
+    return CI_FAILED.has(run.conclusion) ? "fail" : "neutral";
+  }
+  return CI_RUNNING.has(run.status) ? "running" : "neutral";
+}
+
 /** A body longer than six lines (or one very long paragraph) shows a preview until expanded. */
 export function clampBody(body, maxLines = BODY_MAX_LINES, maxChars = BODY_MAX_CHARS) {
   const lines = body.split("\n");
