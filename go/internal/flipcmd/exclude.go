@@ -63,7 +63,7 @@ func gitExcludeFile(root string) (file string, found bool, err error) {
 	if isDirectory(dotGit) {
 		return filepath.Join(dotGit, "info", "exclude"), true, nil
 	}
-	pointer, err := readTrimmed(dotGit)
+	pointer, err := readGitPath(dotGit)
 	if err != nil || !strings.HasPrefix(pointer, gitFilePrefix) {
 		return "", false, err
 	}
@@ -75,7 +75,7 @@ func gitExcludeFile(root string) (file string, found bool, err error) {
 	if !nodefs.Exists(commonDirFile) {
 		return filepath.Join(gitDir, "info", "exclude"), true, nil
 	}
-	commonDirPath, err := readTrimmed(commonDirFile)
+	commonDirPath, err := readGitPath(commonDirFile)
 	if err != nil {
 		return "", false, err
 	}
@@ -92,13 +92,14 @@ func isDirectory(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-// readTrimmed is fs.readFileSync(path, "utf8").trimEnd().
-func readTrimmed(path string) (string, error) {
+// readGitPath is a .git or commondir file's content as git reads it: only trailing CR/LF
+// bytes end it; a trailing space or tab belongs to the path, so "meta \n" names "meta ".
+func readGitPath(path string) (string, error) {
 	data, err := nodefs.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimRight(jsstr.DecodeUTF8(data), jsstr.WhiteSpace), nil
+	return strings.TrimRight(jsstr.DecodeUTF8(data), "\r\n"), nil
 }
 
 // resolveAgainst is path.resolve(base, p) for an absolute base.

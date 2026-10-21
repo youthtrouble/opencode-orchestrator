@@ -147,13 +147,30 @@ test("ensureGitExclude writes the info/exclude git reads behind a .git directory
     ["a .git directory", { "project/.git/": "" }, "project/.git/info/exclude"],
     ["a linked worktree (commondir)", { "project/.git": "gitdir: {dir}/main/.git/worktrees/w\n", "main/.git/worktrees/w/commondir": "../..\n" }, "main/.git/info/exclude"],
     ["a submodule (no commondir)", { "project/.git": "gitdir: ../main/.git/modules/sub\n", "main/.git/modules/sub/": "" }, "main/.git/modules/sub/info/exclude"],
-    ["a relative gitdir with trailing white space", { "project/.git": "gitdir: .gitmeta/worktrees/w \r\n", "project/.gitmeta/worktrees/w/commondir": "../.." }, "project/.gitmeta/info/exclude"],
+    ["a relative gitdir ending in several line endings", { "project/.git": "gitdir: .gitmeta/worktrees/w\r\n\r\n", "project/.gitmeta/worktrees/w/commondir": "../..\n\r\n" }, "project/.gitmeta/info/exclude"],
   ]) {
     await t.test(name, (t) => {
       const dir = tempProject(t);
       layout(dir, files);
       assert.equal(ensureGitExclude(path.join(dir, "project")), true);
       assert.equal(fs.readFileSync(path.join(dir, exclude), "utf8"), ".orchestrator/\n");
+    });
+  }
+});
+
+// Git strips only the CR/LF ending these files, so a trailing space names a different directory than
+// its space-less sibling, whose exclude must stay untouched (C4-SOL-R1).
+test("ensureGitExclude keeps a trailing space in a gitdir or commondir path", async (t) => {
+  for (const [name, files, exclude, sibling] of [
+    ["gitdir", { "project/.git": "gitdir: meta \r\n", "project/meta /": "", "project/meta/": "" }, "project/meta /info/exclude", "project/meta"],
+    ["commondir", { "project/.git": "gitdir: g\n", "project/g/commondir": "../common \n", "project/common /": "", "project/common/": "" }, "project/common /info/exclude", "project/common"],
+  ]) {
+    await t.test(name, (t) => {
+      const dir = tempProject(t);
+      layout(dir, files);
+      assert.equal(ensureGitExclude(path.join(dir, "project")), true);
+      assert.equal(fs.readFileSync(path.join(dir, exclude), "utf8"), ".orchestrator/\n");
+      assert.deepEqual(fs.readdirSync(path.join(dir, sibling)), []);
     });
   }
 });

@@ -102,6 +102,10 @@
   action's outcome is final even if recording it fails.
   A failed step sends the page a fixed detail (for example `pause: could not write the gate`)
   and keeps the error for the local log.
+- flip/kickoff: reading a `.git` file's `gitdir:` path or a `commondir` path now strips only the
+  trailing CR/LF line ending, as git does, not all trailing white space (JS and Go, C4-SOL-R1).
+  Before, a git dir literally named `meta ` was read as `meta`, so `.orchestrator/` went unexcluded
+  or, if a `meta` sibling existed, that other directory's `info/exclude` was written.
 - go: `orch remote` state and wire fixes (WT11 review R1-R3). Concurrent `orch remote init` runs
   (separate processes included) now all get the same machine id: `state.json` is published
   complete and only if absent, and a run that loses reads the winner's id. Before, each could

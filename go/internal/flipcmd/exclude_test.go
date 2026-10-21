@@ -140,14 +140,14 @@ func TestEnsureGitExcludeFollowsAGitFile(t *testing.T) {
 		{"worktree with a relative commondir", "gitdir: {abs}/main/.git/worktrees/w\n", "../..\n", "main/.git/info/exclude"},
 		{"worktree with an absolute commondir", "gitdir: {abs}/main/.git/worktrees/w", "{abs}/main/.git", "main/.git/info/exclude"},
 		{"submodule", "gitdir: ../main/.git/modules/sub\n", "", "main/.git/modules/sub/info/exclude"},
-		{"relative gitdir with trailing white space", "gitdir: .gitmeta/worktrees/w \r\n", "../..", "project/.gitmeta/info/exclude"},
+		{"relative gitdir ending in several line endings", "gitdir: .gitmeta/worktrees/w\r\n\r\n", "../..\n\r\n", "project/.gitmeta/info/exclude"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
 			abs := func(s string) string { return strings.ReplaceAll(s, "{abs}", dir) }
 			root := filepath.Join(dir, "project")
 			writeFile(t, filepath.Join(root, ".git"), abs(c.gitFile))
-			gitDir := strings.TrimSpace(strings.TrimPrefix(abs(c.gitFile), "gitdir: "))
+			gitDir := strings.TrimRight(strings.TrimPrefix(abs(c.gitFile), "gitdir: "), "\r\n")
 			if !filepath.IsAbs(gitDir) {
 				gitDir = filepath.Join(root, gitDir)
 			}
@@ -161,6 +161,37 @@ func TestEnsureGitExcludeFollowsAGitFile(t *testing.T) {
 			}
 			if got := readFile(t, filepath.Join(dir, c.exclude)); got != ".orchestrator/\n" {
 				t.Errorf("%s = %q", c.exclude, got)
+			}
+		})
+	}
+}
+
+// Git strips only the CR/LF ending a .git or commondir file, so a trailing space names a
+// different directory than its space-less sibling, whose exclude must stay untouched (C4-SOL-R1).
+func TestEnsureGitExcludeKeepsATrailingSpaceInAGitPath(t *testing.T) {
+	for _, c := range []struct {
+		name, gitFile, commonDir, target, sibling string // target and sibling are relative to root
+	}{
+		{"gitdir", "gitdir: meta \r\n", "", "meta ", "meta"},
+		{"commondir", "gitdir: g\n", "../common \n", "common ", "common"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, ".git"), c.gitFile)
+			if c.commonDir != "" {
+				writeFile(t, filepath.Join(root, "g", "commondir"), c.commonDir)
+			}
+			mkdir(t, filepath.Join(root, c.target))
+			mkdir(t, filepath.Join(root, c.sibling))
+			hasGit, err := EnsureGitExclude(root)
+			if err != nil || !hasGit {
+				t.Fatalf("EnsureGitExclude = %v, %v; want true, nil", hasGit, err)
+			}
+			if got := readFile(t, filepath.Join(root, c.target, "info", "exclude")); got != ".orchestrator/\n" {
+				t.Errorf("exclude = %q", got)
+			}
+			if entries, _ := os.ReadDir(filepath.Join(root, c.sibling)); len(entries) != 0 {
+				t.Errorf("sibling %q gained %v", c.sibling, entries)
 			}
 		})
 	}
@@ -248,6 +279,19 @@ func TestEnsureGitExcludeBehindAGitFileAgreesWithGit(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(moved, ".git"), "gitdir: .gitmeta\n")
 	wantExcluded(t, moved, filepath.Join(moved, ".gitmeta", "info", "exclude"))
+
+	// Git keeps a trailing space in the gitdir path, stripping only the line ending (C4-SOL-R1).
+	spaced := filepath.Join(dir, "spaced")
+	runGit(t, dir, "init", "-q", spaced)
+	if err := os.Rename(filepath.Join(spaced, ".git"), filepath.Join(spaced, ".gitmeta ")); err != nil {
+		t.Fatal(err)
+	}
+	mkdir(t, filepath.Join(spaced, ".gitmeta"))
+	writeFile(t, filepath.Join(spaced, ".git"), "gitdir: .gitmeta \r\n")
+	wantExcluded(t, spaced, filepath.Join(spaced, ".gitmeta ", "info", "exclude"))
+	if entries, _ := os.ReadDir(filepath.Join(spaced, ".gitmeta")); len(entries) != 0 {
+		t.Errorf("space-less sibling gained %v", entries)
+	}
 }
 
 // wantExcluded runs EnsureGitExclude in root and checks that exclude holds the line and that

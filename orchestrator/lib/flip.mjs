@@ -97,15 +97,21 @@ function gitExcludeFile(root) {
   const dotGit = path.join(root, ".git");
   if (!fs.existsSync(dotGit)) return null;
   if (isDirectory(dotGit)) return path.join(dotGit, "info", "exclude");
-  const pointer = fs.readFileSync(dotGit, "utf8").trimEnd();
+  const pointer = readGitPath(dotGit);
   if (!pointer.startsWith(GIT_FILE_PREFIX)) return null;
   const gitDir = path.resolve(root, pointer.slice(GIT_FILE_PREFIX.length));
   if (!isDirectory(gitDir)) return null;
   const commonDirFile = path.join(gitDir, "commondir");
   if (!fs.existsSync(commonDirFile)) return path.join(gitDir, "info", "exclude");
-  const commonDir = path.resolve(gitDir, fs.readFileSync(commonDirFile, "utf8").trimEnd());
+  const commonDir = path.resolve(gitDir, readGitPath(commonDirFile));
   if (!isDirectory(commonDir)) return null;
   return path.join(commonDir, "info", "exclude");
+}
+
+// A .git or commondir file's content as git reads it: only trailing CR/LF bytes end it; a trailing
+// space or tab belongs to the path, so "meta \n" names "meta ", not "meta".
+function readGitPath(file) {
+  return fs.readFileSync(file, "utf8").replace(/[\r\n]+$/, "");
 }
 
 // Like fs.existsSync, any stat failure (missing, a dangling symlink, a file used as a directory) is "no".
