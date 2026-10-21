@@ -39,10 +39,21 @@ function el(tag, attributes = {}, ...children) {
     else if (name in node && typeof value !== "string") node[name] = value;
     else node.setAttribute(name, value === true ? "" : value);
   }
-  for (const child of children.flat()) {
-    if (child !== null && child !== undefined && child !== false) node.append(child);
-  }
+  node.append(...present(children));
   return node;
+}
+
+/**
+ * Replaces a node's children. The DOM's own replaceChildren would render a null child as the text
+ * "null"; this drops absent children the way `el` does.
+ */
+function setChildren(node, ...children) {
+  node.replaceChildren(...present(children));
+}
+
+/** Children to render: null, undefined and false stand for "nothing here". */
+function present(children) {
+  return children.flat().filter((child) => child !== null && child !== undefined && child !== false);
 }
 
 // ---- network ----------------------------------------------------------------------------------
@@ -247,11 +258,13 @@ function renderBanner() {
 
 function renderHeader(summary) {
   const seen = model.macSeen(summary.machine, nowOnServer());
-  $("mac-seen").replaceChildren(
+  setChildren(
+    $("mac-seen"),
     `Mac seen ${seen.label}`,
     seen.stale ? el("span", { class: "badge badge-stale" }, "stale") : null,
   );
-  $("budget").replaceChildren(
+  setChildren(
+    $("budget"),
     ...model.budgetChips(summary.budget).map((chip) => el("li", { class: `chip level-${chip.level}` }, chip.text)),
   );
 }
@@ -259,7 +272,8 @@ function renderHeader(summary) {
 function renderNeedsYou(projects) {
   const stack = model.needsYouStack(projects);
   $("needs-you-count").textContent = stack.length === 0 ? "" : `(${stack.length})`;
-  $("questions").replaceChildren(
+  setChildren(
+    $("questions"),
     ...(stack.length === 0 ? [el("p", { class: "empty" }, "Nothing needs you.")] : stack.map(questionCard)),
   );
 }
@@ -432,7 +446,8 @@ function noteLine(key) {
 
 function renderProjects(projects) {
   const { shown, hidden } = model.partitionByVisibility(projects);
-  $("project-list").replaceChildren(
+  setChildren(
+    $("project-list"),
     ...(shown.length === 0 ? [el("p", { class: "empty" }, "No projects to show.")] : shown.map(projectCard)),
   );
   const section = $("hidden");
@@ -440,7 +455,7 @@ function renderProjects(projects) {
   const toggleButton = $("hidden-toggle");
   toggleButton.textContent = `Hidden (${hidden.length})`;
   toggleButton.setAttribute("aria-expanded", String(page.showHidden));
-  $("hidden-list").replaceChildren(...(page.showHidden ? hidden.map(projectCard) : []));
+  setChildren($("hidden-list"), ...(page.showHidden ? hidden.map(projectCard) : []));
 }
 
 function projectCard(project) {

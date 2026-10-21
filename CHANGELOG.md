@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
+  (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills
+  every node through one helper that drops absent children the way `el` does. A new page test,
+  `remote/worker/test/ui-page.test.ts`, runs `public/app.js` against a small fake DOM and checks the
+  header for both a fresh and a stale Mac.
 - remote: Work Trains for more than one sign-in and a new hostname (WT21). `OWNER_EMAIL` is now a
   comma-separated allowlist (trimmed, lower-cased, de-duplicated; any empty or malformed entry fails closed
   with 503 `not_configured`, as a missing secret does); a single address works as before. An Access JWT
