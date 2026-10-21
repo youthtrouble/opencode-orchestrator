@@ -16,6 +16,13 @@
   and the project is keyed by an opaque hash. `orch remote status` now shows the discovered
   projects' count and names and any root it could not scan. Snapshot goldens are checked against
   the protocol schema by `remote/protocol/test/go-goldens.test.ts`.
+- go: `orch remote` apply layer (WT13). A Work Trains answer is posted through the same reply path
+  as `orch mailbox reply` (now `internal/reply`, output unchanged), and its line gains, after
+  `thread`, `"via": "remote"` and `"remote": {"answer_id", "kind": "accept|typed"}`, acked with the
+  note `replied via Work Trains`; JS readers ignore the extra keys. A retried answer whose reply is
+  already posted is not posted again but finishes what an interruption left (the ack, the gate). A
+  page pause sets the human gate (`paused from Work Trains`); a resume starts the project's
+  supervisor when none runs, then clears the gate. Details sent to the page name no local path.
 - go: `orch remote` state and wire fixes (WT11 review R1-R3). Concurrent `orch remote init` runs
   (separate processes included) now all get the same machine id: `state.json` is published
   complete and only if absent, and a run that loses reads the winner's id. Before, each could

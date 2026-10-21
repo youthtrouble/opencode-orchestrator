@@ -70,6 +70,10 @@ func NewUUID() string {
 //
 // A question also records Recommended, the answer its poster recommends, and Blocking, whether
 // it blocks the poster (nil is true). Other kinds ignore both, so their lines stay as they were.
+//
+// A reply pulled from Work Trains carries Remote, written last as `"via": "remote"` and
+// `"remote": {"answer_id", "kind"}`. It is Go-only: the JS never writes it and its readers
+// ignore the extra keys.
 type Draft struct {
 	From        any
 	To          any
@@ -80,6 +84,14 @@ type Draft struct {
 	Thread      string
 	Recommended *string
 	Blocking    *bool
+	Remote      *RemoteRef
+}
+
+// RemoteRef identifies the Work Trains answer a reply came from: AnswerID is the Worker's
+// answer id, which makes a retried apply recognisable, and Kind is "accept" or "typed".
+type RemoteRef struct {
+	AnswerID string
+	Kind     string
 }
 
 // Post appends a message with a fresh id and timestamp and returns it. A falsy From (JS
@@ -117,6 +129,13 @@ func (b *Mailbox) Post(d Draft) (*jsjson.Object, error) {
 	if isQuestion {
 		msg.Set("recommended", *d.Recommended)
 		msg.Set("blocking", d.Blocking == nil || *d.Blocking)
+	}
+	if d.Remote != nil {
+		remote := jsjson.NewObject()
+		remote.Set("answer_id", d.Remote.AnswerID)
+		remote.Set("kind", d.Remote.Kind)
+		msg.Set("via", "remote")
+		msg.Set("remote", remote)
 	}
 	if err := jsonl.Append(filepath.Join(b.Dir, "messages.jsonl"), msg); err != nil {
 		return nil, err
