@@ -24,3 +24,24 @@ jobs:
           npm ci
           npm test
           npm run typecheck
+
+  e2e:
+    # The real Worker under `wrangler dev --local` (miniflare, no Cloudflare account) behind a local Access
+    # emulator, driven by the real orch: remote/e2e/run.test.ts.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - name: Install wrangler (the version the end-to-end test was written against)
+        run: npm i -g wrangler@4.118.0
+      - name: Install the Worker's dependencies
+        working-directory: remote/worker
+        run: npm ci
+      - name: End-to-end test
+        run: node --test 'remote/e2e/*.test.ts'

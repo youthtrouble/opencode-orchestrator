@@ -353,6 +353,7 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 | [go/README.md](go/README.md#orch-remote-go-only) | `orch remote`, the Mac side of Work Trains: `init`, `status`, `push --dry-run` (prints exactly what a push would send and sends nothing), `once` / `serve` (the sync loop) and `launchd` (prints the LaunchAgent plist that keeps `serve` running) |
 | [remote/protocol/README.md](remote/protocol/README.md) | The Work Trains wire protocol: the versioned v1 JSON Schema, its validator and examples; test with `node --test 'remote/protocol/test/*.test.ts'` |
 | [remote/worker/](remote/worker/) | The Work Trains Cloudflare Worker, not yet deployed: the Access auth gate, the D1 migrations, the machine API (push, pull, ack), the browser API (summary, answer, pause/resume, undo, hide) and the email notifier; test with `npm ci && npm test && npm run typecheck` in that directory |
+| [remote/e2e/](remote/e2e/) | The Work Trains end-to-end test: the Worker under `wrangler dev --local` on a temp D1, behind a local Access emulator, driven by the real `orch remote once` and a simulated phone (about 90 s; needs Go, Node 26 and `npm ci` in `remote/worker`, plus a `wrangler` on PATH, which no package installs: CI pins 4.118.0 with `npm i -g wrangler@4.118.0`); run `node --test 'remote/e2e/*.test.ts'` |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Checks to run before a change |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |

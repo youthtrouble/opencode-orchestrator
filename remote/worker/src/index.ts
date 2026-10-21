@@ -9,7 +9,7 @@ import { MAX_BODY_BYTES, payloadTooLarge } from "./body.ts";
 import { readConfig, type Config, type WorkerEnv } from "./env.ts";
 import { ForbiddenError, HttpError, toResponse } from "./http.ts";
 import { withSecurityHeaders } from "./http/headers.ts";
-import { notifierFor } from "./notify/notifier.ts";
+import { notifierFor, type Notifier } from "./notify/notifier.ts";
 import { notifyOnAccepted } from "./notify/triggers.ts";
 import { countingDb, QueryCounter } from "./queries.ts";
 import { appRoutes, matchRoute, routeClassFor, type HandlerContext, type Route, type RouteClass } from "./routes.ts";
@@ -125,6 +125,18 @@ function remoteAccessKeys(teamDomain: string): JWTVerifyGetKey {
   return keys;
 }
 
-const routes = appRoutes({ onPushAccepted: notifyOnAccepted(notifierFor) });
+export interface AppDeps {
+  keysFor: WorkerDeps["keysFor"];
+  /** Who tells the owner about a push that needs them. */
+  notifierFor: (ctx: HandlerContext) => Notifier;
+  /** Routes beside the app's own; only the end-to-end test entry adds one. */
+  extraRoutes?: readonly Route[];
+}
 
-export default createWorker({ keysFor: remoteAccessKeys, routes, now: () => new Date() });
+/** The app every entry serves: production below, and remote/worker/test/e2e-entry.ts. */
+export function createApp({ keysFor, notifierFor, extraRoutes = [] }: AppDeps): ExportedHandler<WorkerEnv> {
+  const routes = [...appRoutes({ onPushAccepted: notifyOnAccepted(notifierFor) }), ...extraRoutes];
+  return createWorker({ keysFor, routes, now: () => new Date() });
+}
+
+export default createApp({ keysFor: remoteAccessKeys, notifierFor });

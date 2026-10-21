@@ -1,0 +1,20 @@
+// The end-to-end test's Worker (remote/e2e): wrangler.jsonc with the test entry, which checks Access JWTs
+// against the run's own key and records notifications, and a 1 s undo window so a run need not wait 10 s.
+// Used only with `wrangler dev --local`; the D1 id is the same placeholder, so it can never deploy anywhere.
+{
+  "name": "work-trains-e2e",
+  "main": "test/e2e-entry.ts",
+  "compatibility_date": "2026-07-30",
+  "workers_dev": false,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "work-trains",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+  "vars": { "UNDO_SECONDS": "1" }
+}

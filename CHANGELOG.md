@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- remote: an end-to-end test of Work Trains (WT16), `node --test 'remote/e2e/*.test.ts'`, and a CI job
+  `e2e` running it. It starts the real Worker under `wrangler dev --local` (miniflare and a temp D1, no
+  Cloudflare account) through a new test-only entry, `remote/worker/test/e2e-entry.ts` with
+  `wrangler.e2e.jsonc` (Access keys from the run's own key set, a recording notifier at
+  `GET /__e2e/notifications`, a 1 s undo window), puts a local Access emulator in front of it, and drives
+  it with the real `orch remote once` in a sandbox HOME and a simulated phone. It checks the 403 gate
+  on every route (`/__e2e/notifications` included), that Access replaces any assertion a caller sends, Accept and typed answers landing once after the undo window (and a double tap refused),
+  an undo applying nothing, one notification without the question's text, an Access outage and a lost
+  ack response, pause and resume with the 60 s push spacing, and that neither secret appears in any
+  output or file. Wrangler runs on a temp copy of the Worker, so no `.wrangler/` lands in the
+  repository. `src/index.ts` now builds the app through `createApp({ keysFor, notifierFor })`, which
+  both entries use.
+
 - go: Work Trains snapshots now carry each project's latest CI (WT15): with the config's `ci` on
   (the default), a project whose origin is a github.com repository gets the newest GitHub Actions
   run of each workflow on its default branch (at most 5), read with the owner's own `gh` (`gh run

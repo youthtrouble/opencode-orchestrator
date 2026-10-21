@@ -1,6 +1,7 @@
 {
-  // Type-checks the Worker sources only. Tests run under Node (node:test, node:sqlite) and would
-  // need @types/node, whose globals clash with the Workers runtime types; Node strips their types.
+  // Type-checks the Worker sources and the end-to-end entry, which runs in the Workers runtime too. Tests
+  // run under Node (node:test, node:sqlite) and would need @types/node, whose globals clash with the
+  // Workers runtime types; Node strips their types.
   "compilerOptions": {
     "target": "es2024",
     "lib": ["es2024"],
@@ -16,5 +17,5 @@
     "resolveJsonModule": true,
     "skipLibCheck": true
   },
-  "include": ["src", "worker-configuration.d.ts"]
+  "include": ["src", "test/e2e-entry.ts", "worker-configuration.d.ts"]
 }
