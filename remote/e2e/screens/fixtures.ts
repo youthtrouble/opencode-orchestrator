@@ -258,6 +258,43 @@ const budgetCredits: Fixture = (nowMs) =>
     ],
   });
 
+/** One blocking action question: the owner is asked to do something, so the card offers Copy and "I've done it", no Accept. */
+const actionQuestion: Fixture = (nowMs) =>
+  summary(nowMs, {
+    lastPullAgoMs: 24 * SECOND,
+    budget: { anthropic: posture("green", 28, 41, nowMs), openai: posture("green", 35, 50, nowMs) },
+    projects: [
+      project(nowMs, {
+        key: projectKey("a"),
+        name: "atlas-api",
+        state: "needs_you",
+        state_reason: "1 blocking question",
+        door: "claude",
+        slice: "AT6",
+        now: "Production deploy workflow",
+        progress: { done: 2, total: 5 },
+        questions: [
+          {
+            id: "m-0201",
+            at: iso(nowMs - 8 * MINUTE),
+            from: "conductor",
+            subject: "Create the production environment",
+            body: [
+              "1. Open the repository's Settings > Environments.",
+              "2. Add an environment named work-trains-production.",
+              "3. Add the secret CLOUDFLARE_API_TOKEN to it.",
+              "4. Run: orch version",
+            ].join("\n"),
+            ask: "action",
+            recommended: null,
+            blocking: true,
+            answer: null,
+          },
+        ],
+      }),
+    ],
+  });
+
 /** The states the script shoots, by the name its PNGs carry. */
 export const SCREEN_STATES: Readonly<Record<string, Fixture>> = {
   "needs-you": needsYou,
@@ -265,4 +302,5 @@ export const SCREEN_STATES: Readonly<Record<string, Fixture>> = {
   "stale-mac": staleMac,
   "failed-ci-paused": failedCiPaused,
   "budget-credits": budgetCredits,
+  "action-question": actionQuestion,
 };

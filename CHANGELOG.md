@@ -33,6 +33,8 @@
   rejects a push that carries `ask`.
 - remote: the Work Trains page's weight budget (`test/ui-assets.test.ts`) is 64 KiB, up from 48 KiB, so WT25's
   action questions fit beside the WT22-B restyle and its home-screen icon (owner approved, question 6bf313bf).
+- remote: `remote/e2e/screens.ts` also shoots an `action-question` state (a blocking action question with Copy,
+  **I've done it** and Reply); its shots are in `remote/docs/design/after/`.
 - remote: the deploy workflow leaves the `send_email` binding out of the rendered `wrangler.deploy.jsonc` unless
   the `work-trains-production` environment sets the new optional variable `WORK_TRAINS_SEND_EMAIL` to `true`, so an
   account without Email Routing deploys. Without the binding the Worker skips email notifications, as it does when
