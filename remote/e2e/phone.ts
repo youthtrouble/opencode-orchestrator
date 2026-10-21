@@ -1,6 +1,7 @@
 // The owner's phone, simulated: the page's own API calls, made through the Access emulator with a session
 // cookie (the owner's unless told otherwise) and the page's origin, as the browser would make them.
 import { randomUUID } from "node:crypto";
+import { request } from "node:http";
 import { OWNER_COOKIE } from "./access-emulator.ts";
 
 /** The Worker's PUBLIC_ORIGIN in the run: a browser write must come from it. */
@@ -14,6 +15,11 @@ export type Json = Record<string, any>;
 export interface Reply {
   status: number;
   body: Json;
+}
+
+export interface PageLoad {
+  status: number;
+  location: string | undefined;
 }
 
 export interface PhoneOptions {
@@ -72,6 +78,11 @@ export class Phone {
     return this.#call("POST", `/api/v1/projects/${projectKey}/actions`, { kind, client_key: clientKey });
   }
 
+  /** The page (or an asset) as a browser on `host` loads it; only the status and any redirect matter. */
+  openPage(path: string, host: string): Promise<PageLoad> {
+    return getOnHost(this.#accessUrl, host, path, { Cookie: this.#cookie });
+  }
+
   async notifications(): Promise<Json[]> {
     const { status, body } = await this.#call("GET", "/__e2e/notifications");
     if (status !== 200) throw new Error(`GET /__e2e/notifications answered ${status}`);
@@ -90,4 +101,20 @@ export class Phone {
     });
     return { status: response.status, body: await response.json() };
   }
+}
+
+/**
+ * A GET through Access addressed to `host`, as a client of that hostname sends it. fetch cannot set Host,
+ * so this is a plain HTTP request; its body is drained and dropped.
+ */
+export function getOnHost(accessUrl: string, host: string, path: string, headers: Record<string, string>) {
+  const { hostname, port } = new URL(accessUrl);
+  return new Promise<PageLoad>((resolve, reject) => {
+    const outbound = request({ hostname, port, path, headers: { ...headers, Host: host } }, (response) => {
+      response.resume();
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, location: response.headers.location }));
+    });
+    outbound.on("error", reject);
+    outbound.end();
+  });
 }

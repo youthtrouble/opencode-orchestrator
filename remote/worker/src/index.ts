@@ -107,9 +107,29 @@ async function dispatch(d: Dispatch): Promise<Response> {
     return match.route.handler({ request, env, cfg, db, queries, now, identity, params: match.params, waitUntil });
   }
   if (d.routeClass === "browser" && !isWrite(d.request.method) && !d.path.startsWith("/api/")) {
-    return d.env.ASSETS.fetch(d.request);
+    return onPublicHost(d.request, d.cfg) ? d.env.ASSETS.fetch(d.request) : redirectToPublicOrigin(d.request, d.cfg);
   }
   throw new HttpError(404, "not_found", "not found");
+}
+
+/** Whether the request came in on PUBLIC_ORIGIN's host rather than another hostname of this Worker. */
+function onPublicHost(request: Request, cfg: Config): boolean {
+  return new URL(request.url).host === new URL(cfg.publicOrigin).host;
+}
+
+/**
+ * The page and its assets on any other hostname (the workers.dev address after a cut-over) send the
+ * browser to the same path on PUBLIC_ORIGIN, where its writes are accepted. Only after the gate: the old
+ * hostname must still be behind Access, and the browser then passes Access on the new hostname too. A 302,
+ * not a 308, so a browser does not keep the redirect once PUBLIC_ORIGIN moves again. API routes are
+ * answered on every hostname, so an old tab and the Mac keep working until the owner retires the address.
+ */
+function redirectToPublicOrigin(request: Request, cfg: Config): Response {
+  const { pathname, search } = new URL(request.url);
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `${cfg.publicOrigin}${pathname}${search}`, "Cache-Control": "no-store" },
+  });
 }
 
 // One key set per isolate: jose caches the Access keys and refetches on an unknown `kid`, which

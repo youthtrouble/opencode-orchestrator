@@ -163,8 +163,9 @@ export class AccessEmulator {
       .sign(this.#privateKey);
   }
 
+  /** Forwards with the Host the caller addressed, as Access does: the Worker sees which hostname was used. */
   #forward(request: IncomingMessage, jwt: string): Promise<IncomingMessage> {
-    const headers = { ...request.headers, host: this.#upstream.host };
+    const headers = { ...request.headers };
     for (const name of ACCESS_HEADERS) delete headers[name];
     headers["cf-access-jwt-assertion"] = jwt;
     return new Promise((resolve, reject) => {

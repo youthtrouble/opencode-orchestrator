@@ -250,10 +250,17 @@ function restoreFocus(focus) {
     target.setSelectionRange(focus.start, focus.end);
 }
 
+/** The last summary's failure, and a link to PUBLIC_ORIGIN when the page is open elsewhere. */
 function renderBanner() {
   const banner = $("banner");
-  banner.hidden = page.banner === null;
-  banner.textContent = page.banner ?? "";
+  const home = page.summary?.public_origin;
+  const moved = home !== undefined && home !== location.origin;
+  banner.hidden = page.banner === null && !moved;
+  setChildren(
+    banner,
+    page.banner && el("p", {}, page.banner),
+    moved && el("p", {}, `${model.CANNOT_SEND_HERE}. Open `, el("a", { href: home }, home), "."),
+  );
 }
 
 function renderHeader(summary) {

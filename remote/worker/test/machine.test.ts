@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { compileSchema } from "../../protocol/validate.ts";
 import { createWorker } from "../src/index.ts";
 import { cancelWithinWindow } from "../src/browser/lifecycle.ts";
+import { ACCEPT_FROM_MAILBOX, ACCEPT_HEADER } from "../src/machine/pull.ts";
 import type { AcceptedProject } from "../src/machine/push.ts";
 import type { CountedDb } from "../src/queries.ts";
 import { appRoutes } from "../src/routes.ts";
@@ -63,7 +64,10 @@ function machineApp() {
       now = new Date(START.getTime() + secondsAfterStart * 1000);
     },
     push: (body: unknown) => call("POST", "/api/v1/machine/push", JSON.stringify(body)),
-    pull: () => call("GET", "/api/v1/machine/pull"),
+    /** A pull from an orch that answers an accept from its own mailbox, as every current orch does. */
+    pull: () => call("GET", "/api/v1/machine/pull", undefined, { [ACCEPT_HEADER]: ACCEPT_FROM_MAILBOX }),
+    /** A pull from an orch built before the accept header. */
+    pullFromOldOrch: () => call("GET", "/api/v1/machine/pull"),
     ack: (body: unknown) => call("POST", "/api/v1/machine/ack", JSON.stringify(body)),
     call,
   };
@@ -401,10 +405,13 @@ test("the machine routes keep the 256 KiB body limit", async () => {
   assertValid("Error", reply);
 });
 
-/** A pushed project with question q-1, an answer to it and a pause action, both created at 0 s. */
-async function appWithPendingAnswerAndAction() {
+/**
+ * A pushed project with question q-1 (and `moreQuestions`), an accept of q-1 and a pause action, both
+ * created at 0 s.
+ */
+async function appWithPendingAnswerAndAction(moreQuestions: Json[] = []) {
   const app = machineApp();
-  await app.push(pushRequest([snapshot()]));
+  await app.push(pushRequest([snapshot({ questions: [question("q-1"), ...moreQuestions] })]));
   app.db.sqlite
     .prepare(
       `INSERT INTO answers (id, question_id, kind, text, client_key, created_at, apply_after)
@@ -420,6 +427,8 @@ async function appWithPendingAnswerAndAction() {
   return app;
 }
 
+const answerRow = (app: ReturnType<typeof machineApp>, id: string) =>
+  app.db.sqlite.prepare("SELECT * FROM answers WHERE id = ?").get(id) as Json;
 const deliveredAt = (app: ReturnType<typeof machineApp>, table: string, id: string) =>
   (app.db.sqlite.prepare(`SELECT delivered_at FROM ${table} WHERE id = ?`).get(id) as Json).delivered_at;
 
@@ -456,6 +465,29 @@ test("pull hides answers and actions inside the undo window, then delivers them,
   assert.deepEqual(pulled(await app.pull()), { answers: [ANSWER_ID], actions: [ACTION_ID] });
   assert.equal(deliveredAt(app, "answers", ANSWER_ID), iso(10));
   assert.equal(deliveredAt(app, "actions", ACTION_ID), iso(10));
+});
+
+test("an old orch's pull refuses each due accept, settled as rejected for the page, and still gets the rest", async () => {
+  const app = await appWithPendingAnswerAndAction([question("q-2")]);
+  const typedId = "00000000-0000-4000-8000-000000000004";
+  app.db.sqlite
+    .prepare(
+      `INSERT INTO answers (id, question_id, kind, text, client_key, created_at, apply_after)
+       VALUES (?, 'q-2', 'typed', 'Not yet.', 'client-3', ?, ?)`,
+    )
+    .run(typedId, iso(0), iso(10));
+  app.at(9);
+  assert.deepEqual(pulled(await app.pullFromOldOrch()), { answers: [], actions: [] });
+  assert.equal(answerRow(app, ANSWER_ID).outcome, null, "an accept inside its undo window is left alone");
+
+  app.at(10);
+  assert.deepEqual(pulled(await app.pullFromOldOrch()), { answers: [typedId], actions: [ACTION_ID] });
+  const refused = answerRow(app, ANSWER_ID);
+  assert.equal(refused.outcome, "rejected");
+  assert.match(refused.outcome_detail, /^orch on the Mac is too old to accept a recommendation/);
+  assert.equal(refused.delivered_at, iso(10));
+  assert.equal(refused.settled_at, iso(10));
+  assert.deepEqual(pulled(await app.pull()).answers, [typedId], "a refused accept stays refused for a new orch");
 });
 
 test("a cancelled answer or action is never pulled", async () => {

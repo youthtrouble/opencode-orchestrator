@@ -27,7 +27,7 @@ node --test 'remote/protocol/test/*.test.ts'
 | `PullResponse` | Worker -> Mac | Answers and pause/resume actions whose undo window has passed and which are not yet acked, plus `poll_after_seconds`. |
 | `AckRequest` | Mac -> Worker | The outcome of applying each pulled answer or action: `applied`, `superseded` or `rejected`. |
 | `AckResponse` | Worker -> Mac | How many results changed state (`settled`); re-acking is harmless. |
-| `Summary` | Worker -> browser | `GET /api/v1/summary`: machine liveness, budget, undo window and every project with its open questions and answers. |
+| `Summary` | Worker -> browser | `GET /api/v1/summary`: machine liveness, budget, undo window, `public_origin` and every project with its open questions and answers. |
 | `AnswerRequest` | browser -> Worker | Accept the recommendation, or send typed `text` (present only for `typed`; the Worker enforces the pairing). |
 | `AnswerResponse` | Worker -> browser | The stored answer and its delivery `status`. |
 | `ActionRequest` | browser -> Worker | Pause or resume a project. |
@@ -53,6 +53,20 @@ Where a browser payload repeats a field of another payload, it refers to that fi
 - Within v1, the only allowed change is a new optional field. It becomes legal once `v1/schema.json` declares it
   (in `properties`, not in `required`). Every object is `additionalProperties: false`, so a sender must not emit a
   field until the schema, the Worker that imports it and the Go structs all declare it.
+
+## Accept answers
+
+An `accept` names the question and nothing else: the browser sends `{"kind":"accept"}` and the Worker stores the
+recommendation it holds, which the Mac redacted before the push. That copy is what the page shows and what a pulled
+accept carries as `text`, but it is not what the owner accepted, so the Mac never posts it: it replies with the
+recommendation the question holds in its own mailbox, and rejects the accept (`the question has no recommendation on
+the Mac; reply instead`) when there is none. A typed answer's `text` is posted as it is.
+
+The Mac says it does this with the request header `X-Work-Trains-Accept: mailbox` on `GET /api/v1/machine/pull`. An
+orch built before the header would post the redacted `text`, so a pull without it settles every due accept as
+`rejected` (detail `orch on the Mac is too old to accept a recommendation: ...`), which the page shows, and returns
+the rest. The payloads are unchanged, so either side may deploy first: an orch with the header works against a
+Worker that ignores it.
 
 ## Size caps
 

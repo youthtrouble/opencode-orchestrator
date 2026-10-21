@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ORIGIN } from "./support/access.ts";
 import { clientKey, iso, KEY, question, snapshot, trainsApp, type Json, type TrainsApp } from "./support/trains.ts";
 
 const OTHER_KEY = "fedcba9876543210fedcba9876543210";
@@ -16,7 +17,7 @@ async function appWithQuestions(env: Json = {}) {
 const answerRow = (app: TrainsApp, id: string) =>
   app.db.sqlite.prepare("SELECT * FROM answers WHERE id = ?").get(id) as Json;
 
-test("an empty Worker summarises to no machine, no budget and no projects", async () => {
+test("an empty Worker summarises to no machine, no budget and no projects, naming PUBLIC_ORIGIN", async () => {
   const reply = await trainsApp().summary();
   assert.equal(reply.status, 200);
   assert.deepEqual(reply.body, {
@@ -25,6 +26,7 @@ test("an empty Worker summarises to no machine, no budget and no projects", asyn
     machine: null,
     budget: null,
     undo_seconds: 10,
+    public_origin: ORIGIN,
     projects: [],
   });
 });

@@ -43,6 +43,14 @@ const maxResponseBytes = 4 << 20
 // only machine (v1); it is there so a second Mac needs no client change.
 const MachineHeader = "X-Work-Trains-Machine"
 
+// AcceptHeader on a pull tells the Worker that this orch answers an accept with the original
+// recommendation from the project's mailbox (apply.ApplyAnswer), never with the pulled text,
+// which is the copy redacted for the Worker. The Worker refuses an accept to a pull without it.
+const (
+	AcceptHeader      = "X-Work-Trains-Accept"
+	AcceptFromMailbox = "mailbox"
+)
+
 // route is one machine route: its method and its path relative to the configured URL.
 type route struct{ method, path string }
 
@@ -246,6 +254,9 @@ func (c *Client) newRequest(ctx context.Context, r route, body any) (*http.Reque
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", c.userAgent)
 	request.Header.Set(MachineHeader, c.machineID)
+	if r == pullRoute {
+		request.Header.Set(AcceptHeader, AcceptFromMailbox)
+	}
 	if r == pushRoute {
 		sum := sha256.Sum256(payload)
 		request.Header.Set("Idempotency-Key", hex.EncodeToString(sum[:]))

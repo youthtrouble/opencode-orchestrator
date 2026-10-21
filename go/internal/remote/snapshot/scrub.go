@@ -44,7 +44,14 @@ var credentialSubstitutions = []substitution{
 // goes whole, spaces and all; an unquoted one goes with the rest of its clause, because a final
 // component may hold a space and no case or prefix rule tells it from prose (/Volumes/Private
 // client). What survives is a lone "/", words joined by a slash (and/or, w/o, 1/2, 2026/10/21),
-// relative paths (go/internal, ./a/b), URLs and the text after the clause ends.
+// relative paths (go/internal, ./a/b), URLs, API routes and the text after the clause ends.
+
+// apiRoute is the path of an HTTP API endpoint, such as /v1/installations/me or /api/v1/summary:
+// its first component is "api" or a version (v1, v2), which no filesystem root is named, and every
+// component is URL-safe and starts with no dot, so neither ".." nor a hidden file passes. It names
+// an endpoint, not anything on the owner's disk, and the owner must be able to read the question
+// and recommendation they answer, so it stays, quoted or not.
+var apiRoute = regexp.MustCompile(`^/(?:api|v[0-9]+)(?:/[A-Za-z0-9_~%:@-][A-Za-z0-9._~%:@-]*)*/?$`)
 
 // quotedPaths match a whole quoted span ("…", '…' or `…`) that opens like a path: Unix (/, ~/,
 // file://), a Windows drive (C:\, C:/) or a UNC share (\\server).
@@ -96,13 +103,13 @@ func scrubOutbound(text string) string {
 }
 
 // redactUnquotedPaths replaces each unquoted path, with the rest of its clause, by <path>. A
-// path that starts inside an earlier clause has gone with it.
+// path that starts inside an earlier clause has gone with it; an API route is kept.
 func redactUnquotedPaths(text string) string {
 	var out strings.Builder
 	cursor := 0
 	for _, match := range unquotedPath.FindAllStringSubmatchIndex(text, -1) {
 		pathStart := match[3] // the end of the boundary character before the path
-		if pathStart < cursor {
+		if pathStart < cursor || apiRoute.MatchString(text[pathStart:match[1]]) {
 			continue
 		}
 		out.WriteString(text[cursor:pathStart])
@@ -126,8 +133,12 @@ func pathClauseEnd(text string, from int) int {
 	return from + len(strings.TrimRight(clause, " \t"))
 }
 
-// keepQuotesAroundPath replaces a quoted path with <path> inside the same quotes.
+// keepQuotesAroundPath replaces a quoted path with <path> inside the same quotes. A quoted API
+// route is not a path and stays as it is.
 func keepQuotesAroundPath(quoted string) string {
+	if apiRoute.MatchString(quoted[1 : len(quoted)-1]) {
+		return quoted
+	}
 	return quoted[:1] + "<path>" + quoted[len(quoted)-1:]
 }
 

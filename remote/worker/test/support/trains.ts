@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { compileSchema } from "../../../protocol/validate.ts";
 import { createWorker } from "../../src/index.ts";
 import type { Notification, Notifier } from "../../src/notify/notifier.ts";
+import { ACCEPT_FROM_MAILBOX, ACCEPT_HEADER } from "../../src/machine/pull.ts";
 import { notifyOnAccepted } from "../../src/notify/triggers.ts";
 import { appRoutes } from "../../src/routes.ts";
 import { keys, machineToken, ORIGIN, testEnv, tokensAt } from "./access.ts";
@@ -66,10 +67,10 @@ export function trainsApp({ env = {}, notifier = new RecordingNotifier(), queryL
     return { status: response.status, headers: response.headers, body: text === "" ? null : JSON.parse(text) };
   }
 
-  async function machine(method: string, path: string, body?: unknown): Promise<Reply> {
+  async function machine(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Reply> {
     const jwt = await tokensAt(now).serviceJwt();
-    const headers = { "Cf-Access-Jwt-Assertion": jwt, Authorization: `Bearer ${machineToken}` };
-    return send(new Request(`${ORIGIN}${path}`, { method, headers, body: body && JSON.stringify(body) }));
+    const allHeaders = { "Cf-Access-Jwt-Assertion": jwt, Authorization: `Bearer ${machineToken}`, ...headers };
+    return send(new Request(`${ORIGIN}${path}`, { method, headers: allHeaders, body: body && JSON.stringify(body) }));
   }
 
   /**
@@ -100,7 +101,8 @@ export function trainsApp({ env = {}, notifier = new RecordingNotifier(), queryL
       const hashed = projects.map((project) => ({ snapshot_hash: freshHash(), ...project }));
       return machine("POST", "/api/v1/machine/push", pushRequest(hashed, machineId));
     },
-    pull: () => machine("GET", "/api/v1/machine/pull"),
+    /** A pull from an orch that answers an accept from its own mailbox, as every current orch does. */
+    pull: () => machine("GET", "/api/v1/machine/pull", undefined, { [ACCEPT_HEADER]: ACCEPT_FROM_MAILBOX }),
     ack: (results: Json[]) => machine("POST", "/api/v1/machine/ack", { v: 1, results }),
     summary: () => browser("GET", "/api/v1/summary", "Summary"),
     answer: (questionId: string, body: Json) =>

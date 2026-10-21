@@ -115,10 +115,12 @@ func New(projects ProjectResolver, registryFile, stateDir string) Applier {
 	}
 }
 
-// ApplyAnswer posts a pulled answer as the human's reply to its question. An answer already
+// ApplyAnswer posts a pulled answer as the human's reply to its question: a typed answer's text,
+// or for an accept the recommendation the question holds in the mailbox. An answer already
 // in the mailbox (a retried pull after a crash or a failed ack) is not posted again: only what
 // the reply still lacks, the human's ack and clearing the gate, is done, and it is applied. A
-// question gone, answered on the Mac or no longer a question to the human is not answered. An
+// question gone, answered on the Mac or no longer a question to the human is not answered, nor is
+// an accept of a question without a recommendation or an answer of an unknown kind. An
 // answer whose project is unknown is rejected, and stays rejected on replay (see resolve). A
 // mailbox that cannot be read, a reply that cannot be posted and an ack that cannot be written
 // are a *RetryableError with no outcome (see RetryableError); a reply whose human gate could not
@@ -141,10 +143,15 @@ func (a Applier) ApplyAnswer(answer wire.PulledAnswer) (Outcome, error) {
 		}
 		return answerOutcome("already applied", result)
 	}
-	if outcome, open := questionState(msgs, answer.QuestionID); !open {
+	question, outcome, open := openQuestion(msgs, answer.QuestionID)
+	if !open {
 		return outcome, nil
 	}
-	result, err := reply.Post(box, a.flipProject(root), reply.Request{ID: answer.QuestionID, Body: answer.Text, Remote: remote})
+	body, outcome, ok := replyBody(question, answer)
+	if !ok {
+		return outcome, nil
+	}
+	result, err := reply.Post(box, a.flipProject(root), reply.Request{ID: answer.QuestionID, Body: body, Remote: remote})
 	if err != nil {
 		return retryable("reply", err)
 	}
@@ -162,23 +169,41 @@ func alreadyApplied(msgs []*jsjson.Object, answer wire.PulledAnswer) bool {
 	return false
 }
 
-// questionState is whether the question is still open to the human's answer, and the outcome
-// when it is not.
-func questionState(msgs []*jsjson.Object, questionID string) (Outcome, bool) {
+// openQuestion is the question questionID when it is still open to the human's answer, and the
+// outcome when it is not.
+func openQuestion(msgs []*jsjson.Object, questionID string) (*jsjson.Object, Outcome, bool) {
 	for _, m := range msgs {
 		if jsjson.Path(m, "id") != questionID {
 			continue
 		}
 		to := jsjson.Path(m, "to")
 		if jsjson.Path(m, "kind") != "question" || (to != "human" && to != "*") {
-			return Outcome{Rejected, "not a question"}, false
+			return nil, Outcome{Rejected, "not a question"}, false
 		}
 		if ackedByHuman(m) {
-			return Outcome{Superseded, "answered on the Mac"}, false
+			return nil, Outcome{Superseded, "answered on the Mac"}, false
 		}
-		return Outcome{}, true
+		return m, Outcome{}, true
 	}
-	return Outcome{Rejected, "question not found"}, false
+	return nil, Outcome{Rejected, "question not found"}, false
+}
+
+// replyBody is the text the human's reply carries, and the outcome when there is none. A typed
+// answer is its own text. An accept is the question's recommendation as the mailbox holds it:
+// the pulled text is the copy redacted for the Worker (paths and tokens replaced), which is not
+// what the owner accepted. A question without a recommendation has nothing to accept, and no
+// placeholder is ever posted for it.
+func replyBody(question *jsjson.Object, answer wire.PulledAnswer) (string, Outcome, bool) {
+	switch answer.Kind {
+	case "typed":
+		return answer.Text, Outcome{}, true
+	case "accept":
+		if recommended, _ := jsjson.Path(question, "recommended").(string); recommended != "" {
+			return recommended, Outcome{}, true
+		}
+		return "", Outcome{Rejected, "the question has no recommendation on the Mac; reply instead"}, false
+	}
+	return "", Outcome{Rejected, "unknown answer kind"}, false
 }
 
 // awaitsHumanAck is whether the message questionID is in the mailbox and the human has not

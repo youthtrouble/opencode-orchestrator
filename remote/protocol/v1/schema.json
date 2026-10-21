@@ -679,6 +679,12 @@
           "minimum": 1,
           "maximum": 60
         },
+        "public_origin": {
+          "description": "The Worker's PUBLIC_ORIGIN, the only origin the page can send answers from.",
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^https://[^/?#\\s]+$"
+        },
         "projects": {
           "type": "array",
           "maxItems": 50,
@@ -1007,7 +1013,7 @@
       }
     },
     "Error": {
-      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version. expected_issuer is the Access team domain the Worker expects, sent with wrong_issuer.",
+      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version. expected_issuer is the Access team domain the Worker expects, sent with wrong_issuer. reason is the code of the check that failed, sent with forbidden (such as browser_write_foreign_origin, or jwt_invalid:ERR_JWT_EXPIRED with the JWT library's code); never an email or a token.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1044,6 +1050,11 @@
         "expected_issuer": {
           "type": "string",
           "pattern": "^https://[a-z0-9-]+\\.cloudflareaccess\\.com$"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 80,
+          "pattern": "^[a-z_]+(?::[A-Z_]+)?$"
         }
       }
     }

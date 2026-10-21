@@ -11,6 +11,16 @@ const PULL_LIMIT = 50;
 // keep a pull every 30 s from costing a D1 row write each time (plan D7).
 const LAST_PULL_RESOLUTION_SECONDS = 60;
 
+/**
+ * An accept's `text` is the recommendation as the Worker holds it, redacted on the Mac before the push.
+ * An orch that sends this header on its pull answers an accept with the original recommendation from its
+ * own mailbox. One that does not (built before the header) would post the redacted copy as the owner's
+ * reply, so its pull settles every due accept as rejected instead, and the page says why.
+ */
+export const ACCEPT_HEADER = "X-Work-Trains-Accept";
+export const ACCEPT_FROM_MAILBOX = "mailbox";
+const STALE_ORCH_DETAIL = "orch on the Mac is too old to accept a recommendation: update it, then answer on the Mac";
+
 interface PulledAnswer {
   id: string;
   project_key: string;
@@ -42,12 +52,16 @@ const DUE_ACTIONS_FROM = `
   ORDER BY created_at, id
   LIMIT ${PULL_LIMIT}`;
 
-export async function pullHandler({ db, now }: HandlerContext): Promise<Response> {
+export async function pullHandler({ db, now, request }: HandlerContext): Promise<Response> {
   const at = now.toISOString();
+  const resolvesAccepts = request.headers.get(ACCEPT_HEADER) === ACCEPT_FROM_MAILBOX;
   // One batch is one D1 transaction, so an Undo commits wholly before it (the row is cancelled, so
   // neither selected nor stamped) or wholly after (the row is delivered, so the Undo is refused). The
-  // reply is built only from rows read inside the transaction that stamps them.
-  const [answers, actions] = await db.batch([
+  // reply is built only from rows read inside the transaction that stamps them. A due accept refused to
+  // an old orch is settled first, so the SELECT after it no longer sees it.
+  const refusals = resolvesAccepts ? [] : [refuseDueAccepts(db, at)];
+  const results = await db.batch([
+    ...refusals,
     db
       .prepare(`SELECT answers.id, questions.project_key, answers.question_id, answers.kind, answers.text,
         answers.created_at ${DUE_ANSWERS_FROM}`)
@@ -57,6 +71,7 @@ export async function pullHandler({ db, now }: HandlerContext): Promise<Response
     markDelivered(db, "actions", `SELECT id ${DUE_ACTIONS_FROM}`, at),
     recordPull(db, now),
   ]);
+  const [answers, actions] = results.slice(refusals.length);
   return jsonResponse(200, {
     v: 1,
     server_time: at,
@@ -74,6 +89,17 @@ function markDelivered(db: CountedDb, table: "answers" | "actions", dueIds: stri
   return db
     .prepare(`UPDATE ${table} SET delivered_at = ? WHERE delivered_at IS NULL AND id IN (${dueIds})`)
     .bind(at, at);
+}
+
+/** Settles each due accept as rejected, delivered now, so the old orch never sees it and the page says why. */
+function refuseDueAccepts(db: CountedDb, at: string) {
+  return db
+    .prepare(
+      `UPDATE answers SET delivered_at = COALESCE(delivered_at, ?), outcome = 'rejected', outcome_detail = ?,
+         settled_at = ?
+       WHERE kind = 'accept' AND id IN (SELECT answers.id ${DUE_ANSWERS_FROM})`,
+    )
+    .bind(at, STALE_ORCH_DETAIL, at, at);
 }
 
 // A pull carries no machine id, and one service token stands for the owner's machines, so the

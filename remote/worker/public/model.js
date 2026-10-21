@@ -153,19 +153,32 @@ export function replyCounter(text) {
 }
 
 /**
- * The banner text for a failed request. `status` is 0 when the network failed; `error` is the
- * parsed Error body, or null when the body was not one. A 403 or an Access login redirect most
- * likely means the Access session expired.
+ * The text for a failed request. `status` is 0 when the network failed; `error` is the parsed Error
+ * body, or null. Only an Access login redirect, a 401 or an expired token asks for a sign-in; any
+ * other 403 says what is wrong by the Worker's reason code.
  */
 export function failureMessage({ status, opaqueRedirect, error }) {
-  const signedOut = opaqueRedirect || status === 403;
-  const message = error?.message || fallbackMessage(status, opaqueRedirect);
-  return signedOut ? `${message}. Signed out? Reload to sign in` : message;
+  if (opaqueRedirect || status === 401) return SIGNED_OUT;
+  if (error?.error === "forbidden") return forbiddenMessage(String(error.reason));
+  return error?.message || (status === 0 ? "Cannot reach the server" : `Request failed (${status})`);
 }
 
-function fallbackMessage(status, opaqueRedirect) {
-  if (opaqueRedirect) return "Redirected to sign-in";
-  return status === 0 ? "Cannot reach the server" : `Request failed (${status})`;
+const SIGNED_OUT = "Signed out. Reload to sign in";
+
+/** The page is open on an address other than PUBLIC_ORIGIN, whose writes the Worker refuses. */
+export const CANNOT_SEND_HERE = "This address can't send answers";
+
+const FORBIDDEN_MESSAGES = {
+  browser_write_foreign_origin: `${CANNOT_SEND_HERE}. Open the address in the banner`,
+  browser_email_mismatch: "Signed in as an address that isn't an owner",
+  "jwt_invalid:ERR_JWT_EXPIRED": SIGNED_OUT,
+  jwt_missing: "This address is not behind Cloudflare Access",
+};
+
+function forbiddenMessage(reason) {
+  if (Object.hasOwn(FORBIDDEN_MESSAGES, reason)) return FORBIDDEN_MESSAGES[reason];
+  if (reason.startsWith("jwt_invalid:")) return "Access sign-in doesn't match ACCESS_AUD or ACCESS_TEAM_DOMAIN";
+  return `Not allowed (${reason})`;
 }
 
 /** The undo of a write that already left the window is a 409 `too_late`. */

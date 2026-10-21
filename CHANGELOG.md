@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- remote: after a hostname cut-over the old address no longer fails mysteriously, and Accept delivers what the
+  conductor wrote (WT21c). **Accept** now replies on the Mac with the recommendation from the project's mailbox, not
+  the copy the snapshot redacted for the Worker (which had turned `/v1/installations/me` and any path into
+  `<path>`); a question with no recommendation on the Mac is rejected with a reason the page shows, never answered
+  with placeholder text. `orch remote` marks its pull with `X-Work-Trains-Accept: mailbox`; a Worker pulled by an
+  older orch refuses each due accept as rejected ("orch on the Mac is too old to accept a recommendation") rather
+  than let it post the redacted copy. **Redaction** keeps API routes (`/v1/...`, `/api/...`, quoted or not) and
+  still removes absolute paths and `~/` paths. **Old hostname:** a GET of the page or an asset on any host other
+  than `PUBLIC_ORIGIN`'s gets a 302 to the same path and query there (after the Access gate); API and machine
+  routes still answer on every host. **Error messages:** a 403 body carries `reason`, the code of the failed check
+  (new optional field of the protocol's `Error`; never an email or a token), and the summary carries
+  `public_origin` (new optional field). The page maps the codes: a write from another address says "This address
+  can't send answers" and the banner links to `PUBLIC_ORIGIN`; an unlisted email says so; only a lapsed sign-in
+  says "Signed out. Reload to sign in". Rollout: rebuild `orch` first, then deploy the Worker; in the other order,
+  accepts tapped in between are refused, not misapplied.
 - remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
   (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills
   every node through one helper that drops absent children the way `el` does. A new page test,

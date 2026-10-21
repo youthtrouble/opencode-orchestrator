@@ -75,13 +75,22 @@ class FakeDocument {
 
 let loads = 0;
 
-/** Loads a fresh copy of the page, lets it render `summary`, and returns its document. */
-export async function pageShowing(summary: object) {
+/** Where the page is open unless a test says otherwise: the summaries' PUBLIC_ORIGIN, when they name one. */
+export const PAGE_ORIGIN = "https://trains.example.com";
+
+/** Loads a fresh copy of the page from `origin`, lets it render `summary`, and returns its document. */
+export async function pageShowing(summary: object, origin = PAGE_ORIGIN) {
   const document = new FakeDocument();
   const globals = globalThis as Record<string, unknown>;
-  const saved = { document: globals.document, fetch: globals.fetch, setInterval: globals.setInterval };
+  const saved = {
+    document: globals.document,
+    fetch: globals.fetch,
+    setInterval: globals.setInterval,
+    location: globals.location,
+  };
   Object.assign(globals, {
     document,
+    location: { origin },
     fetch: async () => ({ ok: true, status: 200, type: "basic", json: async () => summary }),
     setInterval: () => 0,
   });

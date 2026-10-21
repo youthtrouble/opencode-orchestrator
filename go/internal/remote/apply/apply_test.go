@@ -190,14 +190,16 @@ func expect(t *testing.T, got Outcome, err error, want Outcome) {
 	}
 }
 
+// A typed answer is posted as typed; an accept posts the recommendation the mailbox holds,
+// whatever text the Worker sent with it.
 func TestAnAnswerIsPostedAsTheHumansRemoteReplyAndAcked(t *testing.T) {
-	for _, kind := range []string{"accept", "typed"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, c := range []struct{ kind, body string }{{"accept", "ship it"}, {"typed", "ship it today"}} {
+		t.Run(c.kind, func(t *testing.T) {
 			f := newFixture(t)
 			q := f.question(t)
-			got, err := f.applier.ApplyAnswer(answer(q, kind, "ship it today"))
+			got, err := f.applier.ApplyAnswer(answer(q, c.kind, "ship it today"))
 			expect(t, got, err, Outcome{Applied, "replied"})
-			want := `{"id":"id-2","at":"` + at + `","from":"human","to":"conductor-claude","kind":"note","subject":"Re: Ship?","body":"ship it today","refs":[],"thread":"id-1","via":"remote","remote":{"answer_id":"answer-1","kind":"` + kind + `"}}`
+			want := `{"id":"id-2","at":"` + at + `","from":"human","to":"conductor-claude","kind":"note","subject":"Re: Ship?","body":"` + c.body + `","refs":[],"thread":"id-1","via":"remote","remote":{"answer_id":"answer-1","kind":"` + c.kind + `"}}`
 			if msgs := f.messages(t); len(msgs) != 2 || msgs[1] != want {
 				t.Errorf("messages = %q\nwant reply %s", msgs, want)
 			}
@@ -205,6 +207,43 @@ func TestAnAnswerIsPostedAsTheHumansRemoteReplyAndAcked(t *testing.T) {
 				t.Errorf("acks = %q", acks)
 			}
 		})
+	}
+}
+
+// The Worker holds the recommendation as the snapshot redacted it; accepting it must deliver what
+// the conductor wrote, paths and all.
+func TestAnAcceptDeliversTheOriginalRecommendationNotTheRedactedCopy(t *testing.T) {
+	f := newFixture(t)
+	original := "Accept all five defaults: GET /v1/installations/me; keep the dump in /Users/someone/backups/db.sql"
+	q := f.post(t, mailbox.Draft{From: "conductor-claude", To: "human", Kind: "question", Subject: "Defaults?", Recommended: &original})
+	got, err := f.applier.ApplyAnswer(answer(q, "accept", "Accept all five defaults: GET /v1/installations/me; keep the dump in <path>"))
+	expect(t, got, err, Outcome{Applied, "replied"})
+	msgs := f.messages(t)
+	if len(msgs) != 2 || !strings.Contains(msgs[1], `"body":"`+original+`"`) {
+		t.Errorf("messages = %q\nwant a reply whose body is %q", msgs, original)
+	}
+}
+
+// A question posted before the recommended/blocking contract has no recommendation: an accept of it
+// is refused for the page to show, and nothing, placeholder or redacted copy, is posted.
+func TestAnAcceptOfAQuestionWithoutARecommendationIsRejected(t *testing.T) {
+	f := newFixture(t)
+	writeFile(t, filepath.Join(f.box().Dir, "messages.jsonl"),
+		`{"id":"legacy-1","at":"`+at+`","from":"conductor-claude","to":"human","kind":"question","subject":"Ship?","body":"","refs":[],"thread":null}`+"\n")
+	got, err := f.applier.ApplyAnswer(answer("legacy-1", "accept", "ship it"))
+	expect(t, got, err, Outcome{Rejected, "the question has no recommendation on the Mac; reply instead"})
+	if len(f.messages(t)) != 1 || f.acks(t) != nil {
+		t.Errorf("messages = %q, acks = %q", f.messages(t), f.acks(t))
+	}
+}
+
+func TestAnAnswerOfAnUnknownKindIsRejected(t *testing.T) {
+	f := newFixture(t)
+	q := f.question(t)
+	got, err := f.applier.ApplyAnswer(answer(q, "accept_recommended", "ship it"))
+	expect(t, got, err, Outcome{Rejected, "unknown answer kind"})
+	if len(f.messages(t)) != 1 || f.acks(t) != nil {
+		t.Errorf("messages = %q, acks = %q", f.messages(t), f.acks(t))
 	}
 }
 

@@ -23,6 +23,7 @@
       }
     },
     "undo_seconds": 10,
+    "public_origin": "https://trains.example.com",
     "projects": [
       {
         "key": "0123456789abcdef0123456789abcdef",

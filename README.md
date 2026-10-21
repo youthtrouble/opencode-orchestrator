@@ -377,7 +377,10 @@ its state and a short reason; the door, run kind, slice, `now` line and progress
 newest 20 open questions to you (body and recommended answer); the last 10 mailbox messages as id, time, kind, sender
 and subject (never bodies); with `ci` on, the latest GitHub Actions run of up to 5 workflows (repository
 `owner/name`, workflow, status, link). Plus this Mac's random machine id, the cached budget postures and the `orch` version. Every free-text field
-is scrubbed of credentials, absolute paths, your home directory, emails and tokens, then cut to the schema's limits.
+is scrubbed of credentials, absolute paths, your home directory, emails and tokens, then cut to the schema's limits;
+an API route such as `/v1/installations/me` or `/api/v1/summary` is not a path and stays readable. Accept on the
+page sends only "accept" for that question: the Mac replies with the recommendation as your mailbox holds it, never
+the scrubbed copy the page shows.
 **Never sent:** paths, `STATE.md`, plans, briefs, prompts, file contents, environment, run records, transcripts or
 secrets. Audit it any time with `orch remote push --dry-run`: it prints the exact request body and sends nothing.
 
@@ -437,7 +440,13 @@ Keychain items, the last push, pull and error, and the projects found. The sync 
 - *The page shows 403, or keeps returning to the Access login.* The email you sign in with must be in the Access
   policy and in the `OWNER_EMAIL` secret (a comma-separated list when you sign in with more than one address), and
   `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and `PUBLIC_ORIGIN` must match the application exactly. A 503 means a Worker
-  secret is missing.
+  secret is missing. The page names the cause from the 403's `reason` code: "Signed in as an address that isn't an
+  owner" (`OWNER_EMAIL`), "Access sign-in doesn't match ACCESS_AUD or ACCESS_TEAM_DOMAIN", "This address can't send
+  answers" (a page open on an address other than `PUBLIC_ORIGIN`; the banner links to it). Only a lapsed sign-in
+  says "Signed out. Reload to sign in".
+- *Accept shows "orch on the Mac is too old to accept a recommendation".* The Worker is newer than `orch` on the Mac,
+  which would have replied with the page's scrubbed copy; the Worker refused the accept instead. Update `orch`,
+  restart the LaunchAgent, and answer that question on the Mac (`orch mailbox reply`).
 - *The page says "Access token from another team domain" (`wrong_issuer`).* The Access application in front of the
   hostname belongs to another Zero Trust team than `ACCESS_TEAM_DOMAIN`; the message names the team the Worker
   expects. See [Moving to another hostname](remote/README.md#moving-to-another-hostname) in remote/README.md.

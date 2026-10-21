@@ -10,7 +10,9 @@ import { keys, machineToken, ORIGIN, signingKeys, TEAM, testEnv, tokensAt } from
 
 const NOW = new Date("2026-10-20T12:00:00Z");
 const NOW_SECONDS = NOW.getTime() / 1000;
-const FORBIDDEN = { error: "forbidden", message: "forbidden" };
+const validate = compileSchema(
+  JSON.parse(readFileSync(new URL("../../protocol/v1/schema.json", import.meta.url), "utf8")),
+);
 
 const ok = (name: string) => async () => jsonResponse(200, { route: name });
 const testRoutes: Route[] = [
@@ -33,13 +35,15 @@ interface Call {
   headers?: Record<string, string>;
   body?: BodyInit;
   envOverrides?: Record<string, string | undefined>;
+  /** The origin the request is addressed to; PUBLIC_ORIGIN unless a test says otherwise. */
+  origin?: string;
 }
 
-async function call(path: string, { method = "GET", jwt, headers = {}, body, envOverrides }: Call = {}) {
+async function call(path: string, { method = "GET", jwt, headers = {}, body, envOverrides, origin = ORIGIN }: Call = {}) {
   const allHeaders: Record<string, string> = { ...headers };
   if (jwt !== undefined) allHeaders["Cf-Access-Jwt-Assertion"] = jwt;
   const init = { method, headers: allHeaders, body, duplex: "half" } as RequestInit;
-  const response = await worker.fetch!(new Request(`${ORIGIN}${path}`, init) as never, testEnv(envOverrides), {} as never);
+  const response = await worker.fetch!(new Request(`${origin}${path}`, init) as never, testEnv(envOverrides), {} as never);
   return { status: response.status, body: await response.text(), headers: response.headers };
 }
 
@@ -53,9 +57,12 @@ const machineCall = async (jwt: string, authorization?: string) =>
 const browserWrite = async (headers: Record<string, string>, body: BodyInit = "{}") =>
   call("/api/v1/echo", { method: "POST", jwt: await browserJwt(), headers, body });
 
-function assertForbidden(result: { status: number; body: string }) {
+/** A 403 whose body names the check that failed by its code, and nothing else. */
+function assertForbidden(result: { status: number; body: string }, reason: string) {
   assert.equal(result.status, 403);
-  assert.deepEqual(JSON.parse(result.body), FORBIDDEN);
+  const body = JSON.parse(result.body);
+  assert.deepEqual(body, { error: "forbidden", message: "forbidden", reason });
+  assert.deepEqual(validate("Error", body), { ok: true });
 }
 
 test("a valid owner JWT reaches a browser route", async () => {
@@ -78,7 +85,10 @@ test("every email OWNER_EMAIL lists is an owner, normalised; another email on th
   }
   const logged: string[] = [];
   t.mock.method(console, "log", (line: string) => logged.push(line));
-  assertForbidden(await call("/api/v1/ping", { jwt: await browserJwt({ email: "other@example.com" }), envOverrides }));
+  assertForbidden(
+    await call("/api/v1/ping", { jwt: await browserJwt({ email: "other@example.com" }), envOverrides }),
+    "browser_email_mismatch",
+  );
   assert.deepEqual(logged.map((line) => JSON.parse(line).auth), ["browser_email_mismatch"]);
 });
 
@@ -93,7 +103,34 @@ test("a browser GET of a page goes to static assets after auth", async (t) => {
   assert.equal(result.status, 200);
   assert.equal(result.body, "asset");
   t.mock.method(console, "log", () => {});
-  assertForbidden(await call("/"));
+  assertForbidden(await call("/"), "jwt_missing");
+});
+
+const OLD_HOST = "https://work-trains.example.workers.dev";
+
+test("a page or asset GET on another hostname redirects to the same path on PUBLIC_ORIGIN, after auth", async (t) => {
+  for (const path of ["/", "/app.js", "/?project=a&x=1"]) {
+    const result = await call(path, { jwt: await browserJwt(), origin: OLD_HOST });
+    assert.equal(result.status, 302, path);
+    assert.equal(result.headers.get("Location"), `${ORIGIN}${path}`);
+    assert.equal(result.headers.get("Cache-Control"), "no-store");
+  }
+  const head = await call("/", { method: "HEAD", jwt: await browserJwt(), origin: OLD_HOST });
+  assert.equal(head.status, 302);
+  t.mock.method(console, "log", () => {});
+  assertForbidden(await call("/", { origin: OLD_HOST }), "jwt_missing");
+});
+
+test("API routes answer on every hostname, so an old tab and the Mac keep working", async () => {
+  const browserRoute = await call("/api/v1/ping", { jwt: await browserJwt(), origin: OLD_HOST });
+  assert.equal(browserRoute.status, 200);
+  const machineRoute = await call("/api/v1/machine/ping", {
+    method: "POST",
+    jwt: await serviceJwt(),
+    headers: { Authorization: bearer },
+    origin: OLD_HOST,
+  });
+  assert.equal(machineRoute.status, 200);
 });
 
 const CLAIMS_FAILED = "jwt_invalid:ERR_JWT_CLAIM_VALIDATION_FAILED";
@@ -108,8 +145,8 @@ async function hs256WithPublicKeyAsSecret() {
   return accessJwt({ alg: "HS256", key: spki, payload: ownerClaims });
 }
 
-// Each case must get the same 403 body, so a caller cannot learn which check failed.
-// The logged reason proves each case fails for the cause it names.
+// Each case's 403 body and log line name the check that failed by the same code, which proves the case
+// fails for the cause it names; the page turns the code into what to do about it.
 const forbiddenCases: Array<[string, string, () => Promise<{ status: number; body: string }>]> = [
   ["no JWT header", "jwt_missing", () => ping()],
   ["a garbage JWT", "jwt_invalid:ERR_JWS_INVALID", () => ping("not.a.jwt")],
@@ -147,14 +184,11 @@ for (const [name, reason, run] of forbiddenCases) {
   test(`403 forbidden: ${name}`, async (t) => {
     const logged: string[] = [];
     t.mock.method(console, "log", (line: string) => logged.push(line));
-    assertForbidden(await run());
+    assertForbidden(await run(), reason);
     assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [reason]);
   });
 }
 
-const validate = compileSchema(
-  JSON.parse(readFileSync(new URL("../../protocol/v1/schema.json", import.meta.url), "utf8")),
-);
 const ANOTHER_TEAM = "https://other-example.cloudflareaccess.com";
 
 // Access of another team signs with that team's keys, which this Worker does not know: the realistic
@@ -208,7 +242,7 @@ test("a correctly signed JWT without exp is refused before any handler or asset"
   ];
   for (const request of requests) {
     const response = await spyWorker.fetch!(request as never, env, {} as never);
-    assertForbidden({ status: response.status, body: await response.text() });
+    assertForbidden({ status: response.status, body: await response.text() }, CLAIMS_FAILED);
   }
   assert.deepEqual(reached, []);
   assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [CLAIMS_FAILED, CLAIMS_FAILED, CLAIMS_FAILED]);
@@ -234,7 +268,7 @@ test("auth failure logs carry a reason code and the path, never the JWT or beare
 
 test("an unknown path is 403 without a JWT and 404 with one", async (t) => {
   t.mock.method(console, "log", () => {});
-  assertForbidden(await call("/api/v1/nope"));
+  assertForbidden(await call("/api/v1/nope"), "jwt_missing");
   const result = await call("/api/v1/nope", { jwt: await browserJwt() });
   assert.equal(result.status, 404);
   assert.deepEqual(JSON.parse(result.body), { error: "not_found", message: "not found" });

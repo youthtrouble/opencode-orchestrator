@@ -1,0 +1,8 @@
+{
+  "def": "Error",
+  "value": {
+    "error": "forbidden",
+    "message": "forbidden",
+    "reason": "jwt_invalid:ERR_JWT_EXPIRED"
+  }
+}

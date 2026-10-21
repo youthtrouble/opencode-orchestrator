@@ -167,8 +167,11 @@ resume, hide) from any other origin is refused, and notification emails link to 
    orch remote status                                             # a new last push, last error: none
    ```
 
-6. **Phone**: open the new address and add it to the home screen again. A page still open on the old address can
-   read but not write; reload it from the new one.
+6. **Phone**: open the new address and add it to the home screen again. The old address now sends the page and its
+   files to the same path on `PUBLIC_ORIGIN` (a 302, after Access, so keep the old hostname behind the same Access
+   application until you retire it). A page still open there can read but not write: its banner links to the new
+   address. The API (the Mac's machine routes included) still answers on the old hostname until you set
+   `"workers_dev": false`.
 
 **Sign-in works at Access but the page says "Access token from another team domain".** The Access application in
 front of the hostname belongs to another Zero Trust team than the Worker's `ACCESS_TEAM_DOMAIN`, for example one
@@ -181,7 +184,8 @@ service token of that same team for the Mac). Then `wrangler deploy` is not need
 In the Worker's logs these refusals are lines with `"auth":"jwt_wrong_issuer"`. They mean this misconfiguration,
 not an attack: Access in front of the hostname issues the token, so a token from another team means that team's
 application protects the hostname. Only an `iss` shaped like a team domain gets `wrong_issuer`; any other bad
-token is still refused with the opaque `forbidden`.
+token is refused with `forbidden`, whose `reason` is the code of the failed check (`jwt_invalid:<jose code>`,
+`browser_email_mismatch`, `browser_write_foreign_origin`, ...), never an email or a token.
 
 ## Reference
 

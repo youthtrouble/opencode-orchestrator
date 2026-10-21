@@ -13,8 +13,9 @@ export class HttpError extends Error {
 }
 
 /**
- * Every authentication or authorisation failure. The response never says which check failed;
- * `reason` is a code for the Worker's own log only.
+ * Every authentication or authorisation failure. The body carries `reason`, the code of the check that
+ * failed (such as `browser_write_foreign_origin`), so the page can say what to do about it. A reason is
+ * a fixed code, never an email, a token or anything else from the request.
  */
 export class ForbiddenError extends HttpError {
   readonly reason: string;
@@ -90,6 +91,9 @@ export function toResponse(error: unknown, path: string): Response {
     console.log(JSON.stringify({ auth: "jwt_wrong_issuer", path }));
     const body = { error: error.code, message: error.message, expected_issuer: error.expectedIssuer };
     return jsonResponse(error.status, body);
+  }
+  if (error instanceof ForbiddenError) {
+    return jsonResponse(error.status, { error: error.code, message: error.message, reason: error.reason });
   }
   if (error instanceof UnsupportedVersionError) {
     return jsonResponse(error.status, { error: error.code, message: error.message, supported: error.supported });

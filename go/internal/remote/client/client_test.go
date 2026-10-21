@@ -87,7 +87,7 @@ func noSecrets(t *testing.T, err error) {
 	}
 }
 
-func TestEveryRequestCarriesTheCredentialsAndPushAnIdempotencyKey(t *testing.T) {
+func TestEveryRequestCarriesTheCredentialsPushAnIdempotencyKeyAndPullTheAcceptHeader(t *testing.T) {
 	responses := map[string]json.RawMessage{
 		"/api/v1/machine/push": example(t, "push-response.json"),
 		"/api/v1/machine/pull": example(t, "pull-response.json"),
@@ -132,6 +132,11 @@ func TestEveryRequestCarriesTheCredentialsAndPushAnIdempotencyKey(t *testing.T) 
 	}
 	if rec.headers[1].Get("Idempotency-Key") != "" || rec.headers[2].Get("Idempotency-Key") != "" {
 		t.Error("only push carries an Idempotency-Key")
+	}
+	for i, want := range []string{"", "mailbox", ""} {
+		if got := rec.headers[i].Get("X-Work-Trains-Accept"); got != want {
+			t.Errorf("request %d: X-Work-Trains-Accept = %q, want %q (pull only)", i, got, want)
+		}
 	}
 	var sent wire.PushRequest
 	if err := wire.Decode(strings.NewReader(string(rec.bodies[0])), &sent); err != nil || sent.Machine.ID != machineID {

@@ -1,0 +1,9 @@
+{
+  "def": "Error",
+  "value": {
+    "error": "forbidden",
+    "message": "forbidden",
+    "reason": "browser_email_mismatch: someone@example.com"
+  },
+  "expect_path": "/reason"
+}

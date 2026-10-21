@@ -143,24 +143,35 @@ test("CI lines name the run and its outcome", () => {
   assert.equal(model.ciLine({ ...run, workflow: "" }), "example/app: failure");
 });
 
-test("failures carry the server's message, and a 403 or a login redirect suggests signing in", () => {
-  const forbidden = { error: "forbidden", message: "forbidden" };
-  assert.equal(
-    model.failureMessage({ status: 403, opaqueRedirect: false, error: forbidden }),
-    "forbidden. Signed out? Reload to sign in",
-  );
-  assert.equal(
-    model.failureMessage({ status: 0, opaqueRedirect: true, error: null }),
-    "Redirected to sign-in. Signed out? Reload to sign in",
-  );
-  assert.equal(model.failureMessage({ status: 0, opaqueRedirect: false, error: null }), "Cannot reach the server");
-  assert.equal(model.failureMessage({ status: 502, opaqueRedirect: false, error: null }), "Request failed (502)");
-  assert.equal(
-    model.failureMessage({ status: 404, opaqueRedirect: false, error: { error: "not_found", message: "" } }),
-    "Request failed (404)",
-  );
+test("failures carry the server's message; only a login redirect, a 401 or an expired token asks for a sign-in", () => {
+  const failure = (status: number, error: object | null, opaqueRedirect = false) =>
+    model.failureMessage({ status, opaqueRedirect, error });
+  const forbidden = (reason?: string) => failure(403, { error: "forbidden", message: "forbidden", reason });
+  assert.equal(failure(0, null, true), "Signed out. Reload to sign in");
+  assert.equal(failure(401, null), "Signed out. Reload to sign in");
+  assert.equal(forbidden("jwt_invalid:ERR_JWT_EXPIRED"), "Signed out. Reload to sign in");
+  assert.equal(failure(0, null), "Cannot reach the server");
+  assert.equal(failure(502, null), "Request failed (502)");
+  assert.equal(failure(404, { error: "not_found", message: "" }), "Request failed (404)");
   assert.equal(model.undoFailureMessage(409, { error: "too_late", message: "too late" }), "Already sent");
   assert.equal(model.undoFailureMessage(409, { error: "conflict", message: "busy" }), "busy");
+});
+
+test("a 403 says what is wrong by its reason code, never asking for a sign-in that cannot help", () => {
+  const forbidden = (reason?: string) =>
+    model.failureMessage({ status: 403, opaqueRedirect: false, error: { error: "forbidden", message: "forbidden", reason } });
+  assert.equal(forbidden("browser_write_foreign_origin"), "This address can't send answers. Open the address in the banner");
+  assert.equal(forbidden("browser_email_mismatch"), "Signed in as an address that isn't an owner");
+  assert.equal(forbidden("jwt_missing"), "This address is not behind Cloudflare Access");
+  assert.equal(
+    forbidden("jwt_invalid:ERR_JWT_CLAIM_VALIDATION_FAILED"),
+    "Access sign-in doesn't match ACCESS_AUD or ACCESS_TEAM_DOMAIN",
+  );
+  assert.equal(forbidden("machine_has_email"), "Not allowed (machine_has_email)");
+  assert.equal(forbidden("constructor"), "Not allowed (constructor)");
+  for (const reason of ["browser_write_foreign_origin", "browser_email_mismatch", "jwt_missing", "constructor"]) {
+    assert.doesNotMatch(forbidden(reason), /sign in/i, reason);
+  }
 });
 
 // ---- writes and summaries -----------------------------------------------------------------------

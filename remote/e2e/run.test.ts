@@ -20,7 +20,7 @@ import {
   TEAM_DOMAIN,
 } from "./access-emulator.ts";
 import { buildOrch, OrchSandbox, type Credentials } from "./orch.ts";
-import { OLD_PAGE_ORIGIN, PAGE_ORIGIN, Phone, type Json } from "./phone.ts";
+import { getOnHost, OLD_PAGE_ORIGIN, PAGE_ORIGIN, Phone, type Json } from "./phone.ts";
 import { delay, freePort, startWorkerDev, type WorkerDev } from "./worker-dev.ts";
 
 /** A little over the e2e Worker's 1 s undo window (wrangler.e2e.jsonc). */
@@ -36,7 +36,13 @@ const OUTAGE_QUESTION = "Ship the beta on Friday?";
 const LOST_ACK_QUESTION = "Keep the old endpoint?";
 /** An Access team other than the run's, as when the hostname's Access app lives in another account. */
 const ANOTHER_TEAM_DOMAIN = "https://other-example.cloudflareaccess.com";
-const FORBIDDEN = { error: "forbidden", message: "forbidden" };
+const forbidden = (reason: string) => ({ error: "forbidden", message: "forbidden", reason });
+/**
+ * The database question's recommendation names an API route, which the page shows, and a filesystem path,
+ * which the snapshot redacts before it leaves the Mac. Accepting it must still deliver this text.
+ */
+const DATABASE_RECOMMENDATION = "Use Postgres behind GET /v1/installations/me; keep the dumps in /srv/owner-backups/db";
+const DATABASE_RECOMMENDATION_ON_PAGE = "Use Postgres behind GET /v1/installations/me; keep the dumps in <path>";
 
 interface OnceResult {
   code: number;
@@ -176,7 +182,26 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal((await coOwnerPhone.loadSummary()).status, 200, "the owner's second email");
     const outsider = await new Phone(emulator.url, { cookie: OUTSIDER_COOKIE }).loadSummary();
     assert.equal(outsider.status, 403, "an email on the owner's domain that the Worker does not list");
-    assert.deepEqual(outsider.body, FORBIDDEN);
+    assert.deepEqual(outsider.body, forbidden("browser_email_mismatch"));
+  });
+
+  it("the page on an old hostname redirects to PUBLIC_ORIGIN; the API still answers there", async () => {
+    const oldHost = new URL(OLD_PAGE_ORIGIN).host;
+    for (const path of ["/", "/app.js?v=1"]) {
+      const moved = await phone.openPage(path, oldHost);
+      assert.equal(moved.status, 302, path);
+      assert.equal(moved.location, `${PAGE_ORIGIN}${path}`);
+    }
+    const home = await phone.openPage("/", new URL(PAGE_ORIGIN).host);
+    assert.equal(home.status, 200, "the page is served on PUBLIC_ORIGIN");
+    assert.equal(home.location, undefined);
+
+    const pull = await getOnHost(emulator.url, oldHost, "/api/v1/machine/pull", {
+      "CF-Access-Client-Id": credentials.accessClientId,
+      "CF-Access-Client-Secret": credentials.accessClientSecret,
+      Authorization: `Bearer ${credentials.machineToken}`,
+    });
+    assert.equal(pull.status, 200, "the Mac's pull on the old hostname");
   });
 
   it("pushes the machine's first project on its first cycle", async () => {
@@ -205,9 +230,9 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal((await phone.project("alpha")).state, state, "the Worker still shows the state pushed before");
   });
 
-  it("A2: accepting the recommendation answers the question once, after the undo window", async () => {
+  it("A2: accepting the recommendation answers the question once, after the undo window, with the original text", async () => {
     beta = orch.createProject("beta");
-    await ask(beta, DATABASE_QUESTION, { recommended: "Use Postgres", blocking: true });
+    await ask(beta, DATABASE_QUESTION, { recommended: DATABASE_RECOMMENDATION, blocking: true });
     // Only the first blocks: the notification check expects exactly one.
     await ask(beta, NAMING_QUESTION, { recommended: "Call it Hopper", blocking: false });
     await ask(beta, OUTAGE_QUESTION, { recommended: "Yes", blocking: false });
@@ -216,11 +241,11 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal(pushed.report.pushed, 1, "beta, new since the last push");
 
     const question = await phone.question("beta", DATABASE_QUESTION);
-    assert.equal(question.recommended, "Use Postgres");
+    assert.equal(question.recommended, DATABASE_RECOMMENDATION_ON_PAGE, "the page shows the route, not the path");
     assert.equal(question.blocking, true);
     const fromOldHostname = await new Phone(emulator.url, { origin: OLD_PAGE_ORIGIN }).accept(question.id);
     assert.equal(fromOldHostname.status, 403, "after the move, a page on the old hostname cannot write");
-    assert.deepEqual(fromOldHostname.body, FORBIDDEN);
+    assert.deepEqual(fromOldHostname.body, forbidden("browser_write_foreign_origin"));
     const tappedAt = Date.now();
     const tapKey = randomUUID();
     const tap = await phone.accept(question.id, tapKey);
@@ -243,7 +268,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     const replies = await repliesTo(beta, question.id);
     assert.equal(replies.length, 1);
     assert.equal(replies[0].via, "remote");
-    assert.equal(replies[0].body, "Use Postgres");
+    assert.equal(replies[0].body, DATABASE_RECOMMENDATION, "the mailbox gets the recommendation as written");
     const asked = (await messages(beta)).find((message) => message.id === question.id);
     assert.ok(asked.acked_by.includes("human"), "the question is acked by the human");
     assert.equal((await phone.question("beta", DATABASE_QUESTION)).answer.status, "applied");

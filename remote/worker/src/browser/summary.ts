@@ -75,7 +75,7 @@ interface MachineRow {
   budget_json: string | null;
 }
 
-export async function summaryHandler({ db, env, now }: HandlerContext): Promise<Response> {
+export async function summaryHandler({ db, env, cfg, now }: HandlerContext): Promise<Response> {
   const [projects, questions, answers, actions, machines] = await db.batch([
     db.prepare(PROJECTS),
     db.prepare(OPEN_QUESTIONS),
@@ -107,6 +107,7 @@ export async function summaryHandler({ db, env, now }: HandlerContext): Promise<
     },
     budget: machine?.budget_json ? JSON.parse(machine.budget_json) : null,
     undo_seconds: undoSeconds(env),
+    public_origin: cfg.publicOrigin,
     projects: (projects.results as ProjectRow[]).map(projectView),
   });
 }

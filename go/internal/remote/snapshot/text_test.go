@@ -161,6 +161,30 @@ func TestScrubOutboundRemovesWholePathsWithSpacesSingleComponentsAndWindowsForms
 	}
 }
 
+// An API route names an endpoint, not a file, so the owner can read it on the page; a filesystem
+// path or a home directory beside it still goes.
+func TestScrubOutboundKeepsAPIRoutesButNotFilesystemPaths(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"a new GET /v1/installations/me endpoint", "a new GET /v1/installations/me endpoint"},
+		{"Accept all five defaults: GET /v1/installations/me; keep /api/v1/summary", "Accept all five defaults: GET /v1/installations/me; keep /api/v1/summary"},
+		{"call `/v2/users/me/` or \"/api/v1/machine/pull\"", "call `/v2/users/me/` or \"/api/v1/machine/pull\""},
+		{"GET /v1/users/{id} returns", "GET /v1/users/{id} returns"},
+		{"GET /v1/installations/me, then read /Users/x/notes/plan.md", "GET /v1/installations/me, then read <path>"},
+		{"GET /v1/me then ~/notes/plan.md", "GET /v1/me then <path>"},
+		{"see /Users/x/v1/api/notes", "see <path>"},
+		{"see /v1/../Users/x/notes", "see <path>"},
+		{"see /v1/.ssh/id_ed25519", "see <path>"},
+		{"open file:///v1/a", "open <path>"},
+		{"see `/Users/x/a`", "see `<path>`"},
+		{"see /version/a", "see <path>"},
+	}
+	for _, c := range cases {
+		if got := scrubOutbound(c.in); got != c.want {
+			t.Errorf("scrubOutbound(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 // An unquoted final component may hold a space, so the rest of the clause goes with the path,
 // whatever its case or prefix.
 func TestScrubOutboundRemovesTheClauseAfterAnUnquotedPath(t *testing.T) {
