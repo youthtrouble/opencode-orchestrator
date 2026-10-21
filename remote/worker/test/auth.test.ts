@@ -118,6 +118,9 @@ const forbiddenCases: Array<[string, string, () => Promise<{ status: number; bod
   ["an unknown kid", "jwt_invalid:ERR_JWKS_NO_MATCHING_KEY", async () =>
     ping(await accessJwt({ kid: "key-2", payload: ownerClaims }))],
   ["a wrong issuer", CLAIMS_FAILED, async () => ping(await browserJwt({ iss: "https://<team>.cloudflareaccess.com" }))],
+  // Only an issuer shaped like a team domain is diagnosed as wrong_issuer; any other stays opaque.
+  ["an issuer that is not a team domain", CLAIMS_FAILED, async () =>
+    ping(await browserJwt({ iss: "https://example.com" }))],
   ["a wrong audience", CLAIMS_FAILED, async () => ping(await browserJwt({ aud: ["other-audience"] }))],
   ["an expired JWT", "jwt_invalid:ERR_JWT_EXPIRED", async () => ping(await browserJwt({ exp: NOW_SECONDS - 60 }))],
   ["nbf in the future", CLAIMS_FAILED, async () => ping(await browserJwt({ nbf: NOW_SECONDS + 120 }))],

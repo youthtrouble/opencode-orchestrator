@@ -307,8 +307,9 @@ var workerErrorCodes = []string{
 // chose it, and it could be anything, an echoed secret included.
 const UnknownErrorCode = "unknown"
 
-// accessTeamDomain is the shape of an Error body's expected_issuer (its schema pattern). A value
-// of any other shape is dropped, so the field cannot carry text a response echoed.
+// accessTeamDomain is the shape of an Error body's expected_issuer (its pattern in
+// remote/protocol/v1/schema.json; a test keeps the two in step). A value of any other shape is
+// dropped, so the field cannot carry text a response echoed.
 var accessTeamDomain = regexp.MustCompile(`^https://[a-z0-9-]+\.cloudflareaccess\.com$`)
 
 // workerErrorOf is the error code of an Error body: one the protocol defines, else

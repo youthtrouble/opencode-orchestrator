@@ -347,25 +347,40 @@ func TestACancelledContextIsANetworkError(t *testing.T) {
 }
 
 func TestTheWorkerErrorCodesAreTheSchemasEnum(t *testing.T) {
+	enum := readErrorSchema(t).Properties.Error.Enum
+	if len(enum) == 0 || !slices.Equal(enum, workerErrorCodes) {
+		t.Errorf("workerErrorCodes = %q, schema enum = %q", workerErrorCodes, enum)
+	}
+}
+
+func TestTheAccessTeamDomainShapeIsTheSchemasExpectedIssuerPattern(t *testing.T) {
+	pattern := readErrorSchema(t).Properties.ExpectedIssuer.Pattern
+	if pattern == "" || pattern != accessTeamDomain.String() {
+		t.Errorf("accessTeamDomain = %q, schema expected_issuer.pattern = %q", accessTeamDomain, pattern)
+	}
+}
+
+// errorSchema is the part of the protocol's $defs.Error that the client mirrors.
+type errorSchema struct {
+	Properties struct {
+		Error          struct{ Enum []string }
+		ExpectedIssuer struct{ Pattern string } `json:"expected_issuer"`
+	}
+}
+
+func readErrorSchema(t *testing.T) errorSchema {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "remote", "protocol", "v1", "schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var schema struct {
-		Defs struct {
-			Error struct {
-				Properties struct {
-					Error struct{ Enum []string }
-				}
-			}
-		} `json:"$defs"`
+		Defs struct{ Error errorSchema } `json:"$defs"`
 	}
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
 	}
-	if enum := schema.Defs.Error.Properties.Error.Enum; len(enum) == 0 || !slices.Equal(enum, workerErrorCodes) {
-		t.Errorf("workerErrorCodes = %q, schema enum = %q", workerErrorCodes, enum)
-	}
+	return schema.Defs.Error
 }
 
 // echoedSecret is what a response echoing the request's Access client secret repeats.

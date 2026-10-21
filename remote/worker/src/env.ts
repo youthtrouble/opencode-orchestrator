@@ -59,7 +59,11 @@ export function readConfig(env: WorkerEnv): Config {
   };
 }
 
-/** An Access team domain as Access writes it in a JWT's `iss`: `https://<team>.cloudflareaccess.com`. */
+/**
+ * An Access team domain as Access writes it in a JWT's `iss`: `https://<team>.cloudflareaccess.com`.
+ * The same pattern is the protocol's Error.expected_issuer pattern (remote/protocol/v1/schema.json)
+ * and the Go client's accessTeamDomain; a Go test ties the client to the schema.
+ */
 export function isAccessTeamDomain(value: string): boolean {
   return /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(value);
 }

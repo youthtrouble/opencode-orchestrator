@@ -178,6 +178,10 @@ created under another Cloudflare account. The Worker answers 403 `wrong_issuer` 
 Fix it on one side: protect the hostname with the application of the team the Worker expects, or set
 `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` to the team and AUD tag of the application that does protect it (and use a
 service token of that same team for the Mac). Then `wrangler deploy` is not needed: secrets apply at once.
+In the Worker's logs these refusals are lines with `"auth":"jwt_wrong_issuer"`. They mean this misconfiguration,
+not an attack: Access in front of the hostname issues the token, so a token from another team means that team's
+application protects the hostname. Only an `iss` shaped like a team domain gets `wrong_issuer`; any other bad
+token is still refused with the opaque `forbidden`.
 
 ## Reference
 
