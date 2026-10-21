@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -115,6 +116,64 @@ func TestRemoteOnceExits1AndRecordsTheErrorWhenTheWorkerIsUnreachable(t *testing
 	}
 	if st, err := state.Load(state.File(home)); err != nil || st.LastError == nil || st.LastError.Kind != "network" {
 		t.Errorf("state last_error = %+v, %v", st.LastError, err)
+	}
+}
+
+// A Worker, or something in front of it, may echo what it was sent. once must print and store
+// only fixed words for each such response: the echoed Access client secret below is not
+// token-shaped, so no redactor would catch it.
+func TestRemoteOnceNeverPrintsOrStoresResponseText(t *testing.T) {
+	const secret = "fake-client-secret-91bc" // what onceSetup puts in the Keychain
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		kind    string
+	}{{
+		name: "an error code that is not the protocol's",
+		handler: func(rw http.ResponseWriter, r *http.Request) {
+			rw.Header().Set("Content-Type", "application/json")
+			rw.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(rw).Encode(map[string]string{"error": r.Header.Get("CF-Access-Client-Secret"), "message": ""})
+		},
+		kind: "http_status",
+	}, {
+		name: "an unknown field named after the secret",
+		handler: func(rw http.ResponseWriter, r *http.Request) {
+			rw.Header().Set("Content-Type", "application/json")
+			io.WriteString(rw, `{"v":1,"server_time":"2026-10-21T09:00:00.000Z","poll_after_seconds":30,"answers":[],"actions":[],"`+r.Header.Get("CF-Access-Client-Secret")+`":1}`)
+		},
+		kind: "protocol",
+	}, {
+		name: "a malformed redirect location with user info",
+		handler: func(rw http.ResponseWriter, r *http.Request) {
+			rw.Header().Set("Location", "https://user:"+r.Header.Get("CF-Access-Client-Secret")+"@example.com/%zz")
+			rw.WriteHeader(http.StatusFound)
+		},
+		kind: "access_denied",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(tc.handler)
+			defer server.Close()
+			home := onceSetup(t, server.URL)
+
+			code, stdout, stderr := run(t, Remote, []string{"once", "--json"}, "")
+			var summary struct{ Error *string }
+			if code != 1 || json.Unmarshal([]byte(stdout), &summary) != nil || summary.Error == nil {
+				t.Fatalf("once: code %d, stdout %q, stderr %q", code, stdout, stderr)
+			}
+			stateData, err := os.ReadFile(state.File(home))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for sink, text := range map[string]string{"stdout": stdout, "stderr": stderr, "state.json": string(stateData)} {
+				if strings.Contains(text, secret) {
+					t.Errorf("%s holds the echoed secret: %s", sink, text)
+				}
+			}
+			if st, err := state.Load(state.File(home)); err != nil || st.LastError == nil || st.LastError.Kind != tc.kind || st.LastError.Message != *summary.Error {
+				t.Errorf("last_error = %+v, %v; want kind %s and the printed error", st.LastError, err, tc.kind)
+			}
+		})
 	}
 }
 
@@ -237,8 +296,8 @@ func TestRemoteLaunchdPrintsThePlistAndTheInstallCommandsAndWritesNothing(t *tes
 		t.Errorf("plist values:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	plistFile := filepath.Join(home, "Library", "LaunchAgents", "org.opencode-orchestrator.work-trains.plist")
-	wantErr := "# Install: save the plist above as " + plistFile + ", then run\n" +
-		"#   launchctl bootstrap gui/$(id -u) " + plistFile + "\n" +
+	wantErr := "# Install: save the plist above as '" + plistFile + "', then run\n" +
+		"#   launchctl bootstrap gui/$(id -u) '" + plistFile + "'\n" +
 		"# Uninstall:\n" +
 		"#   launchctl bootout gui/$(id -u)/org.opencode-orchestrator.work-trains\n"
 	if stderr != wantErr {
@@ -251,6 +310,35 @@ func TestRemoteLaunchdPrintsThePlistAndTheInstallCommandsAndWritesNothing(t *tes
 	_, stdout, stderr = run(t, Remote, []string{"launchd", "--label", "com.example.trains"}, "")
 	if !strings.Contains(stdout, "<string>com.example.trains</string>") || !strings.Contains(stderr, "bootout gui/$(id -u)/com.example.trains\n") {
 		t.Errorf("--label: stdout %q, stderr %q", stdout, stderr)
+	}
+}
+
+func TestRemoteLaunchdQuotesThePlistPathForTheShell(t *testing.T) {
+	remoteSandbox(t)
+	home := filepath.Join(t.TempDir(), "Jo O'Brien's home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	code, _, stderr := run(t, Remote, []string{"launchd"}, "")
+	if code != 0 {
+		t.Fatalf("launchd: code %d, stderr %q", code, stderr)
+	}
+	const prefix = "#   launchctl bootstrap gui/$(id -u) "
+	var quoted string
+	for _, line := range strings.Split(stderr, "\n") {
+		if rest, found := strings.CutPrefix(line, prefix); found {
+			quoted = rest
+		}
+	}
+	plistFile := filepath.Join(home, "Library", "LaunchAgents", "org.opencode-orchestrator.work-trains.plist")
+	if want := `'` + strings.ReplaceAll(plistFile, `'`, `'\''`) + `'`; quoted != want {
+		t.Fatalf("bootstrap path = %q, want %q", quoted, want)
+	}
+	// The shell must read the quoted path back as one word, exactly the plist's path.
+	words, err := exec.Command("/bin/sh", "-c", `printf '%s\n' `+quoted).Output()
+	if err != nil || string(words) != plistFile+"\n" {
+		t.Errorf("sh read %q, %v; want %q as one word", words, err, plistFile)
 	}
 }
 

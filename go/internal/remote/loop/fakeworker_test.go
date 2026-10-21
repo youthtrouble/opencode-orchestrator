@@ -32,17 +32,17 @@ type fakeWorker struct {
 	server *httptest.Server
 	clock  *fakeClock
 
-	mu       sync.Mutex
-	answers  []wire.PulledAnswer
-	actions  []wire.PulledAction
-	hashes   map[string]string
-	pushes   []timedPush
-	acks     []wire.AckRequest // every ack received, dropped ones included
-	down     bool              // close every connection unanswered
-	dropAcks int               // read, then drop unanswered, this many acks
-	deferKey string            // defer this key once, for deferFor seconds
-	deferFor int
-	pullBody json.RawMessage // when set, the raw pull response
+	mu        sync.Mutex
+	answers   []wire.PulledAnswer
+	actions   []wire.PulledAction
+	hashes    map[string]string
+	pushes    []timedPush
+	acks      []wire.AckRequest // every ack received, dropped ones included
+	down      bool              // close every connection unanswered
+	dropAcks  int               // read, then drop unanswered, this many acks
+	deferKey  string            // defer this key once, for deferFor seconds
+	deferFor  int
+	pullReply http.HandlerFunc // when set, answers every pull in place of the queue
 }
 
 type timedPush struct {
@@ -77,7 +77,7 @@ func (w *fakeWorker) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method + " " + r.URL.Path {
 	case "GET /api/v1/machine/pull":
-		w.pull(rw)
+		w.pull(rw, r)
 	case "POST /api/v1/machine/ack":
 		w.ack(rw, body)
 	case "POST /api/v1/machine/push":
@@ -87,10 +87,9 @@ func (w *fakeWorker) serveHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (w *fakeWorker) pull(rw http.ResponseWriter) {
-	if w.pullBody != nil {
-		rw.Header().Set("Content-Type", "application/json")
-		rw.Write(w.pullBody)
+func (w *fakeWorker) pull(rw http.ResponseWriter, r *http.Request) {
+	if w.pullReply != nil {
+		w.pullReply(rw, r)
 		return
 	}
 	reply(rw, http.StatusOK, wire.PullResponse{

@@ -2,23 +2,30 @@
 // push, pull and ack (plan D6, D10). It never follows a redirect: behind Cloudflare Access a
 // redirect is the login page, which means the service token was refused.
 //
-// No error, log line or panic from this package carries a header value or a request body: the
-// errors hold the route, status codes and the Worker's error code, never what was sent.
+// No error, log line or panic from this package carries a header value, a request body or
+// text from a response: the errors hold the route, status codes, an error code the protocol
+// defines and fixed phrases. A response can echo what was sent (a proxy quoting a header, an
+// Access page quoting the token), and the parsers quote what they refuse, so their messages
+// are left out too.
 package client
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/keychain"
@@ -99,7 +106,8 @@ func (e *AccessDeniedError) Error() string {
 }
 
 // HTTPStatusError is a non-2xx response from the Worker. ErrorCode is the Error body's error
-// code, empty when the body was not one. The body's message is left out: it is free text.
+// code when the protocol defines it, UnknownErrorCode when the body names another, and empty
+// when the body has none. The body's message is left out: it is free text.
 type HTTPStatusError struct {
 	Route     string
 	Code      int
@@ -113,23 +121,26 @@ func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("%s: HTTP %d %s", e.Route, e.Code, e.ErrorCode)
 }
 
-// ProtocolError is a 2xx response whose body breaks the protocol schema.
+// ProtocolError is a 2xx response whose body breaks the protocol schema. Problem says how, in
+// fixed words (see schemaProblem).
 type ProtocolError struct {
-	Route string
-	Err   error
+	Route   string
+	Problem string
 }
 
-func (e *ProtocolError) Error() string { return fmt.Sprintf("%s: bad response: %v", e.Route, e.Err) }
-func (e *ProtocolError) Unwrap() error { return e.Err }
+func (e *ProtocolError) Error() string {
+	return fmt.Sprintf("%s: bad response: %s", e.Route, e.Problem)
+}
 
-// NetworkError is a request that got no response: refused, reset, timed out or cancelled.
+// NetworkError is a request that got no usable response: refused, reset, timed out, cancelled
+// or answered with something that is not HTTP. Problem says which, in fixed words (see
+// networkProblem).
 type NetworkError struct {
-	Route string
-	Err   error
+	Route   string
+	Problem string
 }
 
-func (e *NetworkError) Error() string { return fmt.Sprintf("%s: network: %v", e.Route, e.Err) }
-func (e *NetworkError) Unwrap() error { return e.Err }
+func (e *NetworkError) Error() string { return fmt.Sprintf("%s: network: %s", e.Route, e.Problem) }
 
 // Client talks to one Worker as one machine.
 type Client struct {
@@ -137,7 +148,7 @@ type Client struct {
 	credentials Credentials
 	machineID   string
 	userAgent   string
-	http        *http.Client
+	transport   http.RoundTripper
 }
 
 // New is a client for the Worker at baseURL, which must have passed config validation (https,
@@ -148,10 +159,7 @@ func New(baseURL string, credentials Credentials, machineID, orchVersion string)
 		credentials: credentials,
 		machineID:   machineID,
 		userAgent:   "orch/" + orchVersion,
-		http: &http.Client{
-			Timeout:       requestTimeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
+		transport:   http.DefaultTransport,
 	}
 }
 
@@ -182,15 +190,21 @@ func (c *Client) Ack(ctx context.Context, request wire.AckRequest) (wire.AckResp
 	return response, checkVersion(ackRoute, response.V)
 }
 
-// exchange sends body (none when nil) on r and decodes a 2xx answer into response.
+// exchange sends body (none when nil) on r and decodes a 2xx answer into response. It sends
+// through the transport rather than an http.Client: a Client parses a redirect's Location
+// before any CheckRedirect can refuse it, and quotes a malformed one, user info included, in
+// its error. The transport hands back every response as it came, so a redirect is never
+// followed or parsed, only reported.
 func (c *Client) exchange(ctx context.Context, r route, body, response any) error {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	request, err := c.newRequest(ctx, r, body)
 	if err != nil {
 		return err
 	}
-	reply, err := c.http.Do(request)
+	reply, err := c.transport.RoundTrip(request)
 	if err != nil {
-		return &NetworkError{Route: r.String(), Err: withoutURL(err)}
+		return &NetworkError{Route: r.String(), Problem: networkProblem(err)}
 	}
 	defer reply.Body.Close()
 	if reply.StatusCode >= 300 && reply.StatusCode < 400 {
@@ -198,7 +212,7 @@ func (c *Client) exchange(ctx context.Context, r route, body, response any) erro
 	}
 	data, err := io.ReadAll(io.LimitReader(reply.Body, maxResponseBytes+1))
 	if err != nil {
-		return &NetworkError{Route: r.String(), Err: withoutURL(err)}
+		return &NetworkError{Route: r.String(), Problem: networkProblem(err)}
 	}
 	return decodeReply(r, reply, data, response)
 }
@@ -232,7 +246,7 @@ func (c *Client) newRequest(ctx context.Context, r route, body any) (*http.Reque
 // response is JSON, so a 2xx or 4xx that is not came from Access (or a proxy in front of it).
 func decodeReply(r route, reply *http.Response, data []byte, response any) error {
 	if len(data) > maxResponseBytes {
-		return &ProtocolError{Route: r.String(), Err: fmt.Errorf("response exceeds %d bytes", maxResponseBytes)}
+		return &ProtocolError{Route: r.String(), Problem: fmt.Sprintf("response exceeds %d bytes", maxResponseBytes)}
 	}
 	success := reply.StatusCode >= 200 && reply.StatusCode < 300
 	if !isJSON(reply) || !json.Valid(data) {
@@ -245,7 +259,7 @@ func decodeReply(r route, reply *http.Response, data []byte, response any) error
 		return &HTTPStatusError{Route: r.String(), Code: reply.StatusCode, ErrorCode: errorCodeOf(data)}
 	}
 	if err := wire.Decode(bytes.NewReader(data), response); err != nil {
-		return &ProtocolError{Route: r.String(), Err: err}
+		return &ProtocolError{Route: r.String(), Problem: schemaProblem(err)}
 	}
 	return nil
 }
@@ -253,7 +267,7 @@ func decodeReply(r route, reply *http.Response, data []byte, response any) error
 // checkVersion refuses a response for another protocol version; Decode checks only its shape.
 func checkVersion(r route, version int) error {
 	if version != wire.ProtocolVersion {
-		return &ProtocolError{Route: r.String(), Err: fmt.Errorf("protocol version %d, want %d", version, wire.ProtocolVersion)}
+		return &ProtocolError{Route: r.String(), Problem: fmt.Sprintf("protocol version %d, want %d", version, wire.ProtocolVersion)}
 	}
 	return nil
 }
@@ -263,15 +277,74 @@ func isJSON(reply *http.Response) bool {
 	return err == nil && mediaType == "application/json"
 }
 
-// errorCodeOf is the error code of an Error body, empty when data is not one.
+// workerErrorCodes are the error codes of the protocol's Error body (the enum of
+// $defs.Error.error in remote/protocol/v1/schema.json; a test keeps the two in step).
+var workerErrorCodes = []string{
+	"forbidden", "not_found", "invalid_request", "unsupported_version", "conflict",
+	"too_late", "payload_too_large", "not_configured", "internal",
+}
+
+// UnknownErrorCode stands in for an error code the protocol does not define: the response
+// chose it, and it could be anything, an echoed secret included.
+const UnknownErrorCode = "unknown"
+
+// errorCodeOf is the error code of an Error body: one the protocol defines, else
+// UnknownErrorCode; empty when data has no error code.
 func errorCodeOf(data []byte) string {
 	var body struct {
-		Error string `json:"error"`
+		Error *string `json:"error"`
 	}
-	if json.Unmarshal(data, &body) != nil {
+	if json.Unmarshal(data, &body) != nil || body.Error == nil {
 		return ""
 	}
-	return body.Error
+	if slices.Contains(workerErrorCodes, *body.Error) {
+		return *body.Error
+	}
+	return UnknownErrorCode
+}
+
+// schemaProblem names, in fixed words, why wire.Decode refused a body that is valid JSON. Only
+// the error's type is read, since its text quotes the property name or value it refused. What
+// encoding/json leaves untyped there is a field the struct does not declare.
+func schemaProblem(err error) string {
+	var (
+		wrongType *json.UnmarshalTypeError
+		shape     *wire.ShapeError
+	)
+	switch {
+	case errors.As(err, &wrongType):
+		return "a field of the wrong type"
+	case errors.As(err, &shape):
+		return "a field missing, null or not in the schema"
+	}
+	return "a field not in the schema"
+}
+
+// networkProblem names, in fixed words, why a request got no usable response. Only the
+// error's type is read, since the transport's text can quote the response: a malformed status
+// line or header line comes back verbatim.
+func networkProblem(err error) string {
+	var (
+		timeout     interface{ Timeout() bool }
+		dns         *net.DNSError
+		op          *net.OpError
+		certificate *tls.CertificateVerificationError
+	)
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
+		return "timed out"
+	case errors.As(err, &dns):
+		return "the host name did not resolve"
+	case errors.As(err, &op) && op.Op == "dial":
+		return "could not connect"
+	case errors.As(err, &certificate):
+		return "the TLS certificate was not trusted"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, syscall.ECONNRESET):
+		return "the connection closed before the response ended"
+	}
+	return "no valid HTTP response"
 }
 
 // withoutURL drops the URL net/http puts in its errors: the route already names the request,

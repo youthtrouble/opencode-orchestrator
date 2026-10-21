@@ -63,7 +63,7 @@ with the Worker (`once`, `serve`), which launchd keeps running (`launchd`).
 | `orch remote push --dry-run [--json]` | Discovers the projects and prints, indented, the exact `PushRequest` a push would send (machine id, the release number from `VERSION` without the build's git revision, the cached budget and one snapshot per project), so the owner can audit what leaves the Mac. It sends nothing and writes nothing. Without `--json` two summary lines come first. A project whose state cannot be read, a root that cannot be scanned, or an unreadable usage registry is reported on stderr (`orch remote: skipped ...`) and left out; the exit is still 0. Needs the config and the machine id (`orch remote init`). Without `--dry-run` it is a usage error: `orch remote once` sends. |
 | `orch remote once [--json]` | Runs one cycle of the sync loop (below) and prints `pulled N, applied N, pushed N, deferred N`; `--json` prints `{pulled, applied, pushed, deferred, error}` (`error` null on success). Log lines go to stderr. Exits 0 when the cycle succeeded, 1 otherwise (the error, redacted as in `last_error`, is printed and stored as `last_error`). It holds `serve.lock` for its cycle, so it never overlaps a `serve` cycle (both could pull and apply the same answer): while `serve` runs it exits 1 with `orch remote serve is running; it syncs on its own (pid N)` and sends nothing. Needs the config, the machine id and the three Keychain items; a missing item is named with the command that sets it. |
 | `orch remote serve` | Runs the sync loop until SIGINT or SIGTERM, which cancel the HTTP call in flight, save the state and exit 0. Logs one line per change (an applied answer or action, a push, a skipped project, an error, a recovery) to stdout, never one per quiet cycle. Holds `~/.local/state/opencode/orchestrator/remote/serve.lock`: a second `serve` exits 1 with `another orch remote serve is running (pid N)` (also while an `orch remote once` holds it for its cycle; launchd retries 30 s later). The lock is an `flock(2)`, which the kernel drops when its holder dies, so a lock file left by a dead serve is simply taken over. The config is read once at start; restart `serve` after changing it. |
-| `orch remote launchd [--label LABEL]` | Prints a LaunchAgent plist (Label `org.opencode-orchestrator.work-trains` unless `--label`; ProgramArguments this `orch`'s absolute path, `remote`, `serve`; `RunAtLoad`, `KeepAlive`, `ThrottleInterval` 30; stdout and stderr to `~/.local/state/opencode/orchestrator/remote/remote.log`, expanded; `PATH` `/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin`, for `security` and `gh`), then on stderr, as comments, where to save it and the `launchctl bootstrap gui/$(id -u) <path>` / `launchctl bootout gui/$(id -u)/<label>` commands. It writes and installs nothing. |
+| `orch remote launchd [--label LABEL]` | Prints a LaunchAgent plist (Label `org.opencode-orchestrator.work-trains` unless `--label`; ProgramArguments this `orch`'s absolute path, `remote`, `serve`; `RunAtLoad`, `KeepAlive`, `ThrottleInterval` 30; stdout and stderr to `~/.local/state/opencode/orchestrator/remote/remote.log`, expanded; `PATH` `/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin`, for `security` and `gh`), then on stderr, as comments, where to save it and the `launchctl bootstrap gui/$(id -u) '<path>'` / `launchctl bootout gui/$(id -u)/<label>` commands (the path single-quoted for the shell, so a home with spaces or quotes copies whole). It writes and installs nothing. |
 | `orch remote token rotate` | Stores a new machine token (32 random bytes, unpadded base64url) in the Keychain and prints only its SHA-256 hex and the `wrangler secret put MACHINE_TOKEN_SHA256` line to run. This Mac sends the new token at once, and the Worker accepts it only once `MACHINE_TOKEN_SHA256` holds the new hash, so replace the secret before the next push or pushes get 403. |
 | `orch remote token revoke` | Deletes the three Keychain items (absent ones are reported as `not present`, so it is idempotent) and says what to revoke on the Worker side. |
 | `orch remote service-token set` | Reads the Access service token from stdin, client id then client secret, one per line (on a terminal it prompts with echo off, and turns echo back on however the prompt ends, Ctrl-C included), checks both values before storing either, and stores both. If the second write fails it says the client id changed and the secret did not, so run it again. Never echoes them. |
@@ -131,10 +131,15 @@ The sync loop (`once` runs one cycle; `serve` repeats them):
 3. Ack every outcome in one request. An outcome is acked as it is, whatever error came with it (an
    answer that was posted but whose gate could not be checked is acked `applied`, the error only
    logged). If the ack is lost, the next cycle pulls the same items again; applying them a second
-   time changes nothing (the reply carries the answer id) and they are acked again.
+   time changes nothing (the reply carries the answer id; a pause or resume resends the outcome
+   its project's action journal recorded, so a pause or resume made on the Mac since stands) and
+   they are acked again. An item the apply layer could not settle (a journal or mailbox it could
+   not read, a receipt it could not write: `apply.RetryableError`) is not acked: the Worker sends
+   it again with the next pull, and its failed step is logged once while it lasts.
 4. Push the projects that are due, all in one request: a project is due when its snapshot hash
    differs from the last one the Worker took, its last accepted push is at least 60 s old, and any
-   `retry_after` from a `deferred` result has passed. The schema caps a push at 50 projects; any
+   `retry_after` from a `deferred` result has passed (a `retry_after_seconds` outside the
+   schema's 1..300 counts as 60). The schema caps a push at 50 projects; any
    beyond that stay due and go 15 s later. `accepted` records the hash and time, `unchanged` the
    hash, `deferred` the retry time.
 5. Save the state (private temp file, then rename), with the cycle's error as `last_error`
@@ -151,12 +156,19 @@ Each request carries `Authorization: Bearer <machine token>`, `CF-Access-Client-
 something), `Content-Type: application/json`, `User-Agent: orch/<version>` and
 `X-Work-Trains-Machine: <machine id>`, which the Worker ignores while one Mac is the only machine;
 a push adds `Idempotency-Key: <sha256 of the body>`. Requests time out after 15 s and redirects are
-never followed. Errors are typed: a redirect, or a 2xx/4xx that is not JSON, came from Access, not the
+never followed, nor their `Location` parsed (requests go through the HTTP transport, not an
+`http.Client`). Errors are typed: a redirect, or a 2xx/4xx that is not JSON, came from Access, not the
 Worker (`access denied ...; check the Access service token (orch remote service-token set) and the
 Access Service Auth policy`); a Worker error is `HTTP <code> <error code>` (its free-text message is
-dropped); a response that breaks the schema (an unknown field included) is a protocol error; no
-response is a network error. No error, log line or state field carries a header value or a request
-body.
+dropped, and a code outside the protocol's `Error` enum shows as `unknown`); a response that breaks
+the schema is a protocol error saying how in fixed words (`a field not in the schema`, `a field of
+the wrong type`, `a field missing, null or not in the schema`), never which field or value; no
+usable response is a network error with a fixed cause (`could not connect`, `timed out`,
+`cancelled`, `the host name did not resolve`, `the TLS certificate was not trusted`, `the
+connection closed before the response ended`, else `no valid HTTP response`). No error, log line or
+state field carries a header value, a request body or text from a response: a response can echo
+what was sent, and the parsers quote what they refuse. A pulled answer's or action's id is logged
+only when it is a UUID.
 
 The snapshot goldens in `internal/remote/snapshot/testdata/*.golden.json` are built from the fixture
 projects under `testdata/projects/` with a fixed clock and machine id; `go test` compares them byte

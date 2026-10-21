@@ -4,8 +4,8 @@
 // checking local state every 15 s in between and backing off while the Worker is unreachable.
 //
 // Exactly-once rests on the apply layer: an ack that is lost makes the next cycle pull the same
-// items again, and applying an answer or action a second time changes nothing but still yields
-// an outcome to ack.
+// items again, and applying an answer or action a second time changes nothing but resends its
+// recorded outcome. An item apply could not settle is not acked, so the Worker sends it again.
 package loop
 
 import (
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
@@ -70,7 +71,8 @@ type Loop struct {
 	Jitter func(ceiling time.Duration) time.Duration
 	Log    io.Writer // one line per state change or error
 
-	reported map[string]bool // local problems already logged, so each is logged once
+	reported  map[string]bool // local problems already logged, so each is logged once
+	unsettled map[string]bool // unsettled items already logged; only a pull renews it
 }
 
 // Report is what one cycle or local check did.
@@ -122,7 +124,7 @@ func (l *Loop) withState(ctx context.Context, work func(*cycle) (Report, error))
 	}
 	c := &cycle{loop: l, state: &st, now: l.Now().UTC()}
 	report, err := work(c)
-	l.noticeProblems(c.problems)
+	l.reported = l.logOnce(l.reported, c.problems)
 	switch {
 	case ctx.Err() != nil:
 		// stopped, not failed: keep the last error
@@ -207,26 +209,40 @@ func resolverOf(projects []localProject) apply.ProjectResolver {
 	}
 }
 
-// applyPulled applies every pulled answer and action and returns one ack result each. An
-// outcome is acked as it is, whatever error came with it: an applied answer whose human gate
-// could not be checked stays applied (retrying would not post it again), a rejected one is
-// rejected. The error goes to the log only.
+// applyPulled applies every pulled answer and action and returns the results to ack. An
+// outcome is acked as it is, whatever error came with it: apply's outcomes are final (an
+// applied answer whose human gate could not be checked stays applied, a rejected one is
+// rejected), and the error goes to the log only. An item apply could not settle, a
+// *apply.RetryableError, gets no result: left unacked, it comes back in the next pull. It is
+// logged once while it lasts, not on every pull that brings the item back, by its fixed step
+// only: the wrapped error can quote text the response chose (a mailbox lookup names the id).
 func (l *Loop) applyPulled(pulled wire.PullResponse, projects apply.ProjectResolver) []wire.AckResult {
 	applier := l.NewApplier(projects)
 	results := []wire.AckResult{}
+	var unsettled []string
+	settle := func(kind, id string, outcome apply.Outcome, err error) {
+		var retryable *apply.RetryableError
+		if errors.As(err, &retryable) {
+			unsettled = append(unsettled, fmt.Sprintf("%s %s not applied, the Worker sends it again: %s", kind, loggableID(id), retryable.Step))
+			return
+		}
+		l.logOutcome(kind, id, outcome, err)
+		results = append(results, wire.AckResult{ID: id, Type: kind, Outcome: string(outcome.Result), Detail: outcome.Detail})
+	}
 	for _, answer := range pulled.Answers {
 		outcome, err := applier.ApplyAnswer(answer)
-		results = append(results, l.settle("answer", answer.ID, outcome, err))
+		settle("answer", answer.ID, outcome, err)
 	}
 	for _, action := range pulled.Actions {
 		outcome, err := applier.ApplyAction(action)
-		results = append(results, l.settle("action", action.ID, outcome, err))
+		settle("action", action.ID, outcome, err)
 	}
+	l.unsettled = l.logOnce(l.unsettled, unsettled)
 	return results
 }
 
-func (l *Loop) settle(kind, id string, outcome apply.Outcome, err error) wire.AckResult {
-	line := fmt.Sprintf("%s %s: %s", kind, id, outcome.Result)
+func (l *Loop) logOutcome(kind, id string, outcome apply.Outcome, err error) {
+	line := fmt.Sprintf("%s %s: %s", kind, loggableID(id), outcome.Result)
 	if outcome.Detail != "" {
 		line += ": " + outcome.Detail
 	}
@@ -234,7 +250,18 @@ func (l *Loop) settle(kind, id string, outcome apply.Outcome, err error) wire.Ac
 		line += " (error: " + l.Redact(err.Error()) + ")"
 	}
 	l.logf("%s", line)
-	return wire.AckResult{ID: id, Type: kind, Outcome: string(outcome.Result), Detail: outcome.Detail}
+}
+
+// workerID is how the Worker numbers answers and actions: a lowercase UUID.
+var workerID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// loggableID is a pulled id as the log may show it. The response chose it, and the client
+// checks only its type, so one of another shape, which could be any text, is not repeated.
+func loggableID(id string) string {
+	if workerID.MatchString(id) {
+		return id
+	}
+	return "<id not a uuid>"
 }
 
 func countApplied(results []wire.AckResult) int {
@@ -342,9 +369,17 @@ func (c *cycle) record(pushed []wire.ProjectSnapshot, results []wire.PushResult)
 	return deferred
 }
 
-// retryDelay is the wait the Worker asked for, else the push spacing.
+// The bounds of a push result's retry_after_seconds in remote/protocol/v1/schema.json.
+const (
+	minRetryAfterSeconds = 1
+	maxRetryAfterSeconds = 300
+)
+
+// retryDelay is the wait the Worker asked for, else the push spacing. A wait outside the
+// schema's bounds is not trusted: it would overflow time.Duration or, persisted in the state,
+// hold the project back for good.
 func retryDelay(seconds *int) time.Duration {
-	if seconds == nil {
+	if seconds == nil || *seconds < minRetryAfterSeconds || *seconds > maxRetryAfterSeconds {
 		return pushSpacing
 	}
 	return time.Duration(*seconds) * time.Second
@@ -358,18 +393,20 @@ func clampPoll(seconds int) time.Duration {
 	return time.Duration(min(max(seconds, config.MinPollSeconds), config.MaxPollSeconds)) * time.Second
 }
 
-// noticeProblems logs each local problem once while it lasts: an unreadable project would
-// otherwise fill the log every 15 s. A problem that went away and comes back is logged again.
-func (l *Loop) noticeProblems(problems []string) {
+// logOnce logs, redacted, each problem not in logged, and returns the problems now current,
+// which the next call takes as logged: a problem is logged once while it lasts (an unreadable
+// project would otherwise fill the log every 15 s), and again if it goes away and comes back.
+// Problems are told apart before redaction, which writes every id as <uuid>: two unsettled
+// items are two problems, each logged once.
+func (l *Loop) logOnce(logged map[string]bool, problems []string) map[string]bool {
 	current := make(map[string]bool, len(problems))
 	for _, problem := range problems {
-		problem = l.Redact(problem)
-		if !l.reported[problem] && !current[problem] {
-			l.logf("%s", problem)
+		if !logged[problem] && !current[problem] {
+			l.logf("%s", l.Redact(problem))
 		}
 		current[problem] = true
 	}
-	l.reported = current
+	return current
 }
 
 // Redact strips the home directory, user paths, emails and tokens from text bound for the log

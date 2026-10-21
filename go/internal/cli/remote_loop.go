@@ -178,8 +178,8 @@ func remoteLaunchd(args []string, env remoteEnv, stdio Stdio) error {
 	logFile := filepath.Join(state.Dir(env.home), "remote.log")
 	fmt.Fprint(stdio.Out, launchdPlist(*label, self, logFile))
 	plistFile := filepath.Join(env.home, "Library", "LaunchAgents", *label+".plist")
-	fmt.Fprintf(stdio.Err, "# Install: save the plist above as %s, then run\n", plistFile)
-	fmt.Fprintf(stdio.Err, "#   launchctl bootstrap gui/$(id -u) %s\n", plistFile)
+	fmt.Fprintf(stdio.Err, "# Install: save the plist above as %s, then run\n", shellQuote(plistFile))
+	fmt.Fprintf(stdio.Err, "#   launchctl bootstrap gui/$(id -u) %s\n", shellQuote(plistFile))
 	fmt.Fprintln(stdio.Err, "# Uninstall:")
 	fmt.Fprintf(stdio.Err, "#   launchctl bootout gui/$(id -u)/%s\n", *label)
 	return nil
@@ -218,6 +218,13 @@ func launchdPlist(label, orch, logFile string) string {
 </dict>
 </plist>
 `
+}
+
+// shellQuote is s as one word for a POSIX shell, so a copied command keeps a path with spaces
+// or shell characters whole: nothing is special inside single quotes, and a single quote is
+// written as a closing quote, an escaped quote and an opening one.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func xmlText(text string) string {

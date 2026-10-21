@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -220,8 +221,8 @@ func TestAPullWithAnUnknownFieldIsAProtocolError(t *testing.T) {
 	if !errors.As(err, &protocol) {
 		t.Fatalf("err = %v, want ProtocolError", err)
 	}
-	if !strings.Contains(err.Error(), `unknown field "extra"`) {
-		t.Errorf("err = %v, want the unknown field named", err)
+	if err.Error() != "GET /api/v1/machine/pull: bad response: a field not in the schema" {
+		t.Errorf("err = %q, want the fixed problem, not the field's name", err)
 	}
 }
 
@@ -243,8 +244,8 @@ func TestAClosedConnectionIsANetworkErrorWithoutTheURL(t *testing.T) {
 	})
 	_, err := c.Pull(context.Background())
 	var network *NetworkError
-	if !errors.As(err, &network) {
-		t.Fatalf("err = %v, want NetworkError", err)
+	if !errors.As(err, &network) || network.Problem != "the connection closed before the response ended" {
+		t.Fatalf("err = %v, want NetworkError for a closed connection", err)
 	}
 	if strings.Contains(err.Error(), "127.0.0.1") {
 		t.Errorf("err %q names the URL", err)
@@ -252,7 +253,25 @@ func TestAClosedConnectionIsANetworkErrorWithoutTheURL(t *testing.T) {
 	noSecrets(t, err)
 }
 
-func TestACancelledContextIsANetworkErrorWrappingTheCancellation(t *testing.T) {
+func TestARefusedConnectionIsANetworkError(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	server.Close()
+	_, err := New(server.URL, credentials, machineID, "1.2.3").Pull(context.Background())
+	if err == nil || err.Error() != "GET /api/v1/machine/pull: network: could not connect" {
+		t.Errorf("err = %v, want could not connect", err)
+	}
+}
+
+func TestAnUntrustedCertificateIsANetworkError(t *testing.T) {
+	server := httptest.NewTLSServer(jsonReply(200, example(t, "pull-response.json")))
+	defer server.Close()
+	_, err := New(server.URL, credentials, machineID, "1.2.3").Pull(context.Background())
+	if err == nil || err.Error() != "GET /api/v1/machine/pull: network: the TLS certificate was not trusted" {
+		t.Errorf("err = %v, want the certificate refused", err)
+	}
+}
+
+func TestACancelledContextIsANetworkError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		cancel()
@@ -260,8 +279,109 @@ func TestACancelledContextIsANetworkErrorWrappingTheCancellation(t *testing.T) {
 	})
 	_, err := c.Pull(ctx)
 	var network *NetworkError
-	if !errors.As(err, &network) || !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want NetworkError wrapping context.Canceled", err)
+	if !errors.As(err, &network) || network.Problem != "cancelled" {
+		t.Fatalf("err = %v, want NetworkError cancelled", err)
+	}
+}
+
+func TestTheWorkerErrorCodesAreTheSchemasEnum(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "remote", "protocol", "v1", "schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			Error struct {
+				Properties struct {
+					Error struct{ Enum []string }
+				}
+			}
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if enum := schema.Defs.Error.Properties.Error.Enum; len(enum) == 0 || !slices.Equal(enum, workerErrorCodes) {
+		t.Errorf("workerErrorCodes = %q, schema enum = %q", workerErrorCodes, enum)
+	}
+}
+
+// echoedSecret is what a response echoing the request's Access client secret repeats.
+func echoedSecret(r *http.Request) string { return r.Header.Get("CF-Access-Client-Secret") }
+
+// rawReply answers with response verbatim on the bare connection, as a broken proxy might.
+func rawReply(w http.ResponseWriter, response string) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	io.WriteString(conn, response)
+}
+
+func TestNoResponseTextReachesAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		want    string
+	}{{
+		name: "an error code that is not the protocol's",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			body, _ := json.Marshal(map[string]string{"error": echoedSecret(r), "message": echoedSecret(r)})
+			jsonReply(400, body)(w, r)
+		},
+		want: "GET /api/v1/machine/pull: HTTP 400 unknown",
+	}, {
+		name: "an unknown field named after the secret",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			body := `{"v":1,"server_time":"2026-10-21T09:00:00.000Z","poll_after_seconds":30,"answers":[],"actions":[],"` + echoedSecret(r) + `":1}`
+			jsonReply(200, json.RawMessage(body))(w, r)
+		},
+		want: "GET /api/v1/machine/pull: bad response: a field not in the schema",
+	}, {
+		name: "a value of the wrong type",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			body := `{"v":1,"server_time":"2026-10-21T09:00:00.000Z","poll_after_seconds":"` + echoedSecret(r) + `","answers":[],"actions":[]}`
+			jsonReply(200, json.RawMessage(body))(w, r)
+		},
+		want: "GET /api/v1/machine/pull: bad response: a field of the wrong type",
+	}, {
+		name: "a missing field",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			jsonReply(200, json.RawMessage(`{"v":1,"server_time":"2026-10-21T09:00:00.000Z","answers":[],"actions":[]}`))(w, r)
+		},
+		want: "GET /api/v1/machine/pull: bad response: a field missing, null or not in the schema",
+	}, {
+		name: "a malformed redirect location with user info",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "https://user:"+echoedSecret(r)+"@example.com/%zz")
+			w.WriteHeader(http.StatusFound)
+		},
+		want: "GET /api/v1/machine/pull: access denied (HTTP 302, not a Worker response); " + accessHint,
+	}, {
+		name: "a malformed header line",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			rawReply(w, "HTTP/1.1 200 OK\r\nX-Echo "+echoedSecret(r)+"\r\n\r\n")
+		},
+		want: "GET /api/v1/machine/pull: network: no valid HTTP response",
+	}, {
+		name: "a malformed status line",
+		handler: func(w http.ResponseWriter, r *http.Request) {
+			rawReply(w, "HTTP/1.1 2"+echoedSecret(r)+"\r\n\r\n")
+		},
+		want: "GET /api/v1/machine/pull: network: no valid HTTP response",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, rec := serve(t, tc.handler)
+			_, err := c.Pull(context.Background())
+			if err == nil || err.Error() != tc.want {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+			noSecrets(t, err)
+			if len(rec.requests) != 1 {
+				t.Errorf("requests = %q, want one", rec.requests)
+			}
+		})
 	}
 }
 

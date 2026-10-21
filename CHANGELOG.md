@@ -6,19 +6,24 @@
   The Mac now syncs with the Work Trains Worker: each cycle pulls the page's answers and actions,
   applies them through the WT13 apply layer, acks every outcome in one request (an applied answer
   whose gate check failed is still acked `applied`; a lost ack is re-sent next cycle and the answer
-  is not posted twice), then pushes, in one request of at most 50, the projects whose snapshot changed
-  and whose last accepted push is 60 s old (honouring the Worker's `deferred` `retry_after`). `serve`
+  is not posted twice, nor a pause or resume applied over a local decision made since; an item the
+  apply layer could not settle, `apply.RetryableError`, is not acked, so the Worker sends it again,
+  and its failed step is logged once while it lasts), then pushes, in one request of at most 50, the projects whose snapshot changed
+  and whose last accepted push is 60 s old (honouring the Worker's `deferred` `retry_after` within the schema's 1..300 s, else 60 s). `serve`
   pulls every `poll_after_seconds` (15..300 s), checks local state every 15 s, backs off with equal
   jitter (half to all of a ceiling from 5 s to 5 min) on failure, logs only changes and errors, stops cleanly on SIGINT/SIGTERM
   and holds a single-instance `flock` on `remote/serve.lock`, which `once` also takes for its
   cycle (while `serve` runs, `once` exits 1 and sends nothing; its error output is redacted as
   `last_error` is). `launchd` prints the LaunchAgent plist
   (`RunAtLoad`, `KeepAlive`, `ThrottleInterval` 30, log in `remote/remote.log`, never rotated) and, on stderr, the
-  `launchctl bootstrap`/`bootout` commands; it installs nothing. The HTTP client never follows a
-  redirect (reported as an Access denial with a hint), types every failure (access denied, HTTP
-  status, protocol, network), sends `X-Work-Trains-Machine: <machine id>` (ignored by the Worker for
-  now) and an `Idempotency-Key` on push, and keeps header values and request bodies out of every
-  error, log line and `last_error`. `orch remote push` without `--dry-run` now points at `once`.
+  `launchctl bootstrap`/`bootout` commands, the plist path single-quoted for the shell; it installs
+  nothing. The HTTP client never follows or even parses a redirect (reported as an Access denial
+  with a hint), types every failure (access denied, HTTP status, protocol, network), sends
+  `X-Work-Trains-Machine: <machine id>` (ignored by the Worker for now) and an `Idempotency-Key` on
+  push, and keeps header values, request bodies and response text out of every error, log line,
+  `last_error` and `once --json`: a Worker error code outside the protocol's enum is `unknown`, a
+  schema or transport failure is a fixed phrase that names no field, value or header, and a pulled
+  id is logged only when it is a UUID. `orch remote push` without `--dry-run` now points at `once`.
 
 - go: `orch remote push --dry-run [--json]` prints the exact Work Trains `PushRequest` this Mac
   would send, built only from local `.orchestrator/` state and the cached usage reading, and sends

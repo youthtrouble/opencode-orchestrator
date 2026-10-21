@@ -2,8 +2,11 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/apply"
@@ -186,6 +191,11 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// paused reports whether the project's flip.json holds a human gate.
+func paused(dir string) bool {
+	return jsjson.Truthy(jsjson.Path(flipcmd.NewProject(dir).ReadFlip(), "awaiting_human"))
 }
 
 func pushedKeys(push timedPush) []string {
@@ -372,6 +382,91 @@ func TestALostAckIsResentAndTheAnswerIsAppliedOnce(t *testing.T) {
 	}
 }
 
+// The Worker re-sends a pause whose ack was lost after the owner resumed on the Mac. Every cycle
+// builds its applier afresh from what is on disk, as a restarted serve would, and the action
+// journal answers the replay with the recorded outcome instead of gating the project again.
+func TestAPauseWhoseAckWasLostDoesNotUndoALocalResume(t *testing.T) {
+	h := newHarness(t)
+	alpha := h.project("alpha")
+	h.worker.queueAction(pauseFor(h.key(alpha)))
+	h.worker.dropAcks = 1
+	var network *client.NetworkError
+	if _, err := h.cycle(); !errors.As(err, &network) {
+		t.Fatalf("cycle with a dropped ack = %v, want a network error", err)
+	}
+	if !paused(alpha) {
+		t.Fatal("the pause was not applied")
+	}
+	if _, err := flipcmd.NewProject(alpha).Gate(cliargs.Opts{"clear": {Flag: true}}); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := h.cycle()
+	if err != nil || report.Pulled != 1 || report.Applied != 1 {
+		t.Fatalf("replay cycle = %+v, %v", report, err)
+	}
+	if paused(alpha) {
+		t.Error("the replayed pause gated the project again over the local resume")
+	}
+	acks := h.worker.ackLog()
+	if len(acks) != 2 || acks[1].Results[0] != (wire.AckResult{ID: pauseFor("").ID, Type: "action", Outcome: "applied", Detail: "pauses at the next brief boundary; no conductor running"}) {
+		t.Errorf("acks = %+v, want the pause's first outcome resent", acks)
+	}
+	if h.worker.pending() != 0 {
+		t.Error("the pause is still pending after the resent ack")
+	}
+}
+
+// An item apply cannot settle (here a pause whose project's action journal does not parse) is
+// left unacked for the Worker to send again, while the other items are acked, and logged once
+// however many pulls and local checks pass; once the journal is readable the next pull applies
+// and acks it.
+func TestAnItemApplyCannotSettleIsNotAckedUntilItIs(t *testing.T) {
+	h := newHarness(t)
+	alpha := h.project("alpha")
+	questionID := h.question(alpha)
+	journal := filepath.Join(alpha, ".orchestrator", "remote", "actions.json")
+	writeFile(t, journal, "[")
+	h.worker.queueAnswer(answerFor(h.key(alpha), questionID))
+	h.worker.queueAction(pauseFor(h.key(alpha)))
+
+	for range 2 {
+		if report, err := h.cycle(); err != nil || report.Pulled < 1 {
+			t.Fatalf("cycle = %+v, %v", report, err)
+		}
+		if _, err := h.pushDue(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	acks := h.worker.ackLog()
+	if len(acks) != 1 || len(acks[0].Results) != 1 || acks[0].Results[0].Type != "answer" {
+		t.Fatalf("acks = %+v, want only the answer acked", acks)
+	}
+	if h.worker.pending() != 1 || paused(alpha) {
+		t.Fatalf("pending = %d, paused = %v; want the pause pending and not applied", h.worker.pending(), paused(alpha))
+	}
+	if n := strings.Count(h.log.String(), "action <uuid> not applied, the Worker sends it again: read the action journal\n"); n != 1 {
+		t.Errorf("logged the unsettled pause %d times over two pulls, want once:\n%s", n, h.log)
+	}
+	if strings.Contains(h.log.String(), "read the action journal: ") {
+		t.Errorf("logged the unsettled pause's error text, want only its step:\n%s", h.log)
+	}
+
+	if err := os.Remove(journal); err != nil {
+		t.Fatal(err)
+	}
+	report, err := h.cycle()
+	if err != nil || report != (Report{Pulled: 1, Applied: 1, PollAfter: 30 * time.Second}) {
+		t.Fatalf("cycle after the repair = %+v, %v", report, err)
+	}
+	if acks := h.worker.ackLog(); len(acks) != 2 || acks[1].Results[0].ID != pauseFor("").ID || acks[1].Results[0].Outcome != "applied" {
+		t.Errorf("acks = %+v, want the pause acked applied", acks)
+	}
+	if h.worker.pending() != 0 || !paused(alpha) {
+		t.Errorf("pending = %d, paused = %v; want the pause applied and settled", h.worker.pending(), paused(alpha))
+	}
+}
+
 func TestAProjectChangingEvery10sIsPushedAtMostOncePerMinute(t *testing.T) {
 	h := newHarness(t)
 	alpha := h.project("alpha")
@@ -416,6 +511,37 @@ func TestADeferredProjectWaitsForTheWorkersRetryAfter(t *testing.T) {
 	if entry := h.state().Projects[h.key(alpha)]; entry.RetryAfter != nil || entry.LastAcceptedAt == nil {
 		t.Errorf("entry after the accepted retry = %+v", entry)
 	}
+}
+
+// A retry_after_seconds outside the schema's 1..300 is not trusted: the project waits the
+// push spacing instead of an overflowed or near-endless wait persisted in the state.
+func TestRetryDelayTrustsOnlyTheSchemasBounds(t *testing.T) {
+	for _, tc := range []struct {
+		seconds *int
+		want    time.Duration
+	}{
+		{nil, pushSpacing},
+		{intPtr(math.MinInt), pushSpacing},
+		{intPtr(-1), pushSpacing},
+		{intPtr(0), pushSpacing},
+		{intPtr(1), time.Second},
+		{intPtr(300), 300 * time.Second},
+		{intPtr(301), pushSpacing},
+		{intPtr(math.MaxInt), pushSpacing},
+	} {
+		if got := retryDelay(tc.seconds); got != tc.want {
+			t.Errorf("retryDelay(%s) = %v, want %v", describeSeconds(tc.seconds), got, tc.want)
+		}
+	}
+}
+
+func intPtr(n int) *int { return &n }
+
+func describeSeconds(seconds *int) string {
+	if seconds == nil {
+		return "nil"
+	}
+	return fmt.Sprint(*seconds)
 }
 
 func TestPushesOverTheSchemaCapLeaveTheRestDueForTheNextPush(t *testing.T) {
@@ -486,7 +612,9 @@ func TestAnAppliedOutcomeWithAnErrorIsAckedAppliedAndTheErrorOnlyLogged(t *testi
 func TestAPullWithAnUnknownFieldFailsTheCycleBeforeApplyingAnything(t *testing.T) {
 	h := newHarness(t)
 	h.project("alpha")
-	h.worker.pullBody = []byte(`{"v":1,"server_time":"2026-10-21T09:00:00.000Z","poll_after_seconds":30,"answers":[],"actions":[],"surprise":1}`)
+	h.worker.pullReply = func(rw http.ResponseWriter, r *http.Request) {
+		reply(rw, http.StatusOK, json.RawMessage(`{"v":1,"server_time":"2026-10-21T09:00:00.000Z","poll_after_seconds":30,"answers":[],"actions":[],"surprise":1}`))
+	}
 	_, err := h.cycle()
 	var protocol *client.ProtocolError
 	if !errors.As(err, &protocol) {
@@ -518,6 +646,61 @@ func TestARefusedCredentialIsRecordedAndNeverLogged(t *testing.T) {
 	}
 }
 
+// echoedSecret is what a response echoing the request's Access client secret repeats; the
+// harness fails the test if it reaches the log, the state file or a returned error.
+func echoedSecret(r *http.Request) string { return r.Header.Get("CF-Access-Client-Secret") }
+
+func TestNoPulledTextReachesTheLogTheStateOrAnError(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pullReply func(http.ResponseWriter, *http.Request, string)
+		lastError *state.LastError
+	}{{
+		name: "an error code that is not the protocol's",
+		pullReply: func(rw http.ResponseWriter, r *http.Request, _ string) {
+			reply(rw, http.StatusForbidden, map[string]string{"error": echoedSecret(r), "message": echoedSecret(r)})
+		},
+		lastError: &state.LastError{Kind: "http_status", Message: "GET /api/v1/machine/pull: HTTP 403 unknown"},
+	}, {
+		name: "an unknown field named after the secret",
+		pullReply: func(rw http.ResponseWriter, r *http.Request, _ string) {
+			reply(rw, http.StatusOK, json.RawMessage(`{"v":1,"server_time":"2026-10-21T09:00:00.000Z","poll_after_seconds":30,"answers":[],"actions":[],"`+echoedSecret(r)+`":1}`))
+		},
+		lastError: &state.LastError{Kind: "protocol", Message: "GET /api/v1/machine/pull: bad response: a field not in the schema"},
+	}, {
+		name: "a malformed redirect location with user info",
+		pullReply: func(rw http.ResponseWriter, r *http.Request, _ string) {
+			rw.Header().Set("Location", "https://user:"+echoedSecret(r)+"@example.com/%zz")
+			rw.WriteHeader(http.StatusFound)
+		},
+		lastError: &state.LastError{Kind: "access_denied", Message: "GET /api/v1/machine/pull: access denied (HTTP 302, not a Worker response); check the Access service token (orch remote service-token set) and the Access Service Auth policy"},
+	}, {
+		name: "an answer whose id is the secret",
+		pullReply: func(rw http.ResponseWriter, r *http.Request, key string) {
+			answer := answerFor(key, "m-1")
+			answer.ID = echoedSecret(r)
+			reply(rw, http.StatusOK, wire.PullResponse{V: 1, ServerTime: "2026-10-21T09:00:00.000Z", PollAfterSeconds: 30, Answers: []wire.PulledAnswer{answer}, Actions: []wire.PulledAction{}})
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			key := h.key(h.project("alpha"))
+			h.worker.pullReply = func(rw http.ResponseWriter, r *http.Request) { tc.pullReply(rw, r, key) }
+			_, err := h.cycle()
+			if (err != nil) != (tc.lastError != nil) {
+				t.Fatalf("cycle err = %v", err)
+			}
+			last := h.state().LastError
+			switch {
+			case tc.lastError == nil && last != nil:
+				t.Errorf("last_error = %+v, want none", last)
+			case tc.lastError != nil && (last == nil || last.Kind != tc.lastError.Kind || last.Message != tc.lastError.Message):
+				t.Errorf("last_error = %+v, want %+v", last, tc.lastError)
+			}
+		})
+	}
+}
+
 func TestServeStopsMidRequestWhenItsContextEnds(t *testing.T) {
 	h := newHarness(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -543,7 +726,7 @@ type blockingRemote struct{ cancel context.CancelFunc }
 func (b blockingRemote) Pull(ctx context.Context) (wire.PullResponse, error) {
 	b.cancel()
 	<-ctx.Done()
-	return wire.PullResponse{}, &client.NetworkError{Route: "GET /api/v1/machine/pull", Err: ctx.Err()}
+	return wire.PullResponse{}, &client.NetworkError{Route: "GET /api/v1/machine/pull", Problem: "cancelled"}
 }
 
 func (blockingRemote) Push(context.Context, wire.PushRequest) (wire.PushResponse, error) {
