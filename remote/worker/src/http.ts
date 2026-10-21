@@ -58,6 +58,11 @@ export function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+/** A success with nothing to say, such as 204; the same no-store rule as every JSON response. */
+export function emptyResponse(status: number): Response {
+  return new Response(null, { status, headers: { "Cache-Control": "no-store" } });
+}
+
 export function toResponse(error: unknown, path: string): Response {
   if (error instanceof ForbiddenError) {
     console.log(JSON.stringify({ auth: error.reason, path }));

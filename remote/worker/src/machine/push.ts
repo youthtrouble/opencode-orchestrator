@@ -5,9 +5,12 @@
 // 2 queries (3 on a machine's first push), plus 1 per project (its read), plus, per accepted project,
 // 2 more (1 when new) and one statement per question written. The Workers Free plan allows 50
 // queries per invocation, so a push near the schema's 50-project cap needs the Workers Paid plan (1000).
+// A push that accepts anything then runs its OnPushAccepted hook in the same invocation (the notifier
+// adds at most NOTIFY_QUERIES_PER_PUSH, and only when that many are left; see notify/triggers.ts).
 import { readJsonBody } from "../body.ts";
 import { jsonResponse } from "../http.ts";
 import { parseBody } from "../protocol.ts";
+import type { CountedDb } from "../queries.ts";
 import type { HandlerContext } from "../routes.ts";
 import type { ProjectPushResult, ProjectSnapshot, ProjectState, PushRequest, PushResult, Question } from "./wire.ts";
 
@@ -24,14 +27,17 @@ export interface AcceptedProject {
   previousState: ProjectState | null;
 }
 
-/** Runs once a project's writes have committed. WT9's notifier implements it. */
-export type OnProjectAccepted = (ctx: HandlerContext, accepted: AcceptedProject) => Promise<void>;
+/**
+ * Runs once per push, after every project has landed, with the projects it accepted (never empty).
+ * Once per push rather than per project, so its D1 cost does not grow with the push. WT9's notifier
+ * implements it.
+ */
+export type OnPushAccepted = (ctx: HandlerContext, accepted: AcceptedProject[]) => Promise<void>;
 
 interface PushRun {
   ctx: HandlerContext;
   push: PushRequest;
   isFirstPush: boolean;
-  onProjectAccepted: OnProjectAccepted;
 }
 
 interface StoredProject {
@@ -65,16 +71,18 @@ const ACCEPTED: Decision = { result: "accepted", retryAfterSeconds: null };
 // just received, so the debounce window is the right wait.
 const LOST_RACE: Decision = { result: "deferred", retryAfterSeconds: DEBOUNCE_SECONDS, logReason: "concurrent_push" };
 
-export function pushHandler(onProjectAccepted: OnProjectAccepted) {
+export function pushHandler(onPushAccepted: OnPushAccepted) {
   return async (ctx: HandlerContext): Promise<Response> => {
     const push = parseBody<PushRequest>("PushRequest", await readJsonBody(ctx.request));
     const isFirstPush = await recordMachinePush(ctx, push);
-    const run: PushRun = { ctx, push, isFirstPush, onProjectAccepted };
+    const run: PushRun = { ctx, push, isFirstPush };
     const projects: ProjectPushResult[] = [];
-    for (const project of push.projects) projects.push(await pushProject(run, project));
+    const accepted: AcceptedProject[] = [];
+    for (const project of push.projects) projects.push(await pushProject(run, project, accepted));
     // Stamped only once every project has landed: a push that fails part-way is retried as a first
     // push, so the rest of its backlog is still suppressed (plan D8).
     if (isFirstPush) await stampFirstPush(ctx, push.machine.id);
+    if (accepted.length > 0) await onPushAccepted(ctx, accepted);
     return jsonResponse(200, { v: 1, server_time: ctx.now.toISOString(), projects });
   };
 }
@@ -104,21 +112,30 @@ async function stampFirstPush({ db, now }: HandlerContext, machineId: string): P
     .run();
 }
 
-async function pushProject(run: PushRun, project: ProjectSnapshot): Promise<ProjectPushResult> {
+async function pushProject(
+  run: PushRun,
+  project: ProjectSnapshot,
+  accepted: AcceptedProject[],
+): Promise<ProjectPushResult> {
   const stored = await run.ctx.db
     .prepare("SELECT machine_id, state, state_since, snapshot_hash, received_at FROM projects WHERE key = ?")
     .bind(project.key)
     .first<StoredProject>();
   const decision = decide(stored, run.push.machine.id, project.snapshot_hash, run.ctx.now);
-  const outcome = decision.result === "accepted" ? await acceptProject(run, project, stored) : decision;
+  const outcome = decision.result === "accepted" ? await acceptProject(run, project, stored, accepted) : decision;
   if (outcome.logReason) console.log(JSON.stringify({ push: outcome.logReason, key: project.key }));
   return { key: project.key, result: outcome.result, retry_after_seconds: outcome.retryAfterSeconds };
 }
 
-async function acceptProject(run: PushRun, project: ProjectSnapshot, stored: StoredProject | null): Promise<Decision> {
+async function acceptProject(
+  run: PushRun,
+  project: ProjectSnapshot,
+  stored: StoredProject | null,
+  accepted: AcceptedProject[],
+): Promise<Decision> {
   const newQuestions = await writeProject(run, project, stored);
   if (newQuestions === null) return LOST_RACE;
-  await run.onProjectAccepted(run.ctx, { project, newQuestions, previousState: stored?.state ?? null });
+  accepted.push({ project, newQuestions, previousState: stored?.state ?? null });
   return ACCEPTED;
 }
 
@@ -168,7 +185,7 @@ function thisPushWrote({ ctx }: PushRun, project: ProjectSnapshot): string[] {
   return [project.key, project.snapshot_hash, ctx.now.toISOString()];
 }
 
-async function loadQuestions(db: D1Database, projectKey: string): Promise<StoredQuestion[]> {
+async function loadQuestions(db: CountedDb, projectKey: string): Promise<StoredQuestion[]> {
   const { results } = await db
     .prepare(
       `SELECT id, asked_at, asked_by, subject, body, recommended, blocking, closed_at
@@ -230,12 +247,15 @@ function updateProject({ ctx, push }: PushRun, project: ProjectSnapshot, stored:
   return ctx.db
     .prepare(
       `UPDATE projects SET name = ?, state = ?, snapshot_json = ?, snapshot_hash = ?, sent_at = ?, received_at = ?,
-         state_since = ?
+         state_since = ?,
+         notified_state = CASE WHEN state = ? THEN notified_state ELSE NULL END
        WHERE key = ? AND received_at = ?`,
     )
-    // Matching the received_at this push read keeps the debounce decision true at write time.
+    // Matching the received_at this push read keeps the debounce decision true at write time. Any state
+    // change clears the notifier's claim (SET reads the old `state`), so re-entering paused or failed
+    // notifies again (plan D8).
     .bind(project.name, project.state, snapshotJson(project), project.snapshot_hash, push.machine.sent_at, at,
-      stateSince, project.key, stored.received_at);
+      stateSince, project.state, project.key, stored.received_at);
 }
 
 /** Questions live in their own table, so the stored snapshot leaves them out. */
@@ -245,9 +265,10 @@ function snapshotJson({ questions: _questions, ...snapshot }: ProjectSnapshot): 
 
 function insertQuestion(run: PushRun, project: ProjectSnapshot, question: Question): D1PreparedStatement {
   const { ctx, isFirstPush } = run;
-  // A machine's first push carries its whole backlog; marking it suppressed keeps that from becoming
-  // a storm of notifications (plan D8).
-  const notifyState = isFirstPush ? "suppressed" : "pending";
+  // `pending` means a notification is owed, and only a newly seen blocking question is owed one. A
+  // machine's first push carries its whole backlog; marking it suppressed keeps that from becoming a
+  // storm of notifications (plan D8).
+  const notifyState = question.blocking && !isFirstPush ? "pending" : "suppressed";
   return ctx.db
     .prepare(
       `INSERT INTO questions

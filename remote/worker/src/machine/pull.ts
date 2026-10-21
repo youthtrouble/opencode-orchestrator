@@ -1,6 +1,7 @@
 // GET /api/v1/machine/pull (plan D6.2-3, D7): the answers and actions whose undo window has passed and
 // that the Mac has not settled yet. Delivery is at least once; the Mac's ack makes it exactly once.
 import { jsonResponse } from "../http.ts";
+import type { CountedDb } from "../queries.ts";
 import type { HandlerContext } from "../routes.ts";
 
 /** How long the Mac waits before its next pull; the schema clamps it to 15..300. */
@@ -55,7 +56,7 @@ export async function pullHandler({ db, now }: HandlerContext): Promise<Response
 }
 
 /** Stamps the first delivery only; a re-pull of an unacked row leaves delivered_at as it was. */
-function markDelivered(db: D1Database, table: "answers" | "actions", rows: { id: string }[], at: string) {
+function markDelivered(db: CountedDb, table: "answers" | "actions", rows: { id: string }[], at: string) {
   return db
     .prepare(`UPDATE ${table} SET delivered_at = ? WHERE delivered_at IS NULL AND id IN (SELECT value FROM json_each(?))`)
     .bind(at, JSON.stringify(rows.map((row) => row.id)));
@@ -63,7 +64,7 @@ function markDelivered(db: D1Database, table: "answers" | "actions", rows: { id:
 
 // A pull carries no machine id, and one service token stands for the owner's machines, so the
 // timestamp goes on every machine row.
-function recordPull(db: D1Database, now: Date) {
+function recordPull(db: CountedDb, now: Date) {
   const staleBefore = new Date(now.getTime() - LAST_PULL_RESOLUTION_SECONDS * 1000).toISOString();
   return db
     .prepare("UPDATE machines SET last_pull_at = ? WHERE last_pull_at IS NULL OR last_pull_at <= ?")

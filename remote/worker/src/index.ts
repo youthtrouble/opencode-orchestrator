@@ -8,7 +8,10 @@ import { verifyMachineToken } from "./auth/machine.ts";
 import { MAX_BODY_BYTES, payloadTooLarge } from "./body.ts";
 import { readConfig, type Config, type WorkerEnv } from "./env.ts";
 import { ForbiddenError, HttpError, toResponse } from "./http.ts";
-import { appRoutes, matchRoute, routeClassFor, type Route, type RouteClass } from "./routes.ts";
+import { notifierFor } from "./notify/notifier.ts";
+import { notifyOnAccepted } from "./notify/triggers.ts";
+import { countingDb, QueryCounter } from "./queries.ts";
+import { appRoutes, matchRoute, routeClassFor, type HandlerContext, type Route, type RouteClass } from "./routes.ts";
 
 export interface WorkerDeps {
   /** The key-set function that verifies Access JWTs issued by a team domain. */
@@ -19,10 +22,11 @@ export interface WorkerDeps {
 
 export function createWorker(deps: WorkerDeps): ExportedHandler<WorkerEnv> {
   return {
-    async fetch(request, env) {
+    async fetch(request, env, executionCtx) {
       const path = new URL(request.url).pathname;
+      const waitUntil = (task: Promise<unknown>) => executionCtx.waitUntil(task);
       try {
-        return await gateThenDispatch(request, env, deps, path);
+        return await gateThenDispatch(request, env, deps, path, waitUntil);
       } catch (error) {
         return toResponse(error, path);
       }
@@ -30,7 +34,13 @@ export function createWorker(deps: WorkerDeps): ExportedHandler<WorkerEnv> {
   };
 }
 
-async function gateThenDispatch(request: Request, env: WorkerEnv, deps: WorkerDeps, path: string) {
+async function gateThenDispatch(
+  request: Request,
+  env: WorkerEnv,
+  deps: WorkerDeps,
+  path: string,
+  waitUntil: HandlerContext["waitUntil"],
+) {
   const cfg = readConfig(env);
   const now = deps.now();
   const payload = await verifyAccessJwt(accessJwtOf(request), {
@@ -47,7 +57,7 @@ async function gateThenDispatch(request: Request, env: WorkerEnv, deps: WorkerDe
     checkBrowserWrite(request, cfg);
   }
   checkDeclaredLength(request);
-  return dispatch({ request, env, cfg, now, identity, routeClass, routes: deps.routes, path });
+  return dispatch({ request, env, cfg, now, identity, routeClass, routes: deps.routes, path, waitUntil });
 }
 
 function accessJwtOf(request: Request): string {
@@ -84,13 +94,16 @@ interface Dispatch {
   routeClass: RouteClass;
   routes: readonly Route[];
   path: string;
+  waitUntil: HandlerContext["waitUntil"];
 }
 
 async function dispatch(d: Dispatch): Promise<Response> {
   const match = matchRoute(d.routes, d.routeClass, d.request.method, d.path);
   if (match) {
-    const { request, env, cfg, now, identity } = d;
-    return match.route.handler({ request, env, cfg, db: env.DB, now, identity, params: match.params });
+    const { request, env, cfg, now, identity, waitUntil } = d;
+    const queries = new QueryCounter();
+    const db = countingDb(env.DB, queries);
+    return match.route.handler({ request, env, cfg, db, queries, now, identity, params: match.params, waitUntil });
   }
   if (d.routeClass === "browser" && !isWrite(d.request.method) && !d.path.startsWith("/api/")) {
     return d.env.ASSETS.fetch(d.request);
@@ -111,7 +124,6 @@ function remoteAccessKeys(teamDomain: string): JWTVerifyGetKey {
   return keys;
 }
 
-// Until WT9's notifier exists, an accepted project needs nothing further.
-const routes = appRoutes({ onProjectAccepted: async () => {} });
+const routes = appRoutes({ onPushAccepted: notifyOnAccepted(notifierFor) });
 
 export default createWorker({ keysFor: remoteAccessKeys, routes, now: () => new Date() });

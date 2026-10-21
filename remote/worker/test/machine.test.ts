@@ -37,7 +37,7 @@ function machineApp() {
   let now = START;
   const worker = createWorker({
     keysFor: () => keys,
-    routes: appRoutes({ onProjectAccepted: async (_ctx, project) => void accepted.push(project) }),
+    routes: appRoutes({ onPushAccepted: async (_ctx, projects) => void accepted.push(...projects) }),
     now: () => now,
   });
   const env = testEnv({}, db);

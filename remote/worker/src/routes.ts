@@ -1,10 +1,15 @@
 // The route table WT8 (machine API) and WT9 (browser API) extend. Matching happens only after the
 // auth gate has pinned an identity of the route's class.
 import type { Identity } from "./auth/access.ts";
+import { createActionHandler, undoActionHandler } from "./browser/actions.ts";
+import { createAnswerHandler, undoAnswerHandler } from "./browser/answers.ts";
+import { summaryHandler } from "./browser/summary.ts";
+import { visibilityHandler } from "./browser/visibility.ts";
 import type { Config, WorkerEnv } from "./env.ts";
 import { ackHandler } from "./machine/ack.ts";
 import { pullHandler } from "./machine/pull.ts";
-import { pushHandler, type OnProjectAccepted } from "./machine/push.ts";
+import { pushHandler, type OnPushAccepted } from "./machine/push.ts";
+import type { CountedDb, QueryCounter } from "./queries.ts";
 
 export type RouteClass = "machine" | "browser";
 
@@ -12,10 +17,14 @@ export interface HandlerContext {
   request: Request;
   env: WorkerEnv;
   cfg: Config;
-  db: D1Database;
+  /** env.DB, counting every query this invocation issues into `queries`. */
+  db: CountedDb;
+  queries: QueryCounter;
   now: Date;
   identity: Identity;
   params: Record<string, string>;
+  /** Keeps the isolate alive for work that finishes after the response, such as a notification. */
+  waitUntil: (task: Promise<unknown>) => void;
 }
 
 export interface Route {
@@ -33,14 +42,20 @@ export interface RouteMatch {
 
 /** What the routes need from outside the request: hooks the entry point injects. */
 export interface RouteDeps {
-  onProjectAccepted: OnProjectAccepted;
+  onPushAccepted: OnPushAccepted;
 }
 
-export function appRoutes({ onProjectAccepted }: RouteDeps): Route[] {
+export function appRoutes({ onPushAccepted }: RouteDeps): Route[] {
   return [
-    { method: "POST", pattern: "/api/v1/machine/push", class: "machine", handler: pushHandler(onProjectAccepted) },
+    { method: "POST", pattern: "/api/v1/machine/push", class: "machine", handler: pushHandler(onPushAccepted) },
     { method: "GET", pattern: "/api/v1/machine/pull", class: "machine", handler: pullHandler },
     { method: "POST", pattern: "/api/v1/machine/ack", class: "machine", handler: ackHandler },
+    { method: "GET", pattern: "/api/v1/summary", class: "browser", handler: summaryHandler },
+    { method: "POST", pattern: "/api/v1/questions/:id/answer", class: "browser", handler: createAnswerHandler },
+    { method: "DELETE", pattern: "/api/v1/answers/:id", class: "browser", handler: undoAnswerHandler },
+    { method: "POST", pattern: "/api/v1/projects/:key/actions", class: "browser", handler: createActionHandler },
+    { method: "DELETE", pattern: "/api/v1/actions/:id", class: "browser", handler: undoActionHandler },
+    { method: "POST", pattern: "/api/v1/projects/:key/visibility", class: "browser", handler: visibilityHandler },
   ];
 }
 

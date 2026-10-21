@@ -14,8 +14,11 @@ const REQUIRED_SECRETS = [
 type RequiredSecret = (typeof REQUIRED_SECRETS)[number];
 type OptionalSecret = "NOTIFY_FROM" | "NOTIFY_TO";
 
-/** The generated binding types plus the secrets, which `wrangler types` cannot see. */
-export type WorkerEnv = Env & Partial<Record<RequiredSecret | OptionalSecret, string>>;
+/**
+ * The generated binding types plus what `wrangler types` cannot see: the secrets, and the optional
+ * `EMAIL` send_email binding, which only the owner's deploy config declares.
+ */
+export type WorkerEnv = Env & Partial<Record<RequiredSecret | OptionalSecret, string>> & { EMAIL?: SendEmail };
 
 export interface Config {
   accessTeamDomain: string;

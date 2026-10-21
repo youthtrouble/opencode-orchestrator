@@ -14,6 +14,33 @@
   config is refused (`config_error`) and exits 1. Typed Go structs for the v1 wire payloads
   (`internal/remote/wire`) decode every protocol example, refusing unknown and missing properties
   and a null where the schema does not allow one. See `go/README.md`.
+- remote/worker browser API (local only, not yet deployed): `GET /api/v1/summary` lists every
+  project (hidden ones marked `hidden: true`) needs_you first, then failed, paused, working, done
+  and idle, newest first within a state, each with its open questions, each question's live answer
+  (`undo_window`, `sent`, or the Mac's outcome) and the project's pending action, plus the machine
+  last seen and `undo_seconds` (`UNDO_SECONDS`, default 10, clamped to 1..60).
+  `POST /api/v1/questions/:id/answer` accepts the Worker's stored recommendation (client text is
+  ignored; none stored is 400) or typed text (trimmed, control characters other than newline and
+  tab removed, 1..4000 UTF-16 units). A retried tap with the same `client_key` returns the same
+  answer with 200, even after the question has closed; the same `client_key` with a different
+  question, kind or text, a second answer to the question, or a new one to a closed question is 409
+  `conflict`.
+  `POST /api/v1/projects/:key/actions` pauses or resumes the same way (pause on a paused project,
+  or resume on one that is neither paused nor needs_you, is 409; a retried tap is 200 whatever the
+  project's state is now). `DELETE /api/v1/answers/:id` and
+  `DELETE /api/v1/actions/:id` undo while the undo window is open and the Mac has not pulled the
+  row, else 409 `too_late`. `POST /api/v1/projects/:key/visibility` hides or shows a project (204).
+- remote/worker email notifier: after a push, a newly seen blocking question (not one from a
+  machine's first push) emails "Work Trains: <project> needs you", and a project entering `paused`
+  or `failed` emails "... is paused" / "... failed", each with the page link and never the
+  question text. Each is claimed in D1 first, so it is sent at most once and a failed send is not
+  retried; at most 20 emails a UTC day. The notifier adds at most 5 D1 queries to a push however
+  many it sends, and runs only when the Worker's own count of the invocation's queries leaves all 5
+  under the Free plan's 50 (it logs `{"notify":"deferred"}` otherwise). Anything still owed (a
+  deferred push, or more than 20 at once) is taken up by a later accepted push, within the same
+  daily cap. It sends through the `send_email` binding `EMAIL` to
+  `NOTIFY_TO` from `NOTIFY_FROM`; without all three it sends nothing and logs `{"notify":"disabled"}`
+  once per isolate.
 
 - remote/worker machine API (local only, not yet deployed): `POST /api/v1/machine/push` stores
   changed project snapshots (an unchanged `snapshot_hash` writes nothing; a project accepted under
