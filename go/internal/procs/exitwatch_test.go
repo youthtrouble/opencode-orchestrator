@@ -31,6 +31,27 @@ func startUnreaped(t *testing.T, body string) *unreapedChild {
 	return child
 }
 
+// awaitExit returns once the child has exited, however long a loaded machine takes to start and
+// end it, failing after slack. Only the test reaps the child, so from then on it is a zombie
+// (on darwin, possibly from a moment later: see reap).
+func (c *unreapedChild) awaitExit(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(slack)
+	for {
+		exited, err := hasExited(c.pid)
+		if err != nil {
+			t.Fatalf("look for child %d: %v", c.pid, err)
+		}
+		if exited {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("child %d had not exited within %v", c.pid, slack)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // reap collects the exit status of a child that waitExited reported exited. WNOHANG proves that
 // the exit was left to collect: a child already reaped fails with ECHILD. darwin posts the exit
 // just before the child becomes a zombie, so a 0 (not yet waitable) is retried briefly.
@@ -103,9 +124,10 @@ func TestWaitExitedIgnoresAStoppedChild(t *testing.T) {
 }
 
 // A child that is a zombie already is reported at once (darwin finds no process to watch then).
+// Only the watch is timed: a loaded machine took over a second to start and end the child.
 func TestWaitExitedReturnsAtOnceForAZombie(t *testing.T) {
 	child := startUnreaped(t, "exit 3")
-	time.Sleep(200 * time.Millisecond)
+	child.awaitExit(t)
 	started := time.Now()
 	waitWatched(t, watchExit(child.pid))
 	if elapsed := time.Since(started); elapsed > slack/5 {

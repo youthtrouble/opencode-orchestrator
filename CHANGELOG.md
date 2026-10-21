@@ -212,6 +212,13 @@
   the signal before RunSync returns. It used to send the signal to its own pid, which Linux could
   deliver to another thread later, so orch sometimes ran on and exited 0. That was the ubuntu CI
   flake in `TestRunSyncRelaysSIGINTAndThenEndsByIt` (test reliability).
+- go (macOS): the same now holds on macOS. orch raised the relayed signal there with a kill(2) of
+  its own pid too, which darwin hands to a thread of its choosing, so under load orch ran on after
+  RunSync and exited 0 (the macOS flakes of
+  `TestRunSyncKillsAChildIgnoringARelayedSIGTERMBeforeEndingByIt` and
+  `TestRunSyncRelaysSIGINTAndThenEndsByIt`). It now raises the signal on its own thread with
+  libSystem's `raise(3)`, as Go's runtime does. `TestWaitExitedReturnsAtOnceForAZombie` now waits
+  for its child to exit instead of sleeping 200 ms, which a loaded Mac took over a second to do.
 - remote: the Work Trains wire protocol (`remote/protocol/`) is versioned as a v1 JSON Schema with a
   dependency-free validator that rejects schema keywords it does not support, valid and invalid
   examples for every payload, and contract tests (`node --test 'remote/protocol/test/*.test.ts'`).

@@ -405,10 +405,12 @@ func (h *relayHelper) result(t *testing.T) string {
 	return string(content)
 }
 
-func wantSignalled(t *testing.T, status syscall.WaitStatus, sig syscall.Signal) {
+// wantSignalled shows the helper's output on a failure: a "PASS" there means that its RunSync
+// returned and the raise did not end it.
+func wantSignalled(t *testing.T, h *relayHelper, status syscall.WaitStatus, sig syscall.Signal) {
 	t.Helper()
 	if !status.Signaled() || status.Signal() != sig {
-		t.Errorf("the helper ended with wait status %#x, want killed by %v", status, sig)
+		t.Errorf("the helper ended with wait status %#x, want killed by %v; output %q", status, sig, h.output.String())
 	}
 }
 
@@ -428,7 +430,7 @@ func TestRunSyncRelaysSIGINTAndThenEndsByIt(t *testing.T) {
 	}
 	h := startRelayHelper(t, relayChild, false)
 	h.signal(t, syscall.SIGINT)
-	wantSignalled(t, h.wait(t), syscall.SIGINT)
+	wantSignalled(t, h, h.wait(t), syscall.SIGINT)
 	waitGone(t, h.child)
 	waitGone(t, h.grandchild)
 }
@@ -444,7 +446,7 @@ func TestRunSyncKillsAChildIgnoringARelayedSIGTERMBeforeEndingByIt(t *testing.T)
 	if elapsed := time.Since(sent); elapsed < killGrace {
 		t.Errorf("the helper ended %v after SIGTERM, before the %v Grace", elapsed, killGrace)
 	}
-	wantSignalled(t, status, syscall.SIGTERM)
+	wantSignalled(t, h, status, syscall.SIGTERM)
 	waitGone(t, h.child)
 	waitGone(t, h.grandchild)
 }
