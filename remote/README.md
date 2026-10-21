@@ -329,3 +329,17 @@ Run them from the repository root. The end-to-end test needs Go, Node 26, and `n
 with a glob as above: Node 26 does not accept a directory there. The guard (`worker/test/guard.test.ts`) fails on an
 email address, an Access team host, a UUID or long hex value, or a 32-hex Cloudflare id in config files, outside the
 placeholders, in tracked files under `remote/`; run it before every commit that touches them.
+
+**Screenshots** of the page, for design review, come from fixtures, not from a deployment:
+
+```sh
+node remote/e2e/screens.ts --out remote/docs/design/before [--chrome <path>]
+```
+
+It serves `worker/public/` and fixture summaries (`e2e/screens/fixtures.ts`, fake projects only, each checked
+against the protocol's `Summary` first) on loopback with the Worker's security headers, drives headless Chrome
+over the DevTools protocol, and writes `<state>-<phone|desktop>.png` for the states `needs-you`, `calm`,
+`stale-mac`, `failed-ci-paused` and `budget-credits` (phone 390x844, desktop 1280x900, both at 2x, light mode). It fails if a
+fixture is not a valid `Summary` or the page requests anything off loopback. Chrome is `--chrome`, else `$CHROME`,
+else Google Chrome in `/Applications`, else Playwright's `chrome-headless-shell`. It is not a test, so CI never
+needs Chrome; and Chrome is not iOS Safari (no Dynamic Type, no safe-area insets), so the last look is on a phone.
