@@ -45,6 +45,12 @@ func TestRemoteRefusesABadCommandLineWithExit2(t *testing.T) {
 		{"push"},
 		{"push", "--json"},
 		{"push", "--dry-run", "now"},
+		{"once", "now"},
+		{"once", "--bogus"},
+		{"serve", "--json"},
+		{"launchd", "--label", "has space"},
+		{"launchd", "--label", "-dash-first"},
+		{"launchd", "extra"},
 	} {
 		code, stdout, stderr := run(t, Remote, args, "")
 		if code != 2 || stdout != "" || !strings.HasPrefix(stderr, "orch remote: ") || !strings.Contains(stderr, "usage: orch remote init") {

@@ -34,6 +34,9 @@ import (
 const remoteUsage = `usage: orch remote init --url URL [--root DIR]... [--exclude NAME]... [--force]
        orch remote status [--json]
        orch remote push --dry-run [--json]
+       orch remote once [--json]
+       orch remote serve
+       orch remote launchd [--label LABEL]
        orch remote token rotate | token revoke
        orch remote service-token set`
 
@@ -53,7 +56,7 @@ type remoteEnv struct {
 	paths      paths.Paths // the usage cache and registry the budget is read from
 }
 
-// Remote implements `orch remote init|status|push --dry-run|token rotate|token revoke|service-token set`.
+// Remote implements `orch remote init|status|push --dry-run|once|serve|launchd|token rotate|token revoke|service-token set`.
 func Remote(args []string, stdio Stdio) int {
 	err := runRemote(args, stdio)
 	var usage *remoteUsageError
@@ -90,6 +93,12 @@ func runRemote(args []string, stdio Stdio) error {
 		return remoteStatus(rest, env, stdio)
 	case "push":
 		return remotePush(rest, env, stdio)
+	case "once":
+		return remoteOnce(rest, env, stdio)
+	case "serve":
+		return remoteServe(rest, env, stdio)
+	case "launchd":
+		return remoteLaunchd(rest, env, stdio)
 	case "token rotate":
 		return remoteTokenRotate(rest, stdio)
 	case "token revoke":
@@ -347,18 +356,10 @@ func remotePush(args []string, env remoteEnv, stdio Stdio) error {
 		return err
 	}
 	if !*dryRun {
-		return &remoteUsageError{"push needs --dry-run; sending is not built yet"}
+		return &remoteUsageError{"push needs --dry-run; orch remote once sends"}
 	}
-	cfg, err := config.Load(env.configPath, env.home)
-	if errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("no config at %s; run orch remote init --url URL", env.configPath)
-	} else if err != nil {
-		return err
-	}
-	st, err := state.Load(env.stateFile)
-	if errors.Is(err, fs.ErrNotExist) {
-		return errors.New("no machine id yet; run orch remote init --url URL")
-	} else if err != nil {
+	cfg, st, err := loadRemoteSetup(env)
+	if err != nil {
 		return err
 	}
 	now := time.Now()
@@ -382,6 +383,23 @@ func remotePush(args []string, env remoteEnv, stdio Stdio) error {
 	encoder.SetEscapeHTML(false) // keep redaction placeholders such as <email> readable
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(request)
+}
+
+// loadRemoteSetup reads the config and the state, naming `orch remote init` when either is missing.
+func loadRemoteSetup(env remoteEnv) (config.Config, state.State, error) {
+	cfg, err := config.Load(env.configPath, env.home)
+	if errors.Is(err, fs.ErrNotExist) {
+		return config.Config{}, state.State{}, fmt.Errorf("no config at %s; run orch remote init --url URL", env.configPath)
+	} else if err != nil {
+		return config.Config{}, state.State{}, err
+	}
+	st, err := state.Load(env.stateFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return config.Config{}, state.State{}, errors.New("no machine id yet; run orch remote init --url URL")
+	} else if err != nil {
+		return config.Config{}, state.State{}, err
+	}
+	return cfg, st, nil
 }
 
 // buildSnapshots builds each project's snapshot; one that cannot be read is reported on errOut

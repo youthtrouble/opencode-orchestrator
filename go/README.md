@@ -53,14 +53,17 @@ The hidden `orch json-echo [--indent N]` exists for the parity harness.
 `orch remote` is the Mac side of Work Trains, the remote status page. It has **no JS twin** (no
 `bin/*.mjs` script) and so no parity group: it uses the standard `flag` package and plain
 `encoding/json`. Usage errors exit 2 with the usage text; runtime errors exit 1 with one line
-`orch remote: <message>`. So far it sets up the machine and shows what it would push; it does not
-talk to the Worker yet.
+`orch remote: <message>`. It sets up the machine, shows what it would push, and runs the sync loop
+with the Worker (`once`, `serve`), which launchd keeps running (`launchd`).
 
 | Command | Behaviour |
 |---|---|
 | `orch remote init --url URL [--root DIR]... [--exclude NAME]... [--force]` | Writes the config (refuses to replace it without `--force`) and creates the state file with a random machine id, kept across later `init --force` runs. `--url` must be `https://` (plain `http://` only for `127.0.0.1`, `localhost` or `[::1]`). `--root` defaults to `~/Developer`; `--exclude` takes directory names or absolute paths. Prints the config path, the machine id and the next steps; never a secret. |
 | `orch remote status [--json]` | The config, the machine id, whether each Keychain item exists (`yes`/`no`, or `unknown` with the error when the Keychain cannot be asked), the last push, pull and error, and the discovered projects: their count and names, plus each root or directory that could not be examined (`projects`, `project_names`, `discovery_errors` in JSON; `null` without a usable config). Never reads a secret. Exits 0 without a config. A refused config (insecure mode, inside a git work tree, invalid) is shown as `refused: <reason>` (`config_error` in JSON, `null` otherwise) with everything else still reported, and status exits 1. |
-| `orch remote push --dry-run [--json]` | Discovers the projects and prints, indented, the exact `PushRequest` a push would send (machine id, the release number from `VERSION` without the build's git revision, the cached budget and one snapshot per project), so the owner can audit what leaves the Mac. It sends nothing and writes nothing. Without `--json` two summary lines come first. A project whose state cannot be read, a root that cannot be scanned, or an unreadable usage registry is reported on stderr (`orch remote: skipped ...`) and left out; the exit is still 0. Needs the config and the machine id (`orch remote init`). Without `--dry-run` it is a usage error until sending is built. |
+| `orch remote push --dry-run [--json]` | Discovers the projects and prints, indented, the exact `PushRequest` a push would send (machine id, the release number from `VERSION` without the build's git revision, the cached budget and one snapshot per project), so the owner can audit what leaves the Mac. It sends nothing and writes nothing. Without `--json` two summary lines come first. A project whose state cannot be read, a root that cannot be scanned, or an unreadable usage registry is reported on stderr (`orch remote: skipped ...`) and left out; the exit is still 0. Needs the config and the machine id (`orch remote init`). Without `--dry-run` it is a usage error: `orch remote once` sends. |
+| `orch remote once [--json]` | Runs one cycle of the sync loop (below) and prints `pulled N, applied N, pushed N, deferred N`; `--json` prints `{pulled, applied, pushed, deferred, error}` (`error` null on success). Log lines go to stderr. Exits 0 when the cycle succeeded, 1 otherwise (the error, redacted as in `last_error`, is printed and stored as `last_error`). It holds `serve.lock` for its cycle, so it never overlaps a `serve` cycle (both could pull and apply the same answer): while `serve` runs it exits 1 with `orch remote serve is running; it syncs on its own (pid N)` and sends nothing. Needs the config, the machine id and the three Keychain items; a missing item is named with the command that sets it. |
+| `orch remote serve` | Runs the sync loop until SIGINT or SIGTERM, which cancel the HTTP call in flight, save the state and exit 0. Logs one line per change (an applied answer or action, a push, a skipped project, an error, a recovery) to stdout, never one per quiet cycle. Holds `~/.local/state/opencode/orchestrator/remote/serve.lock`: a second `serve` exits 1 with `another orch remote serve is running (pid N)` (also while an `orch remote once` holds it for its cycle; launchd retries 30 s later). The lock is an `flock(2)`, which the kernel drops when its holder dies, so a lock file left by a dead serve is simply taken over. The config is read once at start; restart `serve` after changing it. |
+| `orch remote launchd [--label LABEL]` | Prints a LaunchAgent plist (Label `org.opencode-orchestrator.work-trains` unless `--label`; ProgramArguments this `orch`'s absolute path, `remote`, `serve`; `RunAtLoad`, `KeepAlive`, `ThrottleInterval` 30; stdout and stderr to `~/.local/state/opencode/orchestrator/remote/remote.log`, expanded; `PATH` `/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin`, for `security` and `gh`), then on stderr, as comments, where to save it and the `launchctl bootstrap gui/$(id -u) <path>` / `launchctl bootout gui/$(id -u)/<label>` commands. It writes and installs nothing. |
 | `orch remote token rotate` | Stores a new machine token (32 random bytes, unpadded base64url) in the Keychain and prints only its SHA-256 hex and the `wrangler secret put MACHINE_TOKEN_SHA256` line to run. This Mac sends the new token at once, and the Worker accepts it only once `MACHINE_TOKEN_SHA256` holds the new hash, so replace the secret before the next push or pushes get 403. |
 | `orch remote token revoke` | Deletes the three Keychain items (absent ones are reported as `not present`, so it is idempotent) and says what to revoke on the Worker side. |
 | `orch remote service-token set` | Reads the Access service token from stdin, client id then client secret, one per line (on a terminal it prompts with echo off, and turns echo back on however the prompt ends, Ctrl-C included), checks both values before storing either, and stores both. If the second write fails it says the client id changed and the secret did not, so run it again. Never echoes them. |
@@ -119,6 +122,42 @@ lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected
   `null` when there is no cache or it is more than 30 minutes old. It runs no program: unlike
   `orch routing`, it does not detect opencode's channels (`sqlite3`, `opencode auth list`).
 
+The sync loop (`once` runs one cycle; `serve` repeats them):
+
+1. Pull the answers and actions whose undo window has passed (`GET /api/v1/machine/pull`).
+2. Apply each one exactly as `orch mailbox reply`, `flip gate` and the gate's clearing would (an
+   answer becomes the human's reply with `via: remote`; a pause sets the human gate; a resume clears
+   it and starts the supervisor if none runs). Projects are matched by key from one discovery pass.
+3. Ack every outcome in one request. An outcome is acked as it is, whatever error came with it (an
+   answer that was posted but whose gate could not be checked is acked `applied`, the error only
+   logged). If the ack is lost, the next cycle pulls the same items again; applying them a second
+   time changes nothing (the reply carries the answer id) and they are acked again.
+4. Push the projects that are due, all in one request: a project is due when its snapshot hash
+   differs from the last one the Worker took, its last accepted push is at least 60 s old, and any
+   `retry_after` from a `deferred` result has passed. The schema caps a push at 50 projects; any
+   beyond that stay due and go 15 s later. `accepted` records the hash and time, `unchanged` the
+   hash, `deferred` the retry time.
+5. Save the state (private temp file, then rename), with the cycle's error as `last_error`
+   (redacted) or none.
+
+`serve` pulls again after `poll_after_seconds` (the Worker's value clamped to 15..300 s; the config's
+`poll_seconds` until the first pull) and checks local state every 15 s in between, touching the network
+only when a project is due. After a failed cycle it backs off: a random wait between half the
+ceiling and the ceiling (equal jitter, so a retry never comes at once), where the ceiling starts at
+5 s and doubles per consecutive failure up to 5 minutes, reset by a good cycle. A project or root that cannot be read is logged once while it lasts and never fails a cycle.
+
+Each request carries `Authorization: Bearer <machine token>`, `CF-Access-Client-Id`,
+`CF-Access-Client-Secret` (read from the Keychain once per cycle, and only when the cycle sends
+something), `Content-Type: application/json`, `User-Agent: orch/<version>` and
+`X-Work-Trains-Machine: <machine id>`, which the Worker ignores while one Mac is the only machine;
+a push adds `Idempotency-Key: <sha256 of the body>`. Requests time out after 15 s and redirects are
+never followed. Errors are typed: a redirect, or a 2xx/4xx that is not JSON, came from Access, not the
+Worker (`access denied ...; check the Access service token (orch remote service-token set) and the
+Access Service Auth policy`); a Worker error is `HTTP <code> <error code>` (its free-text message is
+dropped); a response that breaks the schema (an unknown field included) is a protocol error; no
+response is a network error. No error, log line or state field carries a header value or a request
+body.
+
 The snapshot goldens in `internal/remote/snapshot/testdata/*.golden.json` are built from the fixture
 projects under `testdata/projects/` with a fixed clock and machine id; `go test` compares them byte
 for byte and `go test ./internal/remote/snapshot -update` rewrites them.
@@ -134,7 +173,9 @@ Files:
   real path lies inside any git work tree, and one readable or writable by group or others. It holds
   no secrets.
 - State: `~/.local/state/opencode/orchestrator/remote/state.json` (0600): `machine_id`, per-project
-  last pushed hash and times, `last_push_at`, `last_pull_at`, `last_error`. The file is created
+  `last_hash`, `last_accepted_at` and `retry_after`, `last_push_at`, `last_pull_at`, `last_error`
+  (`at`, `kind`: `network`, `access_denied`, `http_status`, `protocol`, `keychain` or `local`, and a
+  redacted `message`). The file is created
   complete and only if absent (written to a private temp, then hard-linked into place), so
   concurrent `orch remote init` runs all report the one machine id that was stored. A state file
   that does not parse, has unknown fields, a `machine_id` that is not a lowercase UUID v4, or a
@@ -144,6 +185,15 @@ Files:
   `access-client-id` and `access-client-secret`. They are written by feeding the
   `add-generic-password` command line to `security -i` on stdin, so no secret appears in argv (`ps`).
   Values with whitespace, quotes or backslashes are refused.
+- `serve.lock` and `remote.log` (the LaunchAgent's output) live next to `state.json`. `remote.log`
+  is appended to and never rotated. A quiet cycle logs nothing, so it grows mainly while the Worker
+  is unreachable: one line per failed cycle, at most one per 5 minutes once the backoff is at its
+  cap (about 300 lines a day). Truncate it by hand, or add a `newsyslog.d` rule, if it matters.
+- Not yet verified: a `resume` applied by `serve` may start `orch supervisor start`, which runs
+  detached in a session of its own. Whether launchd still ends it when it stops or restarts the
+  agent (launchd may kill the job's whole process group unless the plist sets
+  `AbandonProcessGroup`) has not been tested; WT16 checks it, and the plist gains
+  `AbandonProcessGroup` if the supervisor dies with `serve`.
 
 ## Build
 
