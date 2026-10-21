@@ -22,7 +22,24 @@
   note `replied via Work Trains`; JS readers ignore the extra keys. A retried answer whose reply is
   already posted is not posted again but finishes what an interruption left (the ack, the gate). A
   page pause sets the human gate (`paused from Work Trains`); a resume starts the project's
-  supervisor when none runs, then clears the gate. Details sent to the page name no local path.
+  supervisor when none runs and clears the gate only once a live supervisor holds its lock
+  (waiting up to about 5 s), else keeps the gate for the owner's next resume. Each pause and resume
+  is recorded in the project's `.orchestrator/remote/actions.json` (Go-only, newest 256) before
+  `flip.json` is touched and its outcome after, so an action pulled again after a lost ack resends
+  its outcome and never undoes a pause or resume made on the Mac since. One interrupted mid-apply
+  is never applied again: it is `applied` if the project is already as it asked, else `superseded`
+  (`interrupted; send it again`), so the owner sends a new one. An answer or action whose project
+  cannot be resolved is rejected and recorded in `unresolved.json` in the remote state directory
+  (newest 256), so a replay after discovery finds the project resends the rejection. A journal
+  that cannot be read or is not a valid array of distinct entries, or a receipt (the in-flight
+  action, the unknown-project rejection) that cannot be written, applies nothing and returns
+  `apply.RetryableError` with no outcome: the caller must not ack it, so the Worker sends it
+  again. So does an answer whose mailbox cannot be read, whose reply cannot be posted or whose
+  ack cannot be written; a reply already posted carries the answer's id, so the resend acks it
+  and clears the gate without posting it twice. Once the in-flight receipt is written, an
+  action's outcome is final even if recording it fails.
+  A failed step sends the page a fixed detail (for example `pause: could not write the gate`)
+  and keeps the error for the local log.
 - go: `orch remote` state and wire fixes (WT11 review R1-R3). Concurrent `orch remote init` runs
   (separate processes included) now all get the same machine id: `state.json` is published
   complete and only if absent, and a run that loses reads the winner's id. Before, each could
