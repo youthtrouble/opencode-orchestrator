@@ -38,6 +38,8 @@ interface PushRun {
   ctx: HandlerContext;
   push: PushRequest;
   isFirstPush: boolean;
+  /** Unique to this request; the project rows it writes carry it (see THIS_PUSH_WROTE_PROJECT). */
+  id: string;
 }
 
 interface StoredProject {
@@ -75,7 +77,7 @@ export function pushHandler(onPushAccepted: OnPushAccepted) {
   return async (ctx: HandlerContext): Promise<Response> => {
     const push = parseBody<PushRequest>("PushRequest", await readJsonBody(ctx.request));
     const isFirstPush = await recordMachinePush(ctx, push);
-    const run: PushRun = { ctx, push, isFirstPush };
+    const run: PushRun = { ctx, push, isFirstPush, id: crypto.randomUUID() };
     const projects: ProjectPushResult[] = [];
     const accepted: AcceptedProject[] = [];
     for (const project of push.projects) projects.push(await pushProject(run, project, accepted));
@@ -157,7 +159,7 @@ function decide(stored: StoredProject | null, machineId: string, snapshotHash: s
 /**
  * Writes the project and its questions in one batch (a D1 transaction), project first. The project
  * write applies only if the row is as this push read it, and each question write only if the project
- * row is the one this push wrote, so when a concurrent push for the key commits first this batch
+ * row carries this push's id, so when a concurrent push for the key commits first this batch
  * changes nothing. Returns the questions new to the project, or null when that race was lost.
  */
 async function writeProject(
@@ -177,12 +179,13 @@ async function writeProject(
   return projectWrite.meta.changes === 1 ? changes.added : null;
 }
 
-// True inside the batch once this push's own project write has applied. Bound by thisPushWrote().
-const THIS_PUSH_WROTE_PROJECT =
-  "EXISTS (SELECT 1 FROM projects WHERE key = ? AND snapshot_hash = ? AND received_at = ?)";
+// True inside the batch once this push's own project write has applied. Keyed on the push's own id,
+// not on its hash and time: an identical rival push in the same millisecond shares both. Bound by
+// thisPushWrote().
+const THIS_PUSH_WROTE_PROJECT = "EXISTS (SELECT 1 FROM projects WHERE key = ? AND push_id = ?)";
 
-function thisPushWrote({ ctx }: PushRun, project: ProjectSnapshot): string[] {
-  return [project.key, project.snapshot_hash, ctx.now.toISOString()];
+function thisPushWrote(run: PushRun, project: ProjectSnapshot): string[] {
+  return [project.key, run.id];
 }
 
 async function loadQuestions(db: CountedDb, projectKey: string): Promise<StoredQuestion[]> {
@@ -228,26 +231,30 @@ function sameFields(stored: StoredQuestion, question: Question): boolean {
   );
 }
 
-function insertProject({ ctx, push }: PushRun, project: ProjectSnapshot): D1PreparedStatement {
+function insertProject({ ctx, push, id }: PushRun, project: ProjectSnapshot): D1PreparedStatement {
   const at = ctx.now.toISOString();
   return ctx.db
     .prepare(
       `INSERT INTO projects
-         (key, machine_id, name, state, snapshot_json, snapshot_hash, sent_at, received_at, state_since)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (key, machine_id, name, state, snapshot_json, snapshot_hash, sent_at, received_at, state_since, push_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(key) DO NOTHING`,
     )
     .bind(project.key, push.machine.id, project.name, project.state, snapshotJson(project), project.snapshot_hash,
-      push.machine.sent_at, at, at);
+      push.machine.sent_at, at, at, id);
 }
 
-function updateProject({ ctx, push }: PushRun, project: ProjectSnapshot, stored: StoredProject): D1PreparedStatement {
+function updateProject(
+  { ctx, push, id }: PushRun,
+  project: ProjectSnapshot,
+  stored: StoredProject,
+): D1PreparedStatement {
   const at = ctx.now.toISOString();
   const stateSince = stored.state === project.state ? stored.state_since : at;
   return ctx.db
     .prepare(
       `UPDATE projects SET name = ?, state = ?, snapshot_json = ?, snapshot_hash = ?, sent_at = ?, received_at = ?,
-         state_since = ?,
+         state_since = ?, push_id = ?,
          notified_state = CASE WHEN state = ? THEN notified_state ELSE NULL END
        WHERE key = ? AND received_at = ?`,
     )
@@ -255,7 +262,7 @@ function updateProject({ ctx, push }: PushRun, project: ProjectSnapshot, stored:
     // change clears the notifier's claim (SET reads the old `state`), so re-entering paused or failed
     // notifies again (plan D8).
     .bind(project.name, project.state, snapshotJson(project), project.snapshot_hash, push.machine.sent_at, at,
-      stateSince, project.state, project.key, stored.received_at);
+      stateSince, id, project.state, project.key, stored.received_at);
 }
 
 /** Questions live in their own table, so the stored snapshot leaves them out. */

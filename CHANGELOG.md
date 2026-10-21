@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- remote/worker machine API fixes (WT8 review R1, R2): `GET /api/v1/machine/pull` now reads the due
+  answers and actions and stamps their first delivery in one D1 batch (one transaction), so an Undo
+  either lands first (the row is never delivered) or after (the Undo is 409 `too_late`). Before, an
+  Undo that reached D1 between the pull's read and its stamp succeeded and the Mac still received
+  the row. Still 5 D1 queries per pull. Two identical pushes for the same key on the same Worker
+  millisecond no longer fail with a 500: each push's question writes are keyed on a per-push id
+  (new nullable `projects.push_id`, migration `0002_projects_push_id.sql`) rather than on the
+  snapshot hash and receive time, so the loser is `deferred`.
 - remote/worker: an Access JWT without `exp` is now refused (403) instead of never expiring, and the public-repo guard matches Access team hosts in any case and flags 32-hex Cloudflare account/zone/D1 ids in config files and `account_id`-style lines.
 - go: new Go-only `orch remote init|status|token rotate|token revoke|service-token set` sets up
   this Mac for Work Trains (no network yet). The config lives in `~/.config/orch/remote.json`

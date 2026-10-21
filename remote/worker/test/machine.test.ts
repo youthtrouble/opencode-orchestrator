@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { compileSchema } from "../../protocol/validate.ts";
 import { createWorker } from "../src/index.ts";
+import { cancelWithinWindow } from "../src/browser/lifecycle.ts";
 import type { AcceptedProject } from "../src/machine/push.ts";
+import type { CountedDb } from "../src/queries.ts";
 import { appRoutes } from "../src/routes.ts";
 import { keys, machineToken, ORIGIN, testEnv, tokensAt } from "./support/access.ts";
 import { D1Double } from "./support/d1.ts";
@@ -227,6 +229,43 @@ test("a push that loses a race to update a key is deferred and leaves the winner
   assert.equal(app.accepted.length, 2);
 });
 
+// An identical rival in the same millisecond shares the loser's hash and received_at, so only the
+// push's own id can tell the winner's project row from the loser's.
+const identicalRaces = [
+  {
+    race: "create",
+    before: async (_app: ReturnType<typeof machineApp>) => {},
+    acceptedBefore: 0,
+    notifyState: "suppressed",
+  },
+  {
+    race: "update",
+    before: async (app: ReturnType<typeof machineApp>) => {
+      await app.push(pushRequest([snapshot()]));
+      app.at(60);
+    },
+    acceptedBefore: 1,
+    notifyState: "pending",
+  },
+];
+
+for (const { race, before, acceptedBefore, notifyState } of identicalRaces) {
+  test(`an identical push on the same clock that loses a race to ${race} a key is deferred, not a 500`, async (t) => {
+    const app = machineApp();
+    await before(app);
+    t.mock.method(console, "log", () => {});
+    const questions = [question("q-1"), question("q-2")];
+    const identical = () => pushRequest([snapshot({ snapshot_hash: HASH_B, questions })]);
+    commitBeforeNextBatch(app, () => app.push(identical()));
+
+    const reply = await app.push(identical());
+    assert.deepEqual(projectResult(reply), { key: KEY, result: "deferred", retry_after_seconds: 55 });
+    assert.equal(projectRow(app.db).snapshot_hash, HASH_B);
+    assert.equal(questionRow(app.db, "q-2").notify_state, notifyState);
+    assert.equal(app.accepted.length, acceptedBefore + 1, "only the winner is accepted");
+  });
+}
+
 test("an identical push is unchanged and writes no project or question row", async () => {
   const app = machineApp();
   await app.push(pushRequest([snapshot()]));
@@ -426,6 +465,56 @@ test("a cancelled answer or action is never pulled", async () => {
   app.at(60);
   assert.deepEqual(pulled(await app.pull()), { answers: [], actions: [] });
 });
+
+/** Runs `step` once, just before or just after the next batch, as if it committed on either side of it. */
+function aroundNextBatch(app: ReturnType<typeof machineApp>, when: "before" | "after", step: () => Promise<void>) {
+  const batch = app.db.batch.bind(app.db);
+  let ran = false;
+  app.db.batch = async (statements) => {
+    if (ran) return batch(statements);
+    ran = true;
+    if (when === "before") await step();
+    const results = await batch(statements);
+    if (when === "after") await step();
+    return results;
+  };
+}
+
+const lifecycleRows = [
+  { table: "answers", id: ANSWER_ID, other: "actions", otherId: ACTION_ID },
+  { table: "actions", id: ACTION_ID, other: "answers", otherId: ANSWER_ID },
+] as const;
+
+// The Undo's request time is 9 s, inside the window, but its UPDATE reaches D1 around the 10 s pull.
+for (const { table, id, other, otherId } of lifecycleRows) {
+  const undo = (app: ReturnType<typeof machineApp>) =>
+    cancelWithinWindow(app.db as unknown as CountedDb, table, id, new Date(iso(9)));
+
+  test(`an Undo of ${table} that commits just before the pull is honoured: the row is never delivered`, async () => {
+    const app = await appWithPendingAnswerAndAction();
+    let undone = false;
+    aroundNextBatch(app, "before", async () => void (undone = await undo(app)));
+    app.at(10);
+    const reply = pulled(await app.pull());
+    assert.equal(undone, true);
+    assert.deepEqual(reply[table], []);
+    assert.equal(deliveredAt(app, table, id), null);
+    assert.deepEqual(reply[other], [otherId]);
+  });
+
+  test(`an Undo of ${table} that reaches D1 just after the pull is refused: the delivery stands`, async () => {
+    const app = await appWithPendingAnswerAndAction();
+    let undone: boolean | undefined;
+    aroundNextBatch(app, "after", async () => void (undone = await undo(app)));
+    app.at(10);
+    const reply = pulled(await app.pull());
+    assert.equal(undone, false);
+    assert.deepEqual(reply[table], [id]);
+    assert.equal(deliveredAt(app, table, id), iso(10));
+    const row = app.db.sqlite.prepare(`SELECT cancelled_at FROM ${table} WHERE id = ?`).get(id) as Json;
+    assert.equal(row.cancelled_at, null);
+  });
+}
 
 test("pull refreshes the machine's last_pull_at at most once a minute", async () => {
   const app = machineApp();

@@ -28,16 +28,15 @@ interface PulledAction {
 }
 
 // Times are compared as text: every stored time is the Worker's own `toISOString()`, which sorts
-// in time order.
-const DUE_ANSWERS = `
-  SELECT answers.id, questions.project_key, answers.question_id, answers.kind, answers.text, answers.created_at
+// in time order. Each FROM clause binds the pull's time once; the SELECT and the delivery stamp share
+// it, so both see the same rows.
+const DUE_ANSWERS_FROM = `
   FROM answers JOIN questions ON questions.id = answers.question_id
   WHERE answers.apply_after <= ? AND answers.cancelled_at IS NULL AND answers.outcome IS NULL
   ORDER BY answers.created_at, answers.id
   LIMIT ${PULL_LIMIT}`;
 
-const DUE_ACTIONS = `
-  SELECT id, project_key, kind, created_at
+const DUE_ACTIONS_FROM = `
   FROM actions
   WHERE apply_after <= ? AND cancelled_at IS NULL AND outcome IS NULL
   ORDER BY created_at, id
@@ -45,21 +44,36 @@ const DUE_ACTIONS = `
 
 export async function pullHandler({ db, now }: HandlerContext): Promise<Response> {
   const at = now.toISOString();
-  const answers = (await db.prepare(DUE_ANSWERS).bind(at).all<PulledAnswer>()).results;
-  const actions = (await db.prepare(DUE_ACTIONS).bind(at).all<PulledAction>()).results;
-  await db.batch([
-    markDelivered(db, "answers", answers, at),
-    markDelivered(db, "actions", actions, at),
+  // One batch is one D1 transaction, so an Undo commits wholly before it (the row is cancelled, so
+  // neither selected nor stamped) or wholly after (the row is delivered, so the Undo is refused). The
+  // reply is built only from rows read inside the transaction that stamps them.
+  const [answers, actions] = await db.batch([
+    db
+      .prepare(`SELECT answers.id, questions.project_key, answers.question_id, answers.kind, answers.text,
+        answers.created_at ${DUE_ANSWERS_FROM}`)
+      .bind(at),
+    db.prepare(`SELECT id, project_key, kind, created_at ${DUE_ACTIONS_FROM}`).bind(at),
+    markDelivered(db, "answers", `SELECT answers.id ${DUE_ANSWERS_FROM}`, at),
+    markDelivered(db, "actions", `SELECT id ${DUE_ACTIONS_FROM}`, at),
     recordPull(db, now),
   ]);
-  return jsonResponse(200, { v: 1, server_time: at, poll_after_seconds: POLL_AFTER_SECONDS, answers, actions });
+  return jsonResponse(200, {
+    v: 1,
+    server_time: at,
+    poll_after_seconds: POLL_AFTER_SECONDS,
+    answers: answers.results as PulledAnswer[],
+    actions: actions.results as PulledAction[],
+  });
 }
 
-/** Stamps the first delivery only; a re-pull of an unacked row leaves delivered_at as it was. */
-function markDelivered(db: CountedDb, table: "answers" | "actions", rows: { id: string }[], at: string) {
+/**
+ * Stamps the first delivery of the rows `dueIds` selects; a re-pull of an unacked row leaves
+ * delivered_at as it was.
+ */
+function markDelivered(db: CountedDb, table: "answers" | "actions", dueIds: string, at: string) {
   return db
-    .prepare(`UPDATE ${table} SET delivered_at = ? WHERE delivered_at IS NULL AND id IN (SELECT value FROM json_each(?))`)
-    .bind(at, JSON.stringify(rows.map((row) => row.id)));
+    .prepare(`UPDATE ${table} SET delivered_at = ? WHERE delivered_at IS NULL AND id IN (${dueIds})`)
+    .bind(at, at);
 }
 
 // A pull carries no machine id, and one service token stands for the owner's machines, so the
