@@ -1,0 +1,11 @@
+Claude (team): session 10% [green] resets 2026-10-18T14:00:00.000Z; weekly 12%.
+Codex (plus): 5h 88% [red] resets 2026-10-18T14:00:00.000Z; weekly 100% [red] resets 2026-10-22T03:20:00.000Z; credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money).
+Routing now:
+  planner: anthropic/claude-fable-5-1#high via claude-cli
+  coder: anthropic/claude-opus-5-5#medium via claude-cli
+  reviewer: openai/gpt-6.1-sol (effort medium) via codex-cli
+  verifier: anthropic/claude-sonnet-5-5#medium via claude-cli
+  researcher: anthropic/claude-sonnet-5-5#medium via claude-cli
+  explorer: anthropic/claude-haiku-5-5 via claude-cli
+  utility: anthropic/claude-haiku-5-5 via claude-cli
+  note: Codex window is red but openai_credits=on: OpenAI roles spend ChatGPT credits through the codex bridge (credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money)).

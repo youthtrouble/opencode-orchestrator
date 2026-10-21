@@ -44,7 +44,7 @@ func TestUsageJSONFromAFreshCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	keys := strings.Join(doc.(*jsjson.Object).Keys(), ",")
-	if keys != "generated_at,stale,channels,usage,postures,roles,reasons,paused" || !strings.HasPrefix(stdout, "{\n  \"generated_at\"") {
+	if keys != "generated_at,stale,channels,usage,postures,roles,reasons,paused,openai_credits,openai_credits_policy" || !strings.HasPrefix(stdout, "{\n  \"generated_at\"") {
 		t.Errorf("stdout %s", stdout)
 	}
 	code, stdout, _ = run(t, Usage, nil, "")
@@ -67,7 +67,7 @@ func TestRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keys := strings.Join(doc.(*jsjson.Object).Keys(), ","); keys != "usage,registry,channels,resolved,prompt" {
+	if keys := strings.Join(doc.(*jsjson.Object).Keys(), ","); keys != "usage,registry,channels,creditsPolicy,resolved,prompt" {
 		t.Errorf("keys %s", keys)
 	}
 	if stale := jsjson.Path(doc, "usage", "stale"); stale != true {

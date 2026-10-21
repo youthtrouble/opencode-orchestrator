@@ -28,7 +28,7 @@ func Budget(args []string, stdio Stdio) int {
 	if err != nil {
 		return fail(stdio, "budget", err)
 	}
-	decision, err := budget.Gate(cfg, vendor, opts.IsFlag("force"), opts.IsFlag("frontier"))
+	decision, err := budget.Gate(cfg, vendor, opts.IsFlag("force"), opts.IsFlag("frontier"), false)
 	if err != nil {
 		return fail(stdio, "budget", err)
 	}

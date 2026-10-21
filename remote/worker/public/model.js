@@ -44,15 +44,36 @@ export function macSeen(machine, nowMs) {
   return { label: relativeTime(lastPullAt, nowMs), stale: nowMs - Date.parse(lastPullAt) > STALE_AFTER_MS };
 }
 
-/** One chip per vendor: "anthropic amber 72%", or "openai unknown" when the Mac sent nothing. */
+/**
+ * One chip per vendor: "anthropic amber 72%", or "openai unknown" when the Mac sent nothing.
+ * OpenAI credits, when reported, get a chip of their own: they are a separate fact from the
+ * window's level, and banked resets are window resets, not money.
+ */
 export function budgetChips(budget) {
-  return ["anthropic", "openai"].map((vendor) => {
+  const chips = ["anthropic", "openai"].map((vendor) => {
     const posture = budget?.[vendor] ?? null;
     const level = posture?.level ?? "unknown";
     const pct = posture?.five_hour_pct ?? null;
     const text = pct === null ? `${vendor} ${level}` : `${vendor} ${level} ${Math.round(pct)}%`;
     return { vendor, level, text };
   });
+  const credits = budget?.openai?.credits;
+  if (credits) chips.push({ vendor: "openai", level: "credits", text: `openai ${creditsText(credits)}` });
+  return chips;
+}
+
+/** "credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money)", as orch prints it. */
+function creditsText(credits) {
+  const parts = [];
+  if (credits.has_credits !== null) {
+    if (credits.unlimited) parts.push("credits unlimited");
+    else if (!credits.has_credits) parts.push("no credits");
+    else parts.push(credits.balance === null ? "credits available" : `credits ${credits.balance} left`);
+  }
+  if (credits.plan_limit_reached) parts.push("plan limit reached");
+  const banked = credits.banked_resets;
+  if (banked > 0) parts.push(`${banked} banked reset${banked === 1 ? "" : "s"} (window resets, not money)`);
+  return parts.join("; ");
 }
 
 /**

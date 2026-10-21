@@ -74,7 +74,7 @@ func TestGate(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := configWithCache(t, c.claude, c.codex)
-			d, err := Gate(cfg, c.vendor, c.force, c.frontier)
+			d, err := Gate(cfg, c.vendor, c.force, c.frontier, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,10 +92,56 @@ func TestGate(t *testing.T) {
 	}
 }
 
+// codexLimitReached is past its weekly plan limit with 215.68 ChatGPT credits left.
+const codexLimitReached = `{"ok":true,"five_hour":{"pct":88,"resets_at":"2026-10-18T22:00:00.000Z"},"weekly":{"pct":100,"resets_at":"2026-10-24T00:00:00.000Z"},` +
+	`"rate_limit_reached":"rate_limit_reached","ordinary_usage_allowed":false,"reset_credits_available":3,"credits":{"hasCredits":true,"unlimited":false,"balance":"215.68"}}`
+
+func TestGateDrawsCreditsOnlyWithThePolicyAndARecordingCaller(t *testing.T) {
+	const refused = `{"allowed":false,"level":"red","resets_at":"2026-10-18T22:00:00.000Z","note":"openai budget is red; refusing to start (pass --force to override). Resets 2026-10-18T22:00:00.000Z."}`
+	cases := []struct {
+		name                     string
+		policy                   string // the project's policy.json; "" for none
+		frontier, mayDrawCredits bool
+		want                     string
+	}{
+		{"policy off refuses", "", false, true, refused},
+		{"policy on funds a recording caller", `{"openai_credits":"on"}`, false, true,
+			`{"allowed":true,"level":"red","note":"openai budget is red; drawing ChatGPT credits (openai_credits=on).","credit_funded":true,"credits_before":"215.68"}`},
+		{"a caller that records nothing is refused", `{"openai_credits":"on"}`, false, false, refused},
+		{"frontier work never runs on credits", `{"openai_credits":"on"}`, true, true, refused},
+		{"the floor is respected", `{"openai_credits":"on","openai_credits_floor":"300"}`, false, true, refused},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := configWithCache(t, claudeGreen, codexLimitReached)
+			cfg.ProjectRoot = t.TempDir()
+			if c.policy != "" {
+				if err := os.MkdirAll(filepath.Join(cfg.ProjectRoot, ".orchestrator"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(cfg.ProjectRoot, ".orchestrator", "policy.json"), []byte(c.policy), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d, err := Gate(cfg, "openai", false, c.frontier, c.mayDrawCredits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := jsjson.Marshal(d.JSON())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != c.want {
+				t.Errorf("got  %s\nwant %s", got, c.want)
+			}
+		})
+	}
+}
+
 func TestGateProceedsWhenRoutingFails(t *testing.T) {
 	cfg := configWithCache(t, unknownFeed, unknownFeed)
 	cfg.RegistryFile = filepath.Join(cfg.Home, "missing.json")
-	d, err := Gate(cfg, "anthropic", false, false)
+	d, err := Gate(cfg, "anthropic", false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +158,7 @@ func TestGateReturnsACodexSpawnFailure(t *testing.T) {
 	}
 	cfg.ClaudeUsageURL = "http://127.0.0.1:1/unreachable"
 	var spawnErr *usage.SpawnError
-	if _, err := Gate(cfg, "anthropic", false, false); !errors.As(err, &spawnErr) {
+	if _, err := Gate(cfg, "anthropic", false, false, false); !errors.As(err, &spawnErr) {
 		t.Errorf("error %v, want a SpawnError", err)
 	}
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Regenerates the routing, flip and supervise goldens by running the JS policies
 // (orchestrator/lib/{routing,flip,supervise}.mjs) on the inputs in cases.json with the real
-// orchestrator/models.json, or the case's own "registry" where a routing case has one. Writes, with no trailing newline:
+// orchestrator/models.json, or the case's own "registry" where a routing case has one, and the credits setting of
+// the case's "policy" (off without one). Writes, with no trailing newline:
 //   <case>.resolved.golden  JSON.stringify(resolveRoles(...), null, 2)
 //   <case>.prompt.golden    summarizeForPrompt(...)
 //   flip.golden             JSON.stringify([decideFlip(...) per flip case], null, 2)
@@ -13,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIB = path.join(HERE, "..", "..", "..", "orchestrator", "lib");
-const { resolveRoles, summarizeForPrompt } = await import(path.join(LIB, "routing.mjs"));
+const { creditsPolicyOf, resolveRoles, summarizeForPrompt } = await import(path.join(LIB, "routing.mjs"));
 const { decideFlip } = await import(path.join(LIB, "flip.mjs"));
 const { observe, chooseEvent, reminderText } = await import(path.join(LIB, "supervise.mjs"));
 
@@ -24,7 +25,7 @@ const write = (name, text) => fs.writeFileSync(path.join(HERE, name), text);
 
 const resolvedByCase = {};
 for (const c of cases.routing) {
-  const resolved = resolveRoles(c.usage, c.registry ?? registry, { now, channels: c.channels });
+  const resolved = resolveRoles(c.usage, c.registry ?? registry, { now, channels: c.channels, credits: creditsPolicyOf(c.policy) });
   resolvedByCase[c.name] = resolved;
   write(`${c.name}.resolved.golden`, JSON.stringify(resolved, null, 2));
   write(`${c.name}.prompt.golden`, summarizeForPrompt(resolved, c.usage));

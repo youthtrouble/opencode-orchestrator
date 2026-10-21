@@ -102,6 +102,9 @@ type VendorPosture struct {
 	ResetsSoon bool
 	// Detail is the vendor's usage entry, verbatim (JSON null when it was absent).
 	Detail any
+	// CreditFunded marks red OpenAI work that the owner's openai_credits=on lets run on
+	// ChatGPT credits (set by ResolveRoles; only written when true).
+	CreditFunded bool
 }
 
 // Window returns the level of the named window; ok is false when the posture has no such
@@ -133,6 +136,9 @@ func (p *VendorPosture) JSON() *jsjson.Object {
 		out.Set("resets_soon", p.ResetsSoon)
 	}
 	out.Set("detail", p.Detail)
+	if p.CreditFunded {
+		out.Set("credit_funded", true)
+	}
 	return out
 }
 

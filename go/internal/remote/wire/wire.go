@@ -2,12 +2,14 @@
 // remote/protocol/v1/schema.json $defs entry that orch remote produces or consumes. The schema
 // is the source of truth; a field here that disagrees with it is the bug.
 //
-// Every schema property is required, so no field uses omitempty. A property the schema allows
-// to be null is a pointer, which encodes nil as null. Arrays are required too: a producer must
-// set every slice field to a non-nil (possibly empty) slice, since a nil slice encodes as null.
-// Decode enforces the shape of that contract (every property present, null only where the
-// field is a pointer, no undeclared property); value constraints such as enums, formats and
-// ranges are the schema validator's job, not this package's.
+// Every schema property is required, except an optional one added within v1 (declared in the
+// schema's properties but not its required list), which is a pointer field tagged omitempty:
+// nil is left out rather than sent as null. A required property the schema allows to be null is
+// a pointer without omitempty, which encodes nil as null. Arrays are required too: a producer
+// must set every slice field to a non-nil (possibly empty) slice, since a nil slice encodes as
+// null. Decode enforces the shape of that contract (every required property present, null only
+// where the field is a pointer, no undeclared property); value constraints such as enums,
+// formats and ranges are the schema validator's job, not this package's.
 package wire
 
 import (
@@ -31,6 +33,19 @@ type Posture struct {
 	FiveHourPct *float64 `json:"five_hour_pct"`
 	WeeklyPct   *float64 `json:"weekly_pct"`
 	ResetsAt    *string  `json:"resets_at"`
+	// Credits is optional and OpenAI's only; nil when Codex reported none.
+	Credits *Credits `json:"credits,omitempty"`
+}
+
+// Credits is the OpenAI credits fact: ChatGPT credits Codex spends once the plan limit is
+// reached, and banked window resets, which are not money. HasCredits, Unlimited and Balance
+// are nil when Codex reported no credits object.
+type Credits struct {
+	Balance          *string `json:"balance"`
+	HasCredits       *bool   `json:"has_credits"`
+	Unlimited        *bool   `json:"unlimited"`
+	PlanLimitReached bool    `json:"plan_limit_reached"`
+	BankedResets     int     `json:"banked_resets"`
 }
 
 // Run is how a project is being driven: a headless conductor lane, an interactive session, or none.
@@ -242,6 +257,9 @@ func checkShape(raw json.RawMessage, t reflect.Type, path string) error {
 			name := propertyName(field)
 			value, present := properties[name]
 			propertyPath := path + "." + name
+			if !present && isOptional(field) {
+				continue
+			}
 			if !present {
 				return &ShapeError{Path: propertyPath, Problem: "required property is missing"}
 			}
@@ -267,6 +285,12 @@ func refuseUndeclared(properties map[string]json.RawMessage, t reflect.Type, pat
 		}
 	}
 	return nil
+}
+
+// isOptional reports a field for an optional schema property: one tagged omitempty.
+func isOptional(field reflect.StructField) bool {
+	_, options, _ := strings.Cut(field.Tag.Get("json"), ",")
+	return slices.Contains(strings.Split(options, ","), "omitempty")
 }
 
 func propertyName(field reflect.StructField) string {

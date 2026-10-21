@@ -53,6 +53,8 @@ Where a browser payload repeats a field of another payload, it refers to that fi
 - Within v1, the only allowed change is a new optional field. It becomes legal once `v1/schema.json` declares it
   (in `properties`, not in `required`). Every object is `additionalProperties: false`, so a sender must not emit a
   field until the schema, the Worker that imports it and the Go structs all declare it.
+- Optional fields added within v1: `Posture.credits` (OpenAI only: ChatGPT credits and banked window resets). Go
+  marks an optional field `omitempty`, so it leaves it out when unset and its decoder accepts it absent.
 
 ## Accept answers
 

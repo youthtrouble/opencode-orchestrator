@@ -79,8 +79,9 @@ func setPolicy(file, command string, args []string, stdio Stdio) int {
 	}
 	doc, err := policy.Set(policy.Read(file), pairs)
 	var refused *policy.RefusedError
+	var invalid *policy.InvalidValueError
 	switch {
-	case errors.As(err, &refused), errors.Is(err, policy.ErrForcePush):
+	case errors.As(err, &refused), errors.As(err, &invalid), errors.Is(err, policy.ErrForcePush):
 		fmt.Fprintln(stdio.Err, err)
 		return 2
 	case err != nil:

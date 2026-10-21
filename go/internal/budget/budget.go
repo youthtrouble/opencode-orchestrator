@@ -20,12 +20,16 @@ type Decision struct {
 	ResetsAt    any
 	HasResetsAt bool
 	Note        string // "" when unset
+	// CreditFunded allows red OpenAI work that the owner's openai_credits=on funds from ChatGPT
+	// credits; CreditsBefore is the balance then (JSON null when unlimited).
+	CreditFunded  bool
+	CreditsBefore any
 	// Routing is the routing the decision was made on; nil when usage was unavailable.
 	Routing *usage.Routing
 }
 
-// JSON returns {allowed, level, resets_at, note} with unset fields omitted: the gate object
-// without its routing.
+// JSON returns {allowed, level, resets_at, note, credit_funded, credits_before} with unset
+// fields omitted: the gate object without its routing.
 func (d *Decision) JSON() *jsjson.Object {
 	out := jsjson.NewObject()
 	out.Set("allowed", d.Allowed)
@@ -38,6 +42,10 @@ func (d *Decision) JSON() *jsjson.Object {
 	if d.Note != "" {
 		out.Set("note", d.Note)
 	}
+	if d.CreditFunded {
+		out.Set("credit_funded", true)
+		out.Set("credits_before", d.CreditsBefore)
+	}
 	return out
 }
 
@@ -45,7 +53,11 @@ func (d *Decision) JSON() *jsjson.Object {
 // frontier set) is red and force is unset. Unknown usage, or routing that cannot be computed,
 // lets the work proceed with a note. A codex spawn failure is returned as an error: in the
 // JS it crashes the process before the gate can catch it.
-func Gate(cfg usage.Config, vendor string, force, frontier bool) (Decision, error) {
+//
+// mayDrawCredits says the caller records credit-funded runs (the balance before and after),
+// so a red, non-frontier OpenAI window whose work routing funds from ChatGPT credits is
+// allowed instead of refused.
+func Gate(cfg usage.Config, vendor string, force, frontier, mayDrawCredits bool) (Decision, error) {
 	r, err := usage.GetRouting(cfg, false)
 	var spawnErr *usage.SpawnError
 	if errors.As(err, &spawnErr) {
@@ -61,6 +73,16 @@ func Gate(cfg usage.Config, vendor string, force, frontier bool) (Decision, erro
 	level := p.Overall
 	if frontier {
 		level = p.Frontier
+	}
+	if level == routing.Red && !force && mayDrawCredits && !frontier && p.CreditFunded {
+		return Decision{
+			Allowed:       true,
+			Level:         level,
+			Note:          vendor + " budget is red; drawing ChatGPT credits (" + r.CreditsPolicy.Text() + ").",
+			CreditFunded:  true,
+			CreditsBefore: CreditsBalance(p.Detail),
+			Routing:       r,
+		}, nil
 	}
 	if level == routing.Red && !force {
 		resets, present := resetsAt(vendor, p.Detail)
@@ -88,4 +110,23 @@ func resetsAt(vendor string, detail any) (any, bool) {
 		return a, present
 	}
 	return jsjson.Lookup(detail, second...)
+}
+
+// CreditsBalance is the ChatGPT credits balance of a Codex usage entry, nil (JSON null) when
+// there is none to show (unlimited credits, or nothing reported).
+func CreditsBalance(codex any) any {
+	if credits := routing.OpenAICredits(codex); credits != nil && credits.Balance != nil {
+		return *credits.Balance
+	}
+	return nil
+}
+
+// FreshCreditsBalance is freshCreditsBalance: the balance from a fresh usage reading, for the
+// run record of a credit-funded run; nil when it cannot be read.
+func FreshCreditsBalance(cfg usage.Config) any {
+	current, err := usage.Get(cfg, true)
+	if err != nil {
+		return nil
+	}
+	return CreditsBalance(jsjson.Path(current, "codex"))
 }

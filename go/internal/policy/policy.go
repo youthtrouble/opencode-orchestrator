@@ -15,6 +15,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 )
 
 // UnattendedPairs are what `policy unattended` sets.
@@ -29,6 +30,25 @@ type RefusedError struct {
 }
 
 func (e *RefusedError) Error() string { return "refusing " + e.Key + "=never" }
+
+// InvalidValueError refuses a value its key does not take: openai_credits is off or on, and
+// openai_credits_floor is a number.
+type InvalidValueError struct {
+	Message string
+}
+
+func (e *InvalidValueError) Error() string { return e.Message }
+
+// invalidValue is the refusal of value for key, or nil when the key takes it.
+func invalidValue(key, value string) error {
+	if key == "openai_credits" && value != "off" && value != "on" {
+		return &InvalidValueError{"openai_credits must be off or on"}
+	}
+	if _, isNumber := routing.DecimalOrNull(value); key == "openai_credits_floor" && !isNumber {
+		return &InvalidValueError{"openai_credits_floor must be a number"}
+	}
+	return nil
+}
 
 // TypeError is the TypeError the JS throws when policy.json holds a primitive, with V8's
 // message, or (PE-6, not mirrored: the JS rewrites the array) an array.
@@ -73,7 +93,8 @@ func Effective(autonomy any, file string) *jsjson.Object {
 
 // Set applies pairs ("key=value"; the value ends at the next "=") to the override document cur
 // in order, as `cur[k] = v` does, and returns it. A pair setting a key other than force_push
-// to "never" is refused, as is a result whose own force_push is not "never". A key __proto__
+// to "never" is refused, as is a value its key does not take (InvalidValueError) and a result
+// whose own force_push is not "never". A key __proto__
 // is a no-op unless cur has it as an own key, as JS assignment through the prototype setter.
 func Set(cur any, pairs []string) (any, error) {
 	for _, pair := range pairs {
@@ -81,6 +102,9 @@ func Set(cur any, pairs []string) (any, error) {
 		key, value := parts[0], parts[1]
 		if value == "never" && key != "force_push" {
 			return nil, &RefusedError{key}
+		}
+		if err := invalidValue(key, value); err != nil {
+			return nil, err
 		}
 		if err := assign(cur, key, value); err != nil {
 			return nil, err

@@ -71,7 +71,7 @@ func checkRouting(registryFile string) error {
 		return fmt.Errorf("embedded green usage is not an object")
 	}
 	bothNative := map[string]bool{routing.Anthropic: true, routing.OpenAI: true}
-	resolved := routing.ResolveRoles(usage, reg, time.Now(), bothNative)
+	resolved := routing.ResolveRoles(usage, reg, time.Now(), bothNative, routing.CreditsPolicy{})
 	for _, a := range resolved.Roles {
 		if a.Entry == nil {
 			return fmt.Errorf("%s is PAUSED with every feed green", a.Role)

@@ -39,6 +39,15 @@
   `claude/agents/conductor.md`, "Keeping the live checkout current", now covered by the word-identical test) no
   longer counts the deploy this repository's `remote-deploy.yml` runs after a push as an `ask` item, once its
   environment is configured: conductors push and watch the run. No other workflow inherits the exception.
+- budget: OpenAI credits. `orch usage` (text and `--json`), `orch watch`, the injected budget,
+  `orch doctor` and the Work Trains page now show the ChatGPT credits Codex reports ("credits 215.68
+  left; plan limit reached") and its banked resets, labelled as window resets, not money; the
+  window's colour is unchanged. A new policy key, `openai_credits` (`off` by default, or `on`) with an
+  optional `openai_credits_floor`, lets OpenAI roles whose plan limit is reached run on credits
+  through `codex-exec`, which records the balance before and after in the run record. With the
+  default nothing changes: a red Codex window means no OpenAI work. The v1 protocol's `Posture` gains
+  an optional `credits` object. See
+  [OpenAI credits](orchestrator/README.md#openai-credits).
 - remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
   (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills
   every node through one helper that drops absent children the way `el` does. A new page test,

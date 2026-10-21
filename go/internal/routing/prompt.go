@@ -57,7 +57,15 @@ func codexLine(codex any, posture *VendorPosture) string {
 		"5h " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "five_hour", "pct")) + "% [" + jsjson.TemplateStringOf(posture.Window("five_hour")) + "] " +
 		"resets " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "five_hour", "resets_at")) + "; " +
 		"weekly " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "weekly", "pct")) + "% [" + jsjson.TemplateStringOf(posture.Window("weekly")) + "] " +
-		"resets " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "weekly", "resets_at")) + "."
+		"resets " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "weekly", "resets_at")) + creditsSuffix(codex) + "."
+}
+
+// creditsSuffix is "; <credits text>" when Codex reported credits or banked resets.
+func creditsSuffix(codex any) string {
+	if credits := OpenAICredits(codex); credits != nil {
+		return "; " + credits.Text()
+	}
+	return ""
 }
 
 func roleLine(a Assignment) string {

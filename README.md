@@ -131,8 +131,9 @@ your `PATH`). Run these from inside your project.
 | See everything on one screen | `orch watch --follow` |
 | See questions waiting for you | `orch mailbox inbox` |
 | Answer one | `orch mailbox reply <id> "your answer"` |
-| Budgets and routing right now | `orch usage --refresh` |
+| Budgets and routing right now (with OpenAI credits, when Codex reports them) | `orch usage --refresh` |
 | What the conductor may do without asking | `orch policy show` |
+| Let OpenAI work run on ChatGPT credits past the plan limit (off by default) | `orch policy set openai_credits=on [openai_credits_floor=20]` |
 | Restart the conductor on a door | `orch flip run --to claude` (or `--to opencode`) |
 | Pause the background conductor | `orch flip gate --reason "paused"` then `orch worker stop --lane conductor` |
 | Supervisor | `orch supervisor status` / `start` / `stop` |

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { redact } from "../lib/incident.mjs";
+import { creditsPolicyText, creditsText, openaiCredits } from "../lib/routing.mjs";
 import { getRouting } from "../lib/usage.mjs";
 
 const rows = [];
@@ -32,6 +33,8 @@ try {
   const r = await getRouting({ refresh: true });
   r.usage.claude.ok ? ok("Claude usage feed", `session ${r.usage.claude.session.pct}% fable ${r.usage.claude.weekly_by_model?.fable?.pct ?? "n/a"}% via ${r.usage.claude.source}`) : fail("Claude usage feed", r.usage.claude.error);
   r.usage.codex.ok ? ok("Codex usage feed", `5h ${r.usage.codex.five_hour.pct}% weekly ${r.usage.codex.weekly.pct}% plan ${r.usage.codex.plan}`) : fail("Codex usage feed", r.usage.codex.error);
+  const credits = openaiCredits(r.usage.codex);
+  if (credits) ok("OpenAI credits", `${creditsText(credits)}; policy ${creditsPolicyText(r.creditsPolicy)}`);
   ok("routing", Object.entries(r.resolved.roles).map(([k, v]) => `${k}=${v ? v.model.split("/")[1] + "@" + v.via : "PAUSED"}`).join(" "));
 } catch (e) { fail("usage/routing", String(e.message || e)); }
 

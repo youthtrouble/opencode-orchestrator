@@ -36,11 +36,37 @@ func Budget(cfg usage.Config) (*wire.Budget, error) {
 		return nil, nil
 	}
 	postures := routing.VendorPostures(cached, reg, cfg.Now())
+	openai := postureOf(postures.OpenAI, "five_hour")
+	openai.Credits = creditsOf(postures.OpenAI.Detail)
 	return &wire.Budget{
 		Anthropic: postureOf(postures.Anthropic, "session"),
-		OpenAI:    postureOf(postures.OpenAI, "five_hour"),
+		OpenAI:    openai,
 	}, nil
 }
+
+// creditsOf maps the OpenAI credits fact of the Codex usage entry; nil when Codex reported
+// none. A balance longer than the schema's 40 characters is sent as null.
+func creditsOf(codex any) *wire.Credits {
+	fact := routing.OpenAICredits(codex)
+	if fact == nil {
+		return nil
+	}
+	balance := fact.Balance
+	if balance != nil && len(*balance) > maxBalanceLength {
+		balance = nil
+	}
+	return &wire.Credits{
+		Balance:          balance,
+		HasCredits:       fact.HasCredits,
+		Unlimited:        fact.Unlimited,
+		PlanLimitReached: fact.PlanLimitReached,
+		BankedResets:     int(fact.BankedResets),
+	}
+}
+
+// maxBalanceLength is the schema's maxLength of a credits balance (ASCII digits, so bytes
+// count as UTF-16 units).
+const maxBalanceLength = 40
 
 // postureOf maps one vendor's resolved posture; fiveHourWindow names the vendor's 5-hour window
 // in its usage entry (Claude "session", Codex "five_hour").

@@ -1,0 +1,17 @@
+{
+  "def": "Posture",
+  "value": {
+    "level": "red",
+    "five_hour_pct": 88,
+    "weekly_pct": 100,
+    "resets_at": "2026-10-21T22:00:00Z",
+    "credits": {
+      "balance": null,
+      "has_credits": null,
+      "unlimited": null,
+      "plan_limit_reached": false,
+      "banked_resets": 1.5
+    }
+  },
+  "expect_path": "/credits/banked_resets"
+}

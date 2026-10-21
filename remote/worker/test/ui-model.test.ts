@@ -130,6 +130,27 @@ test("budget chips show each vendor's level and 5 h use, or unknown", () => {
   );
 });
 
+test("OpenAI credits get a chip of their own; the window chip keeps its level", () => {
+  const budget = {
+    anthropic: null,
+    openai: {
+      level: "red",
+      five_hour_pct: 88,
+      weekly_pct: 100,
+      resets_at: null,
+      credits: { balance: "215.68", has_credits: true, unlimited: false, plan_limit_reached: true, banked_resets: 3 },
+    },
+  };
+  assert.deepEqual(
+    model.budgetChips(budget).map((chip: { level: string; text: string }) => [chip.level, chip.text]),
+    [
+      ["unknown", "anthropic unknown"],
+      ["red", "openai red 88%"],
+      ["credits", "openai credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money)"],
+    ],
+  );
+});
+
 test("Resume is offered for a paused project and Pause otherwise", () => {
   assert.equal(model.controlActionFor("paused"), "resume");
   for (const state of ["working", "needs_you", "failed", "done", "idle"])

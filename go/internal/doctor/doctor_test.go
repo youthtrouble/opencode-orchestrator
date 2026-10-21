@@ -83,6 +83,11 @@ func greenRouting(t *testing.T) *usage.Routing {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Without credits or banked resets there is no "OpenAI credits" row, so the row positions
+	// the tests below index stay put; TestOpenAICreditsRow covers that row.
+	codex := jsjson.Path(value, "codex").(*jsjson.Object)
+	codex.Set("credits", nil)
+	codex.Set("reset_credits_available", 0.0)
 	registry, err := jsjson.Unmarshal([]byte(`{"vendors":{
 		"anthropic":{"tiers":{"frontier":{"opencode":"anthropic/fable-5.1"}}},
 		"openai":{"tiers":{"mini":{"opencode":"noslash"}}}}}`))
@@ -198,6 +203,25 @@ func firstUnits(s string, n int) string {
 		r = r[:n]
 	}
 	return string(r)
+}
+
+func TestOpenAICreditsRow(t *testing.T) {
+	m := healthy(t)
+	codex := jsjson.Path(m.routing.Usage, "codex").(*jsjson.Object)
+	credits := jsjson.NewObject()
+	credits.Set("hasCredits", true)
+	credits.Set("unlimited", false)
+	credits.Set("balance", "215.68")
+	codex.Set("credits", credits)
+	codex.Set("ordinary_usage_allowed", false)
+	codex.Set("reset_credits_available", 3.0)
+	m.routing.CreditsPolicy = routing.CreditsPolicy{On: true, Floor: 20}
+	got := lines(Check(m.deps())[10:12])
+	want := "OK   Codex usage feed  —  5h 5% weekly 10% plan plus\n" +
+		"OK   OpenAI credits  —  credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money); policy openai_credits=on floor 20\n"
+	if got != want {
+		t.Errorf("rows:\n%s\nwant:\n%s", got, want)
+	}
 }
 
 func TestUsageRowsBeforeAThrowAreKept(t *testing.T) {

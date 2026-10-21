@@ -42,7 +42,8 @@ func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if err != nil {
 		return crash(stderr, err)
 	}
-	decision, err := budget.Gate(cfg, routing.OpenAI, parsed.IsFlag("force"), isFrontierCodexModel(request.model))
+	cfg.ProjectRoot = request.cwd // its policy decides whether the run may draw ChatGPT credits
+	decision, err := budget.Gate(cfg, routing.OpenAI, parsed.IsFlag("force"), isFrontierCodexModel(request.model), true)
 	if err != nil {
 		return crash(stderr, err)
 	}
@@ -71,5 +72,17 @@ func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return crash(stderr, err)
 	}
 	result.flagToolHostOutage()
-	return finishedRun{log: log, cwd: request.cwd, prompt: prompt, afterRecord: startUsageRefresh, doneLine: codexDoneLine}.report(stdout, stderr, result.JSON())
+	out := result.JSON()
+	if decision.CreditFunded {
+		out.Set("credits", creditsSpent(decision.CreditsBefore, budget.FreshCreditsBalance(cfg)))
+	}
+	return finishedRun{log: log, cwd: request.cwd, prompt: prompt, afterRecord: startUsageRefresh, doneLine: codexDoneLine}.report(stdout, stderr, out)
+}
+
+// creditsSpent is the {before, after} balance a credit-funded run records.
+func creditsSpent(before, after any) *jsjson.Object {
+	out := jsjson.NewObject()
+	out.Set("before", before)
+	out.Set("after", after)
+	return out
 }

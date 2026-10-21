@@ -7,11 +7,13 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
 )
 
 // Usage implements `orch usage [--refresh] [--json]` (bin/usage.mjs): the routing summary
-// as text, or with --json the usage, channels and resolved routing (indent 2). Exit 1 when
+// as text, or with --json the usage, channels, resolved routing and the OpenAI credits fact
+// and setting (indent 2). Exit 1 when
 // routing cannot be computed (the JS crashes there).
 func Usage(args []string, stdio Stdio) int {
 	opts := cliargs.ParseUsage(args)
@@ -45,6 +47,11 @@ func Usage(args []string, stdio Stdio) int {
 		value, _ := resolved.Get(key)
 		out.Set(key, value)
 	}
+	out.Set("openai_credits", nil)
+	if credits := routing.OpenAICredits(jsjson.Path(r.Usage, "codex")); credits != nil {
+		out.Set("openai_credits", credits.JSON())
+	}
+	out.Set("openai_credits_policy", r.CreditsPolicy.JSON())
 	return printJSON(stdio, "usage", out, "  ")
 }
 

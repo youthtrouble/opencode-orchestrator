@@ -32,6 +32,24 @@ func TestBudgetMapsTheCachedPostures(t *testing.T) {
 	}
 }
 
+func TestBudgetCarriesTheOpenAICreditsFact(t *testing.T) {
+	file := writeUsage(t, `{"generated_at":"2026-10-20T11:31:00.000Z",
+		"claude":{"ok":true,"session":{"pct":10},"weekly":{"pct":null}},
+		"codex":{"ok":true,"five_hour":{"pct":88},"weekly":{"pct":100},"rate_limit_reached":"rate_limit_reached","ordinary_usage_allowed":false,
+			"reset_credits_available":3,"credits":{"hasCredits":true,"unlimited":false,"balance":"215.68"}}}`)
+	budget, err := Budget(testUsageConfig(t, file))
+	if err != nil || budget == nil {
+		t.Fatalf("Budget = %v, %v", budget, err)
+	}
+	got, _ := json.Marshal(budget)
+	want := `{"anthropic":{"level":"green","five_hour_pct":10,"weekly_pct":null,"resets_at":null},` +
+		`"openai":{"level":"red","five_hour_pct":88,"weekly_pct":100,"resets_at":null,` +
+		`"credits":{"balance":"215.68","has_credits":true,"unlimited":false,"plan_limit_reached":true,"banked_resets":3}}}`
+	if string(got) != want {
+		t.Errorf("Budget = %s\nwant %s", got, want)
+	}
+}
+
 func TestBudgetIsNullWithoutAFreshCache(t *testing.T) {
 	cases := map[string]string{
 		"no cache":            filepath.Join(t.TempDir(), "absent.json"),

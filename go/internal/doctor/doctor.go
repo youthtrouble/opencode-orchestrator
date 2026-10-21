@@ -212,6 +212,9 @@ func (c *checks) feedsAndRouting() error {
 	} else {
 		c.pushDetail(Fail, "Codex usage feed", jsjson.Path(codex, "error"))
 	}
+	if credits := routing.OpenAICredits(codex); credits != nil {
+		c.pushDetail(OK, "OpenAI credits", credits.Text()+"; policy "+r.CreditsPolicy.Text())
+	}
 	summary, err := routingSummary(r)
 	if err != nil {
 		return err

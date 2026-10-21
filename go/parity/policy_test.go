@@ -67,6 +67,9 @@ func (h *harness) testPolicy(t *testing.T) {
 		{name: "set/string-file-index", args: []string{"set", "0=x"}, seed: seedPolicy(`"ab"`), crash: crashC1, errorLine: "TypeError: Cannot assign to read only property '0' of string 'ab'"},
 		{name: "set/string-file-key", args: []string{"set", "2=x"}, seed: seedPolicy(`"ab"`), crash: crashC1, errorLine: "TypeError: Cannot create property '2' on string 'ab'"},
 		{name: "set/boolean-file", args: []string{"set", "length=1"}, seed: seedPolicy(`true`), crash: crashC1, errorLine: "TypeError: Cannot create property 'length' on boolean 'true'"},
+		{name: "set/openai-credits-on", args: []string{"set", "openai_credits=on", "openai_credits_floor=20"}},
+		{name: "set/openai-credits-refused", args: []string{"set", "deploy=auto", "openai_credits=security-only"}},
+		{name: "set/openai-credits-floor-refused", args: []string{"set", "openai_credits_floor=lots"}},
 		{name: "unattended", args: []string{"unattended", "ignored=x"}, seed: seedPolicy(`{"deploy":"auto"}`)},
 		{name: "unattended/cwd", args: []string{"unattended", "--cwd", "sub"}},
 

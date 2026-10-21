@@ -66,6 +66,48 @@
         },
         "resets_at": {
           "$ref": "#/$defs/NullableIso"
+        },
+        "credits": {
+          "description": "Optional, OpenAI only: ChatGPT credits Codex spends once the plan limit is reached, and banked window resets (promotional resets of the usage window, not money). Absent when Codex reported neither. has_credits, unlimited and balance are null when it reported no credits object.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "balance",
+            "has_credits",
+            "unlimited",
+            "plan_limit_reached",
+            "banked_resets"
+          ],
+          "properties": {
+            "balance": {
+              "description": "The remaining balance as Codex reports it, a decimal string, or null.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 40,
+              "pattern": "^-?\\d+(\\.\\d+)?$"
+            },
+            "has_credits": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "unlimited": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "plan_limit_reached": {
+              "type": "boolean"
+            },
+            "banked_resets": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     },

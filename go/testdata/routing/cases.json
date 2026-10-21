@@ -1,5 +1,5 @@
 {
-  "$comment": "Inputs for the routing, flip and supervise goldens. gen.mjs runs the JS on them; the Go tests run the port on the same inputs. All times are fixed relative to now.",
+  "$comment": "Inputs for the routing, flip and supervise goldens. A routing case's optional \"policy\" is its effective policy (openai_credits); none is off. gen.mjs runs the JS on them; the Go tests run the port on the same inputs. All times are fixed relative to now.",
   "now": "2026-10-18T12:00:00.000Z",
   "routing": [
     {
@@ -185,6 +185,68 @@
       "usage": {
         "claude": { "ok": true, "read_error": "HTTP 429", "session": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 10, "resets_at": null } },
         "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 5, "resets_at": "2026-10-22T03:20:00.000Z" } }
+      }
+    },
+    {
+      "name": "credits-limits-ok",
+      "channels": { "openai": true },
+      "policy": { "openai_credits": "on" },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 20, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 30, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": null, "ordinary_usage_allowed": true, "reset_credits_available": 0, "credits": { "hasCredits": true, "unlimited": false, "balance": "50" } }
+      }
+    },
+    {
+      "name": "credits-limit-reached-policy-off",
+      "channels": { "openai": true },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 88, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 100, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "rate_limit_reached", "ordinary_usage_allowed": false, "reset_credits_available": 3, "credits": { "hasCredits": true, "unlimited": false, "balance": "215.68" } }
+      }
+    },
+    {
+      "name": "credits-limit-reached-policy-on",
+      "channels": { "openai": true },
+      "policy": { "openai_credits": "on" },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 88, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 100, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "rate_limit_reached", "ordinary_usage_allowed": false, "reset_credits_available": 3, "credits": { "hasCredits": true, "unlimited": false, "balance": "215.68" } }
+      }
+    },
+    {
+      "name": "credits-limit-reached-no-credits",
+      "channels": { "openai": true },
+      "policy": { "openai_credits": "on" },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 88, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 100, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "rate_limit_reached", "ordinary_usage_allowed": false, "reset_credits_available": 1, "credits": { "hasCredits": false, "unlimited": false, "balance": "0" } }
+      }
+    },
+    {
+      "name": "credits-unlimited",
+      "channels": { "openai": true },
+      "policy": { "openai_credits": "on" },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 100, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 40, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "rate_limit_reached", "ordinary_usage_allowed": false, "reset_credits_available": 0, "credits": { "hasCredits": true, "unlimited": true } }
+      }
+    },
+    {
+      "name": "credits-field-absent",
+      "channels": { "openai": true },
+      "policy": { "openai_credits": "on" },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 88, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 100, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "rate_limit_reached", "ordinary_usage_allowed": false, "reset_credits_available": 0 }
+      }
+    },
+    {
+      "name": "credits-floor-respected",
+      "channels": { "openai": true },
+      "policy": { "openai_credits": "on", "openai_credits_floor": "215.68" },
+      "usage": {
+        "claude": { "ok": true, "plan": "team", "session": { "pct": 10, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 12, "resets_at": "2026-10-23T00:00:00.000Z" }, "weekly_by_model": {} },
+        "codex": { "ok": true, "plan": "plus", "five_hour": { "pct": 88, "resets_at": "2026-10-18T14:00:00.000Z" }, "weekly": { "pct": 100, "resets_at": "2026-10-22T03:20:00.000Z" }, "rate_limit_reached": "rate_limit_reached", "ordinary_usage_allowed": false, "reset_credits_available": 3, "credits": { "hasCredits": true, "unlimited": false, "balance": "215.68" } }
       }
     }
   ],

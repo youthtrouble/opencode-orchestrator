@@ -50,7 +50,7 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if err != nil {
 		return crash(stderr, err)
 	}
-	decision, err := budget.Gate(cfg, routing.OpenAI, parsed.IsFlag("force"), false)
+	decision, err := budget.Gate(cfg, routing.OpenAI, parsed.IsFlag("force"), false, false)
 	if err != nil {
 		return crash(stderr, err)
 	}

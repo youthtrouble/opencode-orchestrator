@@ -213,13 +213,14 @@
     "$comment": "Wrap detached workers and the supervisor in caffeinate (macOS) / systemd-inhibit (Linux) so long runs survive idle sleep. Lid-closed sleep still happens on a laptop without external display + power."
   },
   "autonomy": {
-    "$comment": "What a conductor may do without asking. 'auto' = do it when the slice is verified (review pass + checks green); 'ask' = post a question to the mailbox, record a human gate ONLY if no independent work remains, otherwise keep working. Per-project override: .orchestrator/policy.json (same keys).",
+    "$comment": "What a conductor may do without asking. 'auto' = do it when the slice is verified (review pass + checks green); 'ask' = post a question to the mailbox, record a human gate ONLY if no independent work remains, otherwise keep working. openai_credits: 'off' (default) never draws ChatGPT credits; 'on' lets OpenAI roles whose plan limit is reached run on credits through the codex bridge while the balance is above openai_credits_floor (optional, default 0). Per-project override: .orchestrator/policy.json (same keys).",
     "push_to_main": "auto",
     "release": "ask",
     "delete_code": "ask",
     "spend": "ask",
     "deploy": "ask",
     "force_push": "never",
-    "product_questions": "continue_with_assumption"
+    "product_questions": "continue_with_assumption",
+    "openai_credits": "off"
   }
 }

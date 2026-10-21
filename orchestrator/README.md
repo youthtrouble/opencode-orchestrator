@@ -183,6 +183,34 @@ Codex app-server (`account/rateLimits/read`: 5-hour %, weekly %).
   with exit 75 unless `--force`. This is advisory, not a hard quota: bridge checks proceed when
   usage is unknown.
 
+### OpenAI credits
+
+Codex also reports ChatGPT credits (`credits`: `hasCredits`, `unlimited`, `balance`) and banked
+resets (`rateLimitResetCredits.availableCount`, cached as `reset_credits_available`). Codex spends
+credits by itself once the plan limit is reached (ordinary usage refused). Banked resets are
+promotional resets of the usage window, not money; nothing here redeems them. These are the
+ChatGPT-login credits: Platform API credits are billed separately and only to Codex run with an API
+key, which this setup does not use.
+
+- **Shown, not steering:** the Codex line of `usage.mjs` (and so of `watch.mjs` and the injected
+  `<orchestrator_budget>`) ends with the fact when Codex reported credits or banked resets, for
+  example `...; weekly 100% [red] resets ...; credits 215.68 left; plan limit reached; 3 banked
+  resets (window resets, not money).` `usage.mjs --json` adds `openai_credits` (`balance`,
+  `has_credits`, `unlimited`, `plan_limit_reached`, `banked_resets`, or `null`) and
+  `openai_credits_policy` (`mode`, `floor`). `doctor.mjs` adds an `OpenAI credits` row with the
+  policy, and the Work Trains page an `openai credits ...` chip. The window's colour never changes.
+- **Spent only when the owner says so:** policy `openai_credits` is `off` by default: a red Codex
+  window means no OpenAI work, credits or not. With `openai_credits=on`, an OpenAI role whose window
+  is red while Codex refuses ordinary usage may still route to OpenAI when credits are unlimited or
+  the balance is above `openai_credits_floor` (default 0). Such a role is marked `credit_funded`,
+  always runs through `codex-exec` (never natively in opencode), is never chosen to balance headroom,
+  and never uses a frontier tier. `codex-exec` (JS and `orch`) is the only bridge that draws credits:
+  its run record gains `credits: {before, after}` (the balance at the gate and from a fresh reading
+  after the run). `opencode-exec`, `codex_review` and native subagents still refuse a red window.
+  There is no `security-only` mode: delegations carry no security/auth marker for routing to read.
+  A `--force` Codex run past the plan limit spends credits regardless of the policy and records
+  nothing about them.
+
 The usage cache is `~/.local/state/opencode/orchestrator/usage.json` (not retargeted by
 `XDG_STATE_HOME`). A reading is reused for 5 minutes, or until a routing window it holds resets. If
 a refresh fails, the last good reading is kept, marked `last_good_at` and `read_error`, and retried
@@ -213,8 +241,11 @@ every 5 minutes rather than on every read. Both runtimes share this cache.
 | `release`, `delete_code`, `spend`, `deploy` | `ask` | Post a `question` (with `--recommended` and `--blocking`), keep working on independent slices |
 | `force_push` | `never` | Cannot be set to anything else |
 | `product_questions` | `continue_with_assumption` | Record the assumption in `STATE.md` and the report, post the question (with `--recommended` and `--blocking`; an interactive conductor also posts the questions it asks in chat), continue |
+| `openai_credits` | `off` | `on` lets OpenAI roles whose plan limit is reached run on ChatGPT credits through `codex-exec` (see [OpenAI credits](#openai-credits)) |
+| `openai_credits_floor` | (unset: 0) | With `openai_credits=on`, stop drawing credits once the balance is at or below this number |
 
-`policy.mjs set` refuses `key=never` except for `force_push`. `policy.mjs unattended` (also
+`policy.mjs set` refuses `key=never` except for `force_push`, an `openai_credits` other than `off`
+or `on`, and an `openai_credits_floor` that is not a number. `policy.mjs unattended` (also
 `kickoff --unattended`) sets `push_to_main=auto` and `product_questions=continue_with_assumption`.
 
 A headless conductor that reaches a human gate with nothing independent left posts the question and

@@ -69,7 +69,7 @@ func TestRoutingJS(t *testing.T) {
 	reg := loadRegistry(t)
 
 	t.Run("green everywhere: Fable plans, Opus codes, OpenAI reviews (cross-vendor)", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 20, 30), codexUsage(t, 20, 5)), reg, time.Now(), map[string]bool{OpenAI: true})
+		r := ResolveRoles(usageOf(claudeUsage(t, 20, 30), codexUsage(t, 20, 5)), reg, time.Now(), map[string]bool{OpenAI: true}, CreditsPolicy{})
 		expect(t, "planner.model", r.Role("planner").Model, "anthropic/claude-fable-5-1")
 		expect(t, "coder.model", r.Role("coder").Model, "anthropic/claude-opus-5-5")
 		expect(t, "reviewer.vendor", r.Role("reviewer").Vendor, OpenAI)
@@ -79,28 +79,28 @@ func TestRoutingJS(t *testing.T) {
 	})
 
 	t.Run("Fable weekly red: planning leaves Fable; coding follows 5-hour headroom", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 40, 90), codexUsage(t, 20, 5)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 40, 90), codexUsage(t, 20, 5)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "planner.model", r.Role("planner").Model, "anthropic/claude-opus-5-5")
 		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI) // 80 vs 60 headroom
 		expectReason(t, r, `Fable weekly cap is red`)
 	})
 
 	t.Run("Claude session red: everything Anthropic fails over to OpenAI, review flips to Anthropic? no: cross vendor unavailable -> same vendor cheap", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 95, 50), codexUsage(t, 20, 5)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 95, 50), codexUsage(t, 20, 5)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI)
 		expect(t, "reviewer.vendor", r.Role("reviewer").Vendor, OpenAI)
 		expect(t, "reviewer.cross_vendor", *r.Role("reviewer").CrossVendor, false)
 	})
 
 	t.Run("Codex red: OpenAI roles fail over to Anthropic", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 99, 40)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 99, 40)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "reviewer.vendor", r.Role("reviewer").Vendor, Anthropic)
 		expect(t, "reviewer.model", r.Role("reviewer").Model, "anthropic/claude-sonnet-5-5")
 		expect(t, "reviewer.cross_vendor", *r.Role("reviewer").CrossVendor, false)
 	})
 
 	t.Run("both red: paused", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 99, 99), codexUsage(t, 99, 99)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 99, 99), codexUsage(t, 99, 99)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "paused", r.Paused, true)
 	})
 
@@ -114,7 +114,7 @@ func TestRoutingJS(t *testing.T) {
 	})
 
 	t.Run("unknown Claude usage does not crash and routes to OpenAI", func(t *testing.T) {
-		r := ResolveRoles(usageOf(parse(t, `{"ok": false, "error": "no token"}`), codexUsage(t, 10, 1)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(parse(t, `{"ok": false, "error": "no token"}`), codexUsage(t, 10, 1)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI)
 		expectReason(t, r, `Claude usage unknown`)
 	})
@@ -135,14 +135,14 @@ func TestRoutingJS(t *testing.T) {
 	})
 
 	t.Run("frontier tiers need a GREEN frontier posture: amber Fable routes routine planning to Opus", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 30, 70), codexUsage(t, 10, 5)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 30, 70), codexUsage(t, 10, 5)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "planner.model", r.Role("planner").Model, "anthropic/claude-opus-5-5")
 		expectReason(t, r, `Fable weekly cap is amber`)
 	})
 
 	t.Run("5-hour window steers; an amber weekly does not block or demote a vendor", func(t *testing.T) {
 		x := codexUsage(t, 10, 70) // weekly amber
-		r := ResolveRoles(usageOf(claudeUsage(t, 50, 10), x), reg, time.Now(), map[string]bool{OpenAI: true})
+		r := ResolveRoles(usageOf(claudeUsage(t, 50, 10), x), reg, time.Now(), map[string]bool{OpenAI: true}, CreditsPolicy{})
 		expect(t, "coder.vendor", r.Role("coder").Vendor, OpenAI)
 		expect(t, "openai.overall", r.Postures.OpenAI.Overall, Green)
 	})
@@ -156,20 +156,20 @@ func TestRoutingJS(t *testing.T) {
 			{20, 25, Anthropic}, // within margin: registry order
 			{10, 70, Anthropic},
 		} {
-			r := ResolveRoles(usageOf(claudeUsage(t, c.claudeSession, 10), codexUsage(t, c.codexFiveHour, 10)), reg, time.Now(), nil)
+			r := ResolveRoles(usageOf(claudeUsage(t, c.claudeSession, 10), codexUsage(t, c.codexFiveHour, 10)), reg, time.Now(), nil, CreditsPolicy{})
 			expect(t, fmt.Sprintf("coder.vendor (claude %v%%, codex %v%%)", c.claudeSession, c.codexFiveHour), r.Role("coder").Vendor, c.want)
 		}
 	})
 
 	t.Run("a red weekly still blocks the vendor", func(t *testing.T) {
-		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 5, 95)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 5, 95)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "reviewer.vendor", r.Role("reviewer").Vendor, Anthropic)
 	})
 
 	t.Run("a preference naming a tier missing from the registry is skipped, not a crash", func(t *testing.T) {
 		reg := loadRegistry(t)
 		jsjson.Path(reg, "roles", "coder").(*jsjson.Object).Set("prefer", []any{"anthropic.nonexistent", "openai.strong", "anthropic.strong"})
-		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 60, 10)), reg, time.Now(), nil)
+		r := ResolveRoles(usageOf(claudeUsage(t, 10, 10), codexUsage(t, 60, 10)), reg, time.Now(), nil, CreditsPolicy{})
 		expect(t, "coder.vendor", r.Role("coder").Vendor, Anthropic)
 	})
 }
@@ -188,12 +188,14 @@ func TestEffortForRoleWithoutPolicy(t *testing.T) {
 }
 
 // routingCase is one entry of testdata/routing/cases.json "routing"; registry is the case's
-// own registry, nil to use the checkout's models.json.
+// own registry, nil to use the checkout's models.json; credits is its "policy" read as the
+// effective policy (none: off).
 type routingCase struct {
 	name     string
 	usage    *jsjson.Object
 	channels map[string]bool
 	registry *jsjson.Object
+	credits  CreditsPolicy
 }
 
 func loadRoutingCases(t *testing.T) (now time.Time, cases []routingCase) {
@@ -215,7 +217,7 @@ func loadRoutingCases(t *testing.T) (now time.Time, cases []routingCase) {
 		}
 		usage, _ := jsjson.Path(item, "usage").(*jsjson.Object)
 		caseRegistry, _ := jsjson.Path(item, "registry").(*jsjson.Object)
-		cases = append(cases, routingCase{name: jsjson.Path(item, "name").(string), usage: usage, channels: channels, registry: caseRegistry})
+		cases = append(cases, routingCase{name: jsjson.Path(item, "name").(string), usage: usage, channels: channels, registry: caseRegistry, credits: CreditsPolicyOf(jsjson.Path(item, "policy"))})
 	}
 	return time.UnixMilli(nowMs), cases
 }
@@ -231,7 +233,7 @@ func TestGoldens(t *testing.T) {
 			if c.registry != nil {
 				reg = c.registry
 			}
-			resolved := ResolveRoles(c.usage, reg, now, c.channels)
+			resolved := ResolveRoles(c.usage, reg, now, c.channels, c.credits)
 			gotJSON, err := jsjson.MarshalIndent(resolved.JSON(), "  ")
 			if err != nil {
 				t.Fatal(err)
@@ -257,4 +259,30 @@ func TestWorstIgnoresUnknownLevelNames(t *testing.T) {
 	expect(t, "Worst()", Worst(), Green)
 	expect(t, "Worst(amber, bogus)", Worst(Amber, "bogus"), Amber)
 	expect(t, "Worst(unknown, green)", Worst(Unknown, Green), Unknown)
+}
+
+func TestCreditsFactReadsOnlyWhatTheSchemaAllows(t *testing.T) {
+	fact := OpenAICredits(parse(t, `{"ok": true, "ordinary_usage_allowed": false, "reset_credits_available": 1.5, "credits": {"hasCredits": true, "balance": "lots"}}`))
+	got, err := jsjson.Marshal(fact.JSON())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, "fact", string(got), `{"balance":null,"has_credits":true,"unlimited":false,"plan_limit_reached":true,"banked_resets":0}`)
+	expect(t, "text", fact.Text(), "credits available; plan limit reached")
+	if fact := OpenAICredits(parse(t, `{"ok": true, "reset_credits_available": 0, "credits": null}`)); fact != nil {
+		t.Errorf("no credits and no banked resets: %+v, want nil", fact)
+	}
+	expect(t, "one banked reset", OpenAICredits(parse(t, `{"ok": true, "reset_credits_available": 1}`)).Text(), "1 banked reset (window resets, not money)")
+}
+
+// A weekly-capped Codex with an empty 5-hour window leads Claude by 80 points of headroom, which
+// would balance the coder to OpenAI; credits are never spent to balance.
+func TestCreditFundedWorkIsNeverABalanceTarget(t *testing.T) {
+	codex := parse(t, `{"ok": true, "five_hour": {"pct": 0}, "weekly": {"pct": 100}, "rate_limit_reached": "rate_limit_reached",
+		"ordinary_usage_allowed": false, "credits": {"hasCredits": true, "unlimited": false, "balance": "215.68"}}`)
+	r := ResolveRoles(usageOf(claudeUsage(t, 80, 10), codex), loadRegistry(t), time.Now(), nil, CreditsPolicy{On: true})
+	expect(t, "credit funded", r.Postures.OpenAI.CreditFunded, true)
+	expect(t, "coder vendor", r.Role("coder").Vendor, Anthropic)
+	expect(t, "reviewer vendor", r.Role("reviewer").Vendor, OpenAI)
+	expect(t, "reviewer via", r.Role("reviewer").Via, "codex-cli")
 }

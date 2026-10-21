@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/policy"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/registry"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 )
@@ -35,6 +37,9 @@ type Config struct {
 	CodexBin       string
 	CodexTimeout   time.Duration
 	Now            func() time.Time
+	// ProjectRoot is the project whose policy routing reads (openai_credits); "" is the
+	// process's working directory.
+	ProjectRoot string
 }
 
 // NewConfig is the production configuration for the resolved paths.
@@ -242,22 +247,24 @@ func createUniqueTemp(file string) (*os.File, error) {
 	}
 }
 
-// Routing is getRouting's result: the usage document, the registry, the native channels,
-// the resolved roles and the prompt summary of them.
+// Routing is getRouting's result: the usage document, the registry, the native channels, the
+// project's credits policy, the resolved roles and the prompt summary of them.
 type Routing struct {
-	Usage    *jsjson.Object
-	Registry *jsjson.Object
-	Channels Channels
-	Resolved routing.Resolved
-	Prompt   string
+	Usage         *jsjson.Object
+	Registry      *jsjson.Object
+	Channels      Channels
+	CreditsPolicy routing.CreditsPolicy
+	Resolved      routing.Resolved
+	Prompt        string
 }
 
-// JSON returns {usage, registry, channels, resolved, prompt}.
+// JSON returns {usage, registry, channels, creditsPolicy, resolved, prompt}.
 func (r *Routing) JSON() *jsjson.Object {
 	out := jsjson.NewObject()
 	out.Set("usage", r.Usage)
 	out.Set("registry", r.Registry)
 	out.Set("channels", r.Channels.JSON())
+	out.Set("creditsPolicy", r.CreditsPolicy.JSON())
 	out.Set("resolved", r.Resolved.JSON())
 	out.Set("prompt", r.Prompt)
 	return out
@@ -274,7 +281,7 @@ func GetRouting(cfg Config, refresh bool) (*Routing, error) {
 	if err != nil {
 		return nil, err
 	}
-	return resolve(cfg, reg, usage), nil
+	return resolve(cfg, reg, usage)
 }
 
 // ErrNoCache reports that there is no usage cache to route from.
@@ -291,17 +298,35 @@ func CachedRouting(cfg Config) (*Routing, error) {
 	if usage == nil {
 		return nil, ErrNoCache
 	}
-	return resolve(cfg, reg, usage), nil
+	return resolve(cfg, reg, usage)
 }
 
-func resolve(cfg Config, reg, usage *jsjson.Object) *Routing {
-	channels := DetectChannels(cfg.Home)
-	resolved := routing.ResolveRoles(usage, reg, cfg.Now(), channels.ByVendor())
-	return &Routing{
-		Usage:    usage,
-		Registry: reg,
-		Channels: channels,
-		Resolved: resolved,
-		Prompt:   routing.SummarizeForPrompt(resolved, usage),
+func resolve(cfg Config, reg, usage *jsjson.Object) (*Routing, error) {
+	credits, err := creditsPolicy(cfg, reg)
+	if err != nil {
+		return nil, err
 	}
+	channels := DetectChannels(cfg.Home)
+	resolved := routing.ResolveRoles(usage, reg, cfg.Now(), channels.ByVendor(), credits)
+	return &Routing{
+		Usage:         usage,
+		Registry:      reg,
+		Channels:      channels,
+		CreditsPolicy: credits,
+		Resolved:      resolved,
+		Prompt:        routing.SummarizeForPrompt(resolved, usage),
+	}, nil
+}
+
+// creditsPolicy reads the credits setting from the effective policy of cfg.ProjectRoot.
+func creditsPolicy(cfg Config, reg *jsjson.Object) (routing.CreditsPolicy, error) {
+	root := cfg.ProjectRoot
+	if root == "" {
+		root = "."
+	}
+	root, err := nodefs.Resolve(root)
+	if err != nil {
+		return routing.CreditsPolicy{}, err
+	}
+	return routing.CreditsPolicyOf(policy.Effective(jsjson.Path(reg, "autonomy"), policy.File(root))), nil
 }

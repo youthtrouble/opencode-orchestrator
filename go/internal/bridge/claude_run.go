@@ -46,7 +46,7 @@ func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if err != nil {
 		return crash(stderr, err)
 	}
-	decision, err := budget.Gate(cfg, routing.Anthropic, parsed.IsFlag("force"), matchesIgnoringCase(fable, text(model)))
+	decision, err := budget.Gate(cfg, routing.Anthropic, parsed.IsFlag("force"), matchesIgnoringCase(fable, text(model)), false)
 	if err != nil {
 		return crash(stderr, err)
 	}

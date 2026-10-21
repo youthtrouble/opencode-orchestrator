@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readClaudeUsage } from "./claude-usage.mjs";
 import { readCodexAccountAndLimits } from "./codex-appserver.mjs";
-import { resolveRoles, summarizeForPrompt } from "./routing.mjs";
+import { effectivePolicy } from "./policy.mjs";
+import { creditsPolicyOf, resolveRoles, summarizeForPrompt } from "./routing.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(HERE, "..");
@@ -123,10 +124,13 @@ export async function getUsage({ refresh = false, maxAgeMs } = {}) {
   return usage;
 }
 
+// Routing for the project at opts.cwd (default: this process's cwd), whose policy says whether
+// OpenAI work may draw ChatGPT credits.
 export async function getRouting(opts = {}) {
   const registry = loadRegistry();
   const usage = await getUsage(opts);
   const channels = detectChannels();
-  const resolved = resolveRoles(usage, registry, { channels });
-  return { usage, registry, channels, resolved, prompt: summarizeForPrompt(resolved, usage) };
+  const creditsPolicy = creditsPolicyOf(effectivePolicy(path.resolve(opts.cwd ?? process.cwd()), registry));
+  const resolved = resolveRoles(usage, registry, { channels, credits: creditsPolicy });
+  return { usage, registry, channels, creditsPolicy, resolved, prompt: summarizeForPrompt(resolved, usage) };
 }

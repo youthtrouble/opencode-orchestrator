@@ -22,6 +22,8 @@ type RoleEntry struct {
 	Effort  any
 	Context any
 	Note    string
+	// CreditFunded marks an entry whose vendor's red window runs on ChatGPT credits.
+	CreditFunded bool
 	// Balanced marks an entry moved to the other vendor for its clearly larger 5-hour headroom.
 	Balanced bool
 	// CrossVendor is set for the reviewer only: whether it differs from the coder's vendor.
@@ -42,6 +44,9 @@ func (r *RoleEntry) JSON() *jsjson.Object {
 	out.Set("effort", r.Effort)
 	out.Set("context", r.Context)
 	out.Set("note", r.Note)
+	if r.CreditFunded {
+		out.Set("credit_funded", true)
+	}
 	if r.Balanced {
 		out.Set("balanced", true)
 	}
@@ -99,12 +104,14 @@ func (r *Resolved) JSON() *jsjson.Object {
 }
 
 // ResolveRoles picks a model for every role from the registry's preference lists, skipping
-// vendors whose posture is red (for frontier tiers: not green) and balancing the roles in
-// balancedRoles across vendors by 5-hour headroom. channels[vendor] is true when opencode has
-// that vendor natively, which makes the role run "via opencode" instead of the vendor's CLI
-// bridge.
-func ResolveRoles(usage *jsjson.Object, registry *jsjson.Object, now time.Time, channels map[string]bool) Resolved {
+// vendors whose posture is red (for frontier tiers: not green) unless credits fund the work,
+// and balancing the roles in balancedRoles across vendors by 5-hour headroom.
+// channels[vendor] is true when opencode has that vendor natively, which makes the role run
+// "via opencode" instead of the vendor's CLI bridge. credits is the owner's credits setting;
+// its zero value never draws credits.
+func ResolveRoles(usage *jsjson.Object, registry *jsjson.Object, now time.Time, channels map[string]bool, credits CreditsPolicy) Resolved {
 	postures := VendorPostures(usage, registry, now)
+	postures.OpenAI.CreditFunded = creditFunded(&postures.OpenAI, credits)
 	pick := func(role, coderVendor string) *RoleEntry {
 		return pickFor(&postures, registry, role, coderVendor)
 	}
@@ -132,12 +139,14 @@ func ResolveRoles(usage *jsjson.Object, registry *jsjson.Object, now time.Time, 
 			a.Entry.Via = channelOf(a.Entry, channels)
 		}
 	}
-	return Resolved{Postures: postures, Roles: roles, Reasons: reasons(&postures, coder, paused), Paused: paused}
+	return Resolved{Postures: postures, Roles: roles, Reasons: reasons(&postures, coder, paused, credits), Paused: paused}
 }
 
 // channelOf is the execution channel: the native opencode provider or the vendor's CLI bridge.
+// Credit-funded work always takes the bridge, which records the balance before and after the
+// run.
 func channelOf(entry *RoleEntry, channels map[string]bool) string {
-	if channels[entry.Vendor] {
+	if channels[entry.Vendor] && !entry.CreditFunded {
 		return "opencode"
 	}
 	return entry.CLI + "-cli"
@@ -194,6 +203,7 @@ func usableCandidates(postures *Postures, registry *jsjson.Object, role, coderVe
 			continue
 		}
 		if entry := tierEntry(registry, vendor, tier); entry != nil {
+			entry.CreditFunded = postures.ByVendor(vendor).CreditFunded
 			candidates = append(candidates, entry)
 		}
 	}
@@ -201,11 +211,12 @@ func usableCandidates(postures *Postures, registry *jsjson.Object, role, coderVe
 }
 
 // otherVendorCandidate is the first candidate from a vendor other than first's, preferring
-// one of the same tier.
+// one of the same tier. Credits are never spent to balance headroom, so a credit-funded
+// candidate is never the other one.
 func otherVendorCandidate(first *RoleEntry, candidates []*RoleEntry) *RoleEntry {
 	var anyTier *RoleEntry
 	for _, c := range candidates {
-		if c.Vendor == first.Vendor {
+		if c.Vendor == first.Vendor || c.CreditFunded {
 			continue
 		}
 		if c.Tier == first.Tier {
@@ -227,7 +238,8 @@ func headroom(postures *Postures, vendor string) float64 {
 	return *p.Headroom
 }
 
-// usable: a vendor serves a role unless unavailable or red. Frontier tiers draw on weekly
+// usable: a vendor serves a role unless unavailable or red, or red with its work
+// credit-funded, except for frontier tiers. Frontier tiers draw on weekly
 // caps (Fable has its own), so they are used only while the frontier posture is green; an
 // amber one sends routine planning to the strong tier.
 func usable(postures *Postures, vendor string, isFrontier bool) bool {
@@ -238,7 +250,7 @@ func usable(postures *Postures, vendor string, isFrontier bool) bool {
 	if isFrontier {
 		return p.Frontier == Green
 	}
-	return p.Overall != Red
+	return p.Overall != Red || p.CreditFunded
 }
 
 func tierEntry(registry *jsjson.Object, vendor, tier string) *RoleEntry {
@@ -299,7 +311,7 @@ func allPaused(roles []Assignment) bool {
 }
 
 // reasons explains the interesting routing decisions, in the JS order.
-func reasons(postures *Postures, coder *RoleEntry, paused bool) []string {
+func reasons(postures *Postures, coder *RoleEntry, paused bool, credits CreditsPolicy) []string {
 	a, o := &postures.Anthropic, &postures.OpenAI
 	fable, _ := a.Window("fable")
 	var out []string
@@ -319,7 +331,11 @@ func reasons(postures *Postures, coder *RoleEntry, paused bool) []string {
 		out = append(out, "A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.")
 	}
 	if o.Available && o.Overall == Red {
-		out = append(out, "Codex window is red: OpenAI roles failed over to Anthropic.")
+		if o.CreditFunded {
+			out = append(out, "Codex window is red but "+credits.Text()+": OpenAI roles spend ChatGPT credits through the codex bridge ("+OpenAICredits(o.Detail).Text()+").")
+		} else {
+			out = append(out, "Codex window is red: OpenAI roles failed over to Anthropic.")
+		}
 	}
 	if !a.Available {
 		out = append(out, "Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.")

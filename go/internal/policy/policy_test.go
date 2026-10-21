@@ -90,6 +90,24 @@ func TestSetRefusals(t *testing.T) {
 	}
 }
 
+func TestSetRefusesCreditsValuesItDoesNotTake(t *testing.T) {
+	for pair, want := range map[string]string{
+		"openai_credits=security-only": "openai_credits must be off or on",
+		"openai_credits=":              "openai_credits must be off or on",
+		"openai_credits_floor=lots":    "openai_credits_floor must be a number",
+		"openai_credits_floor=1e3":     "openai_credits_floor must be a number",
+	} {
+		var invalid *InvalidValueError
+		if _, err := Set(parse(t, `{}`), []string{pair}); !errors.As(err, &invalid) || err.Error() != want {
+			t.Errorf("%s: %v, want %q", pair, err, want)
+		}
+	}
+	got, err := Set(parse(t, `{}`), []string{"openai_credits=on", "openai_credits_floor=20.5"})
+	if err != nil || marshal(t, got) != `{"openai_credits":"on","openai_credits_floor":"20.5"}` {
+		t.Errorf("valid credits settings: %v, %v", got, err)
+	}
+}
+
 // The TypeError messages Node v26.5.1 prints for a policy.json holding a primitive (C1).
 func TestSetOnPrimitivesFailsWithV8Messages(t *testing.T) {
 	cases := []struct {

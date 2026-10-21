@@ -235,7 +235,7 @@ func TestCachedRoutingNeverCollects(t *testing.T) {
 		t.Errorf("prompt %q", r.Prompt)
 	}
 	keys := r.JSON().Keys()
-	if strings.Join(keys, ",") != "usage,registry,channels,resolved,prompt" {
+	if strings.Join(keys, ",") != "usage,registry,channels,creditsPolicy,resolved,prompt" {
 		t.Errorf("keys %v", keys)
 	}
 }

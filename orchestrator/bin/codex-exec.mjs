@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { parseArgs, readPrompt, writeRunRecord } from "../lib/run-record.mjs";
-import { budgetGate } from "../lib/budget.mjs";
+import { budgetGate, freshCreditsBalance } from "../lib/budget.mjs";
 import { record as incident } from "../lib/incident.mjs";
 import { getUsage } from "../lib/usage.mjs";
 
@@ -33,7 +33,7 @@ const sandbox = opts.sandbox || "workspace-write";
 const timeoutMs = Number(opts["timeout-min"] || 60) * 60 * 1000;
 const log = (s) => { if (!opts.quiet) console.error(`[codex] ${s}`); };
 
-const gate = await budgetGate("openai", { force: Boolean(opts.force), frontier: model.includes("astra") });
+const gate = await budgetGate("openai", { force: Boolean(opts.force), frontier: model.includes("astra"), cwd, mayDrawCredits: true });
 if (!gate.allowed) { try { incident({ component: "bridge", kind: "limit", summary: `${path.basename(process.argv[1])} refused: budget red`, context: { resets_at: gate.resets_at || null }, project: cwd }); } catch { /* ignore */ } console.log(JSON.stringify({ ok: false, reason: "budget_red", ...gate })); process.exit(75); }
 
 const sandboxArgs = sandbox === "workspace-write" ? ["--approve-for-me"] : ["-s", sandbox]; // codex-cli 0.162.1: --approve-for-me means workspace-write and is rejected next to -s
@@ -88,6 +88,7 @@ if (result.ok && result.commands.length === 0 && result.files_changed.length ===
   result.ok = false; result.reason = "tool_host_unavailable"; result.errors.push("codex completed the turn without executing any tool; its message reports tool-host failure (retry after ~60s)");
   try { incident({ component: "bridge", kind: "crash", summary: "codex turn completed with zero tool calls; code-mode host timeout reported in prose", detail: (result.final_message || "").slice(0, 400), context: { model, thread_id: result.thread_id }, project: cwd }); } catch { /* ignore */ }
 }
+if (gate.credit_funded) result.credits = { before: gate.credits_before, after: await freshCreditsBalance() };
 result.record = writeRunRecord(cwd, { ...result, prompt_sha256: (await import("node:crypto")).createHash("sha256").update(prompt).digest("hex"), prompt_head: prompt.slice(0, 400) });
 getUsage({ refresh: true }).catch(() => {});
 log(`done ok=${result.ok} in ${Math.round(result.duration_ms / 1000)}s; record ${result.record}`);
