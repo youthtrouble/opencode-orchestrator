@@ -114,10 +114,16 @@ func TestPostRefusesARecommendationThatCannotStand(t *testing.T) {
 
 func TestReadsAsCompletionClaim(t *testing.T) {
 	for text, want := range map[string]bool{
-		"Done": true, "done.": true, "  Ran the script": true, "COMPLETED": true, "Finished it": true,
-		"created the env": true, "Deployed": true, "rebuilt orch": true, "Installed": true, "I ran it": true,
-		"I've done it": true, "I’ve done it": true, "i have done it": true, "All done!": true, "\ufeffdone": true,
-		"Donate": false, "ranked": false, "Ship it; done later": false, "finiſhed": false, "\u0085done": false, "": false,
+		"Done": true, "done.": true, "Done!": true, "Done—token created": true, "Done: token created": true,
+		"done, all of it": true, "Done it": true, "  Ran the script": true, "ran: setup.sh": true, "Ran\tit": true,
+		"COMPLETED": true, "Finished it": true, "created the env": true, "Deployed successfully": true,
+		"rebuilt, ok": true, "Installed all": true, "I ran it": true, "I did it": true, "I've done it": true,
+		"I’ve done it": true, "i have done it": true, "All done!": true, "\ufeffdone": true,
+		// Openers that start a decision rather than report one, and look-alikes.
+		"Done is better than perfect": false, "Ran Kirsh": false, "Created in-house": false,
+		"Finished goods only": false, "installed base first": false, "Deployed": false, "rebuilt orch": false,
+		"Donate": false, "ranked": false, "Ship it; done later": false, "Yes, done": false, "finiſhed": false,
+		"\u0085done": false, "": false,
 	} {
 		if got := ReadsAsCompletionClaim(text); got != want {
 			t.Errorf("ReadsAsCompletionClaim(%q) = %v, want %v", text, got, want)

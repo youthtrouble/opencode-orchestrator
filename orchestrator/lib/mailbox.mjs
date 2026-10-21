@@ -33,9 +33,20 @@ export class RecommendationRefusedError extends Error {}
 // as on every question posted before it), or an `action` they must perform, whose steps the body carries.
 export const ASKS = ["decision", "action"];
 
-// A recommended answer that opens (after trimming, ASCII case aside) with one of these claims work is done.
+// A recommended answer reads as a completion claim when, trimmed (ASCII case aside), it opens with:
+//   - `completed`, `all done`, `i ran`, `i've done` (either apostrophe), `i have done` or `i did`, as whole words;
+//   - `done` followed by `:` `,` `.` `!` `—`, the end of the text, or a clause cue;
+//   - `ran`, `created`, `installed`, `finished`, `deployed` or `rebuilt` followed by `:` `,` or a clause cue;
+// where a clause cue is spaces or tabs then the word it, the, that, this, successfully, ok or all.
+// So "Done: token created" and "Ran the script" are refused while "Done is better than perfect" and "Ran Kirsh"
+// pass. It is a guard rail for the obvious slip, not a guarantee: "Yes, done" passes. The defences that hold are
+// that an action question offers no Accept and that the conductor verifies what the owner reports.
 // The /i is ASCII-only without the u flag, and \b is an ASCII word boundary; package mailbox in Go matches alike.
-const COMPLETION_CLAIM = /^(?:done|ran|completed|finished|created|deployed|rebuilt|installed|i ran|i['’]ve done|i have done|all done)\b/i;
+const CLAUSE_CUE = String.raw`[ \t]+(?:it|the|that|this|successfully|ok|all)\b`;
+const COMPLETION_CLAIM = new RegExp(
+  String.raw`^(?:(?:completed|all done|i ran|i['’]ve done|i have done|i did)\b|done(?:[:,.!—]|$|${CLAUSE_CUE})|(?:ran|created|installed|finished|deployed|rebuilt)(?:[:,]|${CLAUSE_CUE}))`,
+  "i",
+);
 
 export function readsAsCompletionClaim(recommended) {
   return COMPLETION_CLAIM.test(recommended.trim());
@@ -52,8 +63,10 @@ export function post(projectRoot, { from, to = "*", kind = "note", subject, body
   return msg;
 }
 
-// A decision (the default) is written as before, without `ask`, so absent and "decision" mean one thing.
-function questionFields({ recommended, blocking, ask = "decision" }) {
+// A decision is written as before, without `ask`, so absent, empty and "decision" mean one thing (an empty ask is
+// a decision in Go too, where it is Draft.Ask's zero value).
+function questionFields({ recommended, blocking, ask }) {
+  if (ask === undefined || ask === "") ask = "decision";
   if (!ASKS.includes(ask)) throw new Error(`a question asks for a decision or an action, not ${ask}`);
   if (ask === "action") {
     if (recommended !== undefined) throw new RecommendationRefusedError("an action question takes no recommended answer; its body carries the steps");

@@ -248,13 +248,14 @@ func (h *harness) testMailbox(t *testing.T) {
 		{name: "unknown-command", args: []string{"frob"}},
 		{name: "no-command", args: nil},
 	}
-	// Each completion claim is refused however it is cased and padded; a word that only begins
-	// like one, or a claim later in the text, is not.
+	// Each clear completion claim is refused however it is cased and padded; a decision that opens
+	// with the same word, a word that only begins like one, or a claim later in the text is not.
 	for _, claim := range []string{
-		"Done: token created", "  ran the script", "COMPLETED.", "finished", "Created the env", "deployed it",
-		"Rebuilt orch", "installed", "I ran it", "I've done it", "i’ve done it", "I have done it", "All done!",
-		"\ufeff\u00a0done", "\u0085done", "Done", "ranked first", "Donate", "createdAt is fine", "finiſhed",
-		"Ship it; done later", "I'd ran", "I've  done it",
+		"Done: token created", "  ran the script", "COMPLETED.", "finished it", "Created the env", "deployed successfully",
+		"Rebuilt, ok", "installed: all", "Ran\tit", "I ran it", "I did it", "I've done it", "i’ve done it", "I have done it",
+		"All done!", "\ufeff\u00a0done", "\u0085done", "Done", "Done.", "Done—yes", "Done it", "Done is better than perfect",
+		"Ran Kirsh", "Created in-house", "Finished goods only", "installed base first", "Deployed", "ranked first", "Donate",
+		"createdAt is fine", "finiſhed", "Ship it; done later", "Yes, done", "I'd ran", "I've  done it",
 	} {
 		cases = append(cases, mailboxCase{name: fmt.Sprintf("post/question-claim=%q", claim), args: append(postQuestion, "--recommended", claim)})
 	}

@@ -361,9 +361,9 @@ Work Trains is an optional, private status page for every orchestrator project o
 It shows each project's state (needs you, failed, paused, working, done, idle), its run, open questions, recent
 events, CI and both budgets. The page can do four things and nothing else: **answer** a question (accept the
 recommended reply or type one; it lands as `orch mailbox reply` would, with `"via": "remote"`; an action question
-offers no Accept, shows its steps in full and has an **I've done it** button that sends the typed answer "Owner
-reports done (unverified).", which the conductor verifies), **pause** a project
-(sets the human gate), **resume** it (clears the gate), and **hide** a project from the page (or show it again; this
+offers no Accept, shows its steps in full with a **Copy** button and has an **I've done it** button that sends the
+typed answer "Owner reports done (unverified).", which the conductor verifies), **pause** a project (sets the human
+gate), **resume** it (clears the gate), and **hide** a project from the page (or show it again; this
 never reaches the Mac). An answer, pause or resume can be undone for 10 seconds before the Mac may pick it up. The page
 cannot start runs, run commands, read files or change code. It is macOS-only and self-hosted: you deploy the Worker
 to your own Cloudflare account.

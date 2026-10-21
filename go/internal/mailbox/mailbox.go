@@ -56,10 +56,20 @@ const (
 // Asks are the values `ask` may take, in the order the JS lists them.
 var Asks = []string{AskDecision, AskAction}
 
-// completionClaim matches a recommendation that opens with a report that work is done. Matched
-// against asciiLower(Trim(text)): JS's /i without the u flag folds ASCII letters only, where Go's
-// (?i) would also fold U+017F into "s". \b is an ASCII word boundary in both.
-var completionClaim = regexp.MustCompile(`^(?:done|ran|completed|finished|created|deployed|rebuilt|installed|i ran|i['’]ve done|i have done|all done)\b`)
+// completionClaim is the JS COMPLETION_CLAIM. A recommendation reads as a completion claim when,
+// trimmed (ASCII case aside), it opens with:
+//   - completed, all done, i ran, i've done (either apostrophe), i have done or i did, as whole words;
+//   - done followed by : , . ! —, the end of the text, or a clause cue;
+//   - ran, created, installed, finished, deployed or rebuilt followed by : , or a clause cue;
+//
+// where a clause cue is spaces or tabs then the word it, the, that, this, successfully, ok or all.
+// It is a guard rail for the obvious slip, not a guarantee ("Yes, done" passes); the defences that
+// hold are that an action question offers no Accept and that the conductor verifies the owner's
+// report. Matched against asciiLower(Trim(text)): JS's /i without the u flag folds ASCII letters
+// only, where Go's (?i) would also fold U+017F into "s". \b is an ASCII word boundary in both.
+var completionClaim = regexp.MustCompile(`^(?:(?:completed|all done|i ran|i['’]ve done|i have done|i did)\b|done(?:[:,.!—]|$|` + clauseCue + `)|(?:ran|created|installed|finished|deployed|rebuilt)(?:[:,]|` + clauseCue + `))`)
+
+const clauseCue = `[ \t]+(?:it|the|that|this|successfully|ok|all)\b`
 
 // ReadsAsCompletionClaim is the JS readsAsCompletionClaim: whether a recommended answer reports
 // work as done (incident 2026-10-21: an Accept told the conductor setup scripts had run when

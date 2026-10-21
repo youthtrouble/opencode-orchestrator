@@ -1,7 +1,7 @@
 // The page as rendered: public/app.js against a fake DOM (see support/page.ts).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FakeNode, PAGE_ORIGIN, pageShowing } from "./support/page.ts";
+import { type FakeDocument, FakeNode, PAGE_ORIGIN, pageShowing } from "./support/page.ts";
 
 function summaryWithMacSeen(secondsAgo: number) {
   const now = Date.now();
@@ -178,21 +178,24 @@ const buttons = (card: FakeNode) => card.findAll((node) => node.tagName === "but
 const buttonText = (card: FakeNode) => buttons(card).map((button) => button.textContent);
 
 const STEPS = ["1. Open Settings > Environments.", "2. Add work-trains-production.", "3. Run: orch version", "4.", "5.", "6.", "7. last step"].join("\n");
+const actionQuestion = () => summaryWithQuestion({ body: STEPS, recommended: null, ask: "action" });
 
-test("an action question shows its steps whole and offers \"I've done it\" and Reply, never Accept", async () => {
-  const document = await pageShowing(summaryWithQuestion({ body: STEPS, recommended: null, ask: "action" }));
+/** An `interact` for pageShowing that clicks the question card's button labelled `label`. */
+const clicking = (label: string) => (document: FakeDocument) =>
+  buttons(document.getElementById("questions"))
+    .find((button) => button.textContent === label)!
+    .dispatch("click");
+
+test("an action question shows its steps whole and offers Copy, \"I've done it\" and Reply, never Accept", async () => {
+  const document = await pageShowing(actionQuestion());
   const card = document.getElementById("questions");
-  assert.deepEqual(buttonText(card), ["I've done it", "Reply"]);
+  assert.deepEqual(buttonText(card), ["Copy", "I've done it", "Reply"]);
   assert.ok(card.textContent.includes(STEPS), "the steps are shown in full, not clamped");
   assert.doesNotMatch(card.textContent, /Recommended|Show more/);
 });
 
 test("\"I've done it\" sends the typed answer \"Owner reports done (unverified).\" through the answer route", async () => {
-  const document = await pageShowing(summaryWithQuestion({ body: STEPS, recommended: null, ask: "action" }), PAGE_ORIGIN, (page) =>
-    buttons(page.getElementById("questions"))
-      .find((button) => button.textContent === "I've done it")!
-      .dispatch("click"),
-  );
+  const document = await pageShowing(actionQuestion(), PAGE_ORIGIN, clicking("I've done it"));
   const [sent] = document.requests.filter((request) => request.method === "POST");
   assert.equal(sent.path, "/api/v1/questions/q-1/answer");
   const { client_key, ...answer } = sent.body as Record<string, unknown>;
@@ -205,4 +208,19 @@ test("a decision question keeps its Accept and recommendation", async () => {
   const card = document.getElementById("questions");
   assert.deepEqual(buttonText(card), ["Accept", "Type something else"]);
   assert.match(card.textContent, /RecommendedYes, behind a flag\./);
+});
+
+test("Copy puts an action's steps on the clipboard and says Copied", async () => {
+  const document = await pageShowing(actionQuestion(), PAGE_ORIGIN, clicking("Copy"));
+  assert.deepEqual(document.clipboard.written, [STEPS]);
+  assert.match(document.getElementById("questions").textContent, /Copied/);
+});
+
+test("Copy says it failed when the clipboard refuses, and copies nothing", async () => {
+  const document = await pageShowing(actionQuestion(), PAGE_ORIGIN, (page) => {
+    page.clipboard.refuses = true;
+    clicking("Copy")(page);
+  });
+  assert.deepEqual(document.clipboard.written, []);
+  assert.match(document.getElementById("questions").textContent, /Copy failed: select the steps and copy them/);
 });

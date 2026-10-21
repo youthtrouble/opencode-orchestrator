@@ -1,7 +1,7 @@
-// The Work Trains page (public/app.js) run once against a fake DOM and a fake fetch that serves one
-// summary and records every request. The fake follows the DOM where the page relies on it: append and
-// replaceChildren turn any argument that is not a node into text with String(), so a stray null shows as
-// "null", as in a browser.
+// The Work Trains page (public/app.js) run once against a fake DOM, a fake fetch that serves one summary
+// and records every request, and a fake clipboard that records every write. The fake follows the DOM
+// where the page relies on it: append and replaceChildren turn any argument that is not a node into text
+// with String(), so a stray null shows as "null", as in a browser.
 
 type Child = FakeNode | FakeText;
 
@@ -74,9 +74,21 @@ export interface SentRequest {
   body: unknown;
 }
 
+/** navigator.clipboard: keeps what the page wrote, or refuses as a browser does without permission. */
+export class FakeClipboard {
+  readonly written: string[] = [];
+  refuses = false;
+
+  async writeText(text: string) {
+    if (this.refuses) throw new DOMException("Write permission denied.", "NotAllowedError");
+    this.written.push(text);
+  }
+}
+
 export class FakeDocument {
   readonly activeElement = null;
   readonly requests: SentRequest[] = [];
+  readonly clipboard = new FakeClipboard();
   // Hidden, so the page schedules no next poll and the test process can exit.
   readonly visibilityState = "hidden";
   private readonly byId = new Map<string, FakeNode>();
@@ -129,6 +141,9 @@ export async function pageShowing(
     },
     setInterval: () => 0,
   });
+  // Node defines navigator as a getter without a setter, so it is redefined rather than assigned.
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard: document.clipboard }, configurable: true });
   try {
     // A distinct URL is a distinct module instance, so each load starts from an empty page.
     await import(`../../public/app.js?load=${++loads}`);
@@ -137,6 +152,8 @@ export async function pageShowing(
     await settle();
   } finally {
     Object.assign(globals, saved);
+    if (savedNavigator) Object.defineProperty(globalThis, "navigator", savedNavigator);
+    else delete globals.navigator;
   }
   return document;
 }

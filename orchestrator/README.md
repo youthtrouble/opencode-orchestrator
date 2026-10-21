@@ -368,9 +368,15 @@ refused with a usage line (exit 2, nothing written). `lib/mailbox.mjs` `post()` 
 `ask`) or `action`, for steps the human must do. An action question takes no `--recommended` (the
 body carries the steps) and is written with `"blocking"` then `"ask": "action"` after `"thread"`;
 Work Trains offers it no Accept, only an "I've done it" button and Reply. A recommended answer that
-opens, after trimming and ASCII case aside, with `done`, `ran`, `completed`, `finished`, `created`,
-`deployed`, `rebuilt`, `installed`, `I ran`, `I've done`, `I have done` or `all done` reads as a report
-that work is done and is refused: recommended answers are for decisions. Each of these, a `--ask`
+reads as a completion claim is refused: recommended answers are for decisions. After trimming and ASCII
+case aside, a claim opens with `completed`, `all done`, `I ran`, `I've done` (either apostrophe), `I have
+done` or `I did` as whole words; `done` followed by `:` `,` `.` `!` `—` or the end of the text or a clause
+cue; or `ran`, `created`, `installed`, `finished`, `deployed` or `rebuilt` followed by `:` `,` or a clause
+cue, where a clause cue is spaces or tabs then `it`, `the`, `that`, `this`, `successfully`, `ok` or `all`.
+So "Done: token created" and "Ran the script" are refused, and "Done is better than perfect" and "Ran
+Kirsh" pass. The lint is a guard rail, not a guarantee ("Yes, done" passes); what holds is that an action
+question offers no Accept and that the conductor verifies a reply. `post()` treats an empty `ask` as a
+decision, as `orch` does. Each of these, a `--ask`
 other than `decision` or `action`, and `--ask` on another kind is a usage line (exit 2, nothing
 written); `post()` throws `RecommendationRefusedError` for the first two. A reply to an action
 question is a claim the conductor verifies before relying on it. `inbox` ends the header of a blocking

@@ -310,10 +310,10 @@ function questionCard({ projectName, question }) {
   );
 }
 
-/** The body, clamped with Show more; an action's steps are shown whole, so each command can be copied. */
+/** The body, clamped with Show more; an action's steps are shown whole, with a button that copies them. */
 function questionBody(question) {
   if (question.body === "") return null;
-  if (model.isAction(question)) return el("div", { class: "body" }, el("p", {}, question.body));
+  if (model.isAction(question)) return el("div", { class: "body" }, el("p", {}, question.body), copyStepsButton(question));
   const { preview, clamped } = model.clampBody(question.body);
   const expanded = page.expandedBodies.has(question.id);
   return el(
@@ -363,6 +363,26 @@ function answerControls(question) {
     ),
     replying ? replyForm(question.id, replyId, busy) : null,
   );
+}
+
+/** Copy, then a note that says whether the steps reached the clipboard. */
+function copyStepsButton(question) {
+  const key = `copy:${question.id}`;
+  return [
+    el("button", { type: "button", class: "link", "data-focus": key, onclick: () => copyText(key, question.body) }, "Copy"),
+    noteLine(key),
+  ];
+}
+
+/** navigator.clipboard is missing outside a secure context and may refuse permission; both say so. */
+async function copyText(key, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    noteOn(key, "Copied");
+  } catch {
+    noteOn(key, "Copy failed: select the steps and copy them");
+  }
+  render();
 }
 
 /** Accept for a decision with a recommendation, "I've done it" for an action, else nothing. */

@@ -188,14 +188,22 @@ test("post() refuses an action with a recommendation and a recommendation that r
   assert.equal(fs.existsSync(messagesFile(project)), false);
 });
 
-// The incident's recommendation and each listed opener are claims; words that only begin like one are not.
-test("readsAsCompletionClaim matches the openers that report work done, ASCII case and padding aside", () => {
-  const claims = ["Done", "done.", " Ran it", "COMPLETED", "finished", "Created the env", "deployed", "Rebuilt orch", "installed it",
-    "I ran it", "I've done it", "I’ve done it", "I have done it", "all done", "\ufeffDone"];
+// Clear completion claims are refused; the reviewer's false positives, which open a decision with the same words, pass.
+test("readsAsCompletionClaim refuses clear completion claims and passes decisions that share their first word", () => {
+  const claims = ["Done", "done.", "Done!", "Done—token created", "Done: token created", "done, all of it", "Done it", " Ran the script",
+    "ran: setup.sh", "Ran\tit", "COMPLETED", "Finished it", "Created the env", "Deployed successfully", "rebuilt, ok", "Installed all",
+    "I ran it", "I did it", "I've done it", "I’ve done it", "I have done it", "all done", "\ufeffDone"];
   for (const text of claims) assert.equal(readsAsCompletionClaim(text), true, text);
-  for (const text of ["Donate", "ranked", "Ship it; done later", "finiſhed", "Create the env first", ""]) {
-    assert.equal(readsAsCompletionClaim(text), false, text);
-  }
+  const decisions = ["Done is better than perfect", "Ran Kirsh", "Created in-house", "Finished goods only", "installed base first",
+    "Deployed", "Rebuilt orch", "Donate", "ranked", "Ship it; done later", "Yes, done", "finiſhed", "Create the env first", ""];
+  for (const text of decisions) assert.equal(readsAsCompletionClaim(text), false, text);
+});
+
+test("post() treats an empty ask as a decision, as Go does", (t) => {
+  const project = tempProject(t);
+  const msg = post(project, { from: "conductor", kind: "question", subject: "ship?", recommended: "Yes", ask: "" });
+  assert.equal(msg.recommended, "Yes");
+  assert.equal("ask" in msg, false);
 });
 
 test("mailbox inbox marks blocking questions and shows the recommended answer; older questions print as before", (t) => {
