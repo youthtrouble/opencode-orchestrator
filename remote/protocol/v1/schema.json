@@ -1013,7 +1013,7 @@
       }
     },
     "Error": {
-      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version. expected_issuer is the Access team domain the Worker expects, sent with wrong_issuer. reason is the code of the check that failed, sent with forbidden (such as browser_write_foreign_origin, or jwt_invalid:ERR_JWT_EXPIRED with the JWT library's code); never an email or a token.",
+      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version. expected_issuer is the Access team domain the Worker expects, sent with wrong_issuer. reason is the code of the check that failed, sent with forbidden on browser routes only (such as browser_write_foreign_origin, or jwt_invalid:ERR_JWT_EXPIRED with the JWT library's code); never an email or a token. A machine route's forbidden has no reason, the same body for every failure.",
       "type": "object",
       "additionalProperties": false,
       "required": [

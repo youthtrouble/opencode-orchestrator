@@ -57,12 +57,18 @@ const machineCall = async (jwt: string, authorization?: string) =>
 const browserWrite = async (headers: Record<string, string>, body: BodyInit = "{}") =>
   call("/api/v1/echo", { method: "POST", jwt: await browserJwt(), headers, body });
 
-/** A 403 whose body names the check that failed by its code, and nothing else. */
+/** A browser-class 403, whose body names the check that failed by its code, and nothing else. */
 function assertForbidden(result: { status: number; body: string }, reason: string) {
   assert.equal(result.status, 403);
   const body = JSON.parse(result.body);
   assert.deepEqual(body, { error: "forbidden", message: "forbidden", reason });
   assert.deepEqual(validate("Error", body), { ok: true });
+}
+
+/** A machine-class 403: the same body for every failure, so a caller cannot learn which check failed. */
+function assertOpaqueForbidden(result: { status: number; body: string }) {
+  assert.equal(result.status, 403);
+  assert.deepEqual(JSON.parse(result.body), { error: "forbidden", message: "forbidden" });
 }
 
 test("a valid owner JWT reaches a browser route", async () => {
@@ -145,9 +151,11 @@ async function hs256WithPublicKeyAsSecret() {
   return accessJwt({ alg: "HS256", key: spki, payload: ownerClaims });
 }
 
-// Each case's 403 body and log line name the check that failed by the same code, which proves the case
-// fails for the cause it names; the page turns the code into what to do about it.
-const forbiddenCases: Array<[string, string, () => Promise<{ status: number; body: string }>]> = [
+type ForbiddenCase = [name: string, reason: string, run: () => Promise<{ status: number; body: string }>];
+
+// On a browser route the 403 body and the log line name the check that failed by the same code, which
+// proves the case fails for the cause it names; the page turns the code into what to do about it.
+const browserForbiddenCases: ForbiddenCase[] = [
   ["no JWT header", "jwt_missing", () => ping()],
   ["a garbage JWT", "jwt_invalid:ERR_JWS_INVALID", () => ping("not.a.jwt")],
   ["HS256 with the public key as secret", "jwt_invalid:ERR_JOSE_ALG_NOT_ALLOWED", async () =>
@@ -164,6 +172,20 @@ const forbiddenCases: Array<[string, string, () => Promise<{ status: number; bod
   ["another email", "browser_email_mismatch", async () => ping(await browserJwt({ email: "someone@example.com" }))],
   ["a non-app token type", "browser_not_app_token", async () => ping(await browserJwt({ type: "org" }))],
   ["a service token on a browser route", "browser_email_mismatch", async () => ping(await serviceJwt())],
+  ["a browser write that is not JSON", "browser_write_not_json", () =>
+    browserWrite({ "Content-Type": "text/plain", Origin: ORIGIN })],
+  ["a browser write from a foreign origin", "browser_write_foreign_origin", () =>
+    browserWrite({ ...json, Origin: "https://evil.example.com" })],
+  ["a browser write without an Origin", "browser_write_foreign_origin", () => browserWrite(json)],
+];
+
+// On a machine route only the log line names the check: the body is the same for every case.
+const machineForbiddenCases: ForbiddenCase[] = [
+  ["no JWT on a machine route", "jwt_missing", () => call("/api/v1/machine/ping", { method: "POST" })],
+  ["an expired service JWT", "jwt_invalid:ERR_JWT_EXPIRED", async () =>
+    machineCall(await serviceJwt({ exp: NOW_SECONDS - 60 }), bearer)],
+  ["a service JWT for another audience", CLAIMS_FAILED, async () =>
+    machineCall(await serviceJwt({ aud: ["other-audience"] }), bearer)],
   ["a browser JWT on a machine route", "machine_has_email", async () => machineCall(await browserJwt(), bearer)],
   ["another service token's client id", "machine_client_mismatch", async () =>
     machineCall(await serviceJwt({ common_name: "other.access" }), bearer)],
@@ -173,20 +195,20 @@ const forbiddenCases: Array<[string, string, () => Promise<{ status: number; bod
     machineCall(await serviceJwt(), `${bearer}${machineToken}`)],
   ["a non-bearer Authorization", "machine_token_missing", async () =>
     machineCall(await serviceJwt(), `Basic ${machineToken}`)],
-  ["a browser write that is not JSON", "browser_write_not_json", () =>
-    browserWrite({ "Content-Type": "text/plain", Origin: ORIGIN })],
-  ["a browser write from a foreign origin", "browser_write_foreign_origin", () =>
-    browserWrite({ ...json, Origin: "https://evil.example.com" })],
-  ["a browser write without an Origin", "browser_write_foreign_origin", () => browserWrite(json)],
 ];
 
-for (const [name, reason, run] of forbiddenCases) {
-  test(`403 forbidden: ${name}`, async (t) => {
-    const logged: string[] = [];
-    t.mock.method(console, "log", (line: string) => logged.push(line));
-    assertForbidden(await run(), reason);
-    assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [reason]);
-  });
+for (const [routeClass, cases, assertBody] of [
+  ["browser", browserForbiddenCases, assertForbidden],
+  ["machine", machineForbiddenCases, assertOpaqueForbidden],
+] as const) {
+  for (const [name, reason, run] of cases) {
+    test(`403 forbidden on a ${routeClass} route: ${name}`, async (t) => {
+      const logged: string[] = [];
+      t.mock.method(console, "log", (line: string) => logged.push(line));
+      assertBody(await run(), reason);
+      assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [reason]);
+    });
+  }
 }
 
 const ANOTHER_TEAM = "https://other-example.cloudflareaccess.com";
@@ -242,7 +264,9 @@ test("a correctly signed JWT without exp is refused before any handler or asset"
   ];
   for (const request of requests) {
     const response = await spyWorker.fetch!(request as never, env, {} as never);
-    assertForbidden({ status: response.status, body: await response.text() }, CLAIMS_FAILED);
+    const result = { status: response.status, body: await response.text() };
+    if (new URL(request.url).pathname.startsWith("/api/v1/machine/")) assertOpaqueForbidden(result);
+    else assertForbidden(result, CLAIMS_FAILED);
   }
   assert.deepEqual(reached, []);
   assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [CLAIMS_FAILED, CLAIMS_FAILED, CLAIMS_FAILED]);

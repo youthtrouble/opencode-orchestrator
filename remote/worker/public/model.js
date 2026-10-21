@@ -159,7 +159,7 @@ export function replyCounter(text) {
  */
 export function failureMessage({ status, opaqueRedirect, error }) {
   if (opaqueRedirect || status === 401) return SIGNED_OUT;
-  if (error?.error === "forbidden") return forbiddenMessage(String(error.reason));
+  if (error?.error === "forbidden") return forbiddenMessage(error.reason);
   return error?.message || (status === 0 ? "Cannot reach the server" : `Request failed (${status})`);
 }
 
@@ -176,6 +176,7 @@ const FORBIDDEN_MESSAGES = {
 };
 
 function forbiddenMessage(reason) {
+  if (!reason) return "Not allowed";
   if (Object.hasOwn(FORBIDDEN_MESSAGES, reason)) return FORBIDDEN_MESSAGES[reason];
   if (reason.startsWith("jwt_invalid:")) return "Access sign-in doesn't match ACCESS_AUD or ACCESS_TEAM_DOMAIN";
   return `Not allowed (${reason})`;

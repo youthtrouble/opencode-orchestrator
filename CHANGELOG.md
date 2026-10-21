@@ -11,11 +11,12 @@
   than let it post the redacted copy. **Redaction** keeps API routes (`/v1/...`, `/api/...`, quoted or not) and
   still removes absolute paths and `~/` paths. **Old hostname:** a GET of the page or an asset on any host other
   than `PUBLIC_ORIGIN`'s gets a 302 to the same path and query there (after the Access gate); API and machine
-  routes still answer on every host. **Error messages:** a 403 body carries `reason`, the code of the failed check
-  (new optional field of the protocol's `Error`; never an email or a token), and the summary carries
+  routes still answer on every host. **Error messages:** a browser-route 403 body carries `reason`, the code of the failed check
+  (new optional field of the protocol's `Error`; never an email or a token; machine routes keep one opaque body for
+  every failure), and the summary carries
   `public_origin` (new optional field). The page maps the codes: a write from another address says "This address
-  can't send answers" and the banner links to `PUBLIC_ORIGIN`; an unlisted email says so; only a lapsed sign-in
-  says "Signed out. Reload to sign in". Rollout: rebuild `orch` first, then deploy the Worker; in the other order,
+  can't send answers" and the banner links to `PUBLIC_ORIGIN`; an unlisted email says so; a 403 without a reason says "Not
+  allowed"; only a lapsed sign-in says "Signed out. Reload to sign in". Rollout: rebuild `orch` first, then deploy the Worker; in the other order,
   accepts tapped in between are refused, not misapplied.
 - remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
   (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills

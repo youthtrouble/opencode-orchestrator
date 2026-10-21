@@ -50,7 +50,10 @@ var credentialSubstitutions = []substitution{
 // its first component is "api" or a version (v1, v2), which no filesystem root is named, and every
 // component is URL-safe and starts with no dot, so neither ".." nor a hidden file passes. It names
 // an endpoint, not anything on the owner's disk, and the owner must be able to read the question
-// and recommendation they answer, so it stays, quoted or not.
+// and recommendation they answer, so it stays, quoted or not. Accepted trade-off: the shape cannot
+// tell a route from a real top-level directory literally named /api or /v2, so such a path
+// (/api/clients/acme) is kept too. No macOS root is named so, and a known-route allowlist would
+// redact every route the orch does not know yet.
 var apiRoute = regexp.MustCompile(`^/(?:api|v[0-9]+)(?:/[A-Za-z0-9_~%:@-][A-Za-z0-9._~%:@-]*)*/?$`)
 
 // quotedPaths match a whole quoted span ("…", '…' or `…`) that opens like a path: Unix (/, ~/,

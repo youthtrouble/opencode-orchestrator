@@ -378,7 +378,9 @@ newest 20 open questions to you (body and recommended answer); the last 10 mailb
 and subject (never bodies); with `ci` on, the latest GitHub Actions run of up to 5 workflows (repository
 `owner/name`, workflow, status, link). Plus this Mac's random machine id, the cached budget postures and the `orch` version. Every free-text field
 is scrubbed of credentials, absolute paths, your home directory, emails and tokens, then cut to the schema's limits;
-an API route such as `/v1/installations/me` or `/api/v1/summary` is not a path and stays readable. Accept on the
+an API route such as `/v1/installations/me` or `/api/v1/summary` is not a path and stays readable. The trade-off:
+any absolute path whose first directory is literally `api` or `v` plus digits (`/api/...`, `/v2/...`) is kept too,
+so a real top-level directory of that name on the Mac would be readable on the Worker. Accept on the
 page sends only "accept" for that question: the Mac replies with the recommendation as your mailbox holds it, never
 the scrubbed copy the page shows.
 **Never sent:** paths, `STATE.md`, plans, briefs, prompts, file contents, environment, run records, transcripts or
@@ -440,7 +442,7 @@ Keychain items, the last push, pull and error, and the projects found. The sync 
 - *The page shows 403, or keeps returning to the Access login.* The email you sign in with must be in the Access
   policy and in the `OWNER_EMAIL` secret (a comma-separated list when you sign in with more than one address), and
   `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and `PUBLIC_ORIGIN` must match the application exactly. A 503 means a Worker
-  secret is missing. The page names the cause from the 403's `reason` code: "Signed in as an address that isn't an
+  secret is missing. The page names the cause from the 403's `reason` code (a 403 without one reads "Not allowed"): "Signed in as an address that isn't an
   owner" (`OWNER_EMAIL`), "Access sign-in doesn't match ACCESS_AUD or ACCESS_TEAM_DOMAIN", "This address can't send
   answers" (a page open on an address other than `PUBLIC_ORIGIN`; the banner links to it). Only a lapsed sign-in
   says "Signed out. Reload to sign in".

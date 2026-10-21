@@ -29,7 +29,7 @@ export function createWorker(deps: WorkerDeps): ExportedHandler<WorkerEnv> {
       try {
         return withSecurityHeaders(await gateThenDispatch(request, env, deps, path, waitUntil));
       } catch (error) {
-        return withSecurityHeaders(toResponse(error, path));
+        return withSecurityHeaders(toResponse(error, path, routeClassFor(path)));
       }
     },
   };

@@ -167,9 +167,10 @@ test("a 403 says what is wrong by its reason code, never asking for a sign-in th
     forbidden("jwt_invalid:ERR_JWT_CLAIM_VALIDATION_FAILED"),
     "Access sign-in doesn't match ACCESS_AUD or ACCESS_TEAM_DOMAIN",
   );
-  assert.equal(forbidden("machine_has_email"), "Not allowed (machine_has_email)");
+  assert.equal(forbidden("browser_not_app_token"), "Not allowed (browser_not_app_token)");
   assert.equal(forbidden("constructor"), "Not allowed (constructor)");
-  for (const reason of ["browser_write_foreign_origin", "browser_email_mismatch", "jwt_missing", "constructor"]) {
+  assert.equal(forbidden(undefined), "Not allowed", "a 403 without a reason, such as a machine route's");
+  for (const reason of ["browser_write_foreign_origin", "browser_email_mismatch", "jwt_missing", "constructor", undefined]) {
     assert.doesNotMatch(forbidden(reason), /sign in/i, reason);
   }
 });

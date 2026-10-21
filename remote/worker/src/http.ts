@@ -1,4 +1,5 @@
 // The Worker's single error boundary: handlers throw HttpError, toResponse turns it into JSON.
+import type { RouteClass } from "./routes.ts";
 
 export class HttpError extends Error {
   readonly status: number;
@@ -13,9 +14,12 @@ export class HttpError extends Error {
 }
 
 /**
- * Every authentication or authorisation failure. The body carries `reason`, the code of the check that
- * failed (such as `browser_write_foreign_origin`), so the page can say what to do about it. A reason is
- * a fixed code, never an email, a token or anything else from the request.
+ * Every authentication or authorisation failure. `reason` is the code of the check that failed (such as
+ * `browser_write_foreign_origin`), a fixed code, never an email, a token or anything else from the
+ * request. The Worker's log always carries it. A browser-class 403 also sends it, so the page can say
+ * what to do; a machine-class 403 keeps the same opaque body for every failure, because the Mac has no
+ * page to explain it on and a caller past a missing or misconfigured Access must not learn which layer
+ * (JWT claims, client id, bearer token) refused it.
  */
 export class ForbiddenError extends HttpError {
   readonly reason: string;
@@ -80,7 +84,7 @@ export function emptyResponse(status: number): Response {
   return new Response(null, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export function toResponse(error: unknown, path: string): Response {
+export function toResponse(error: unknown, path: string, routeClass: RouteClass): Response {
   if (error instanceof ForbiddenError) {
     console.log(JSON.stringify({ auth: error.reason, path }));
   }
@@ -92,7 +96,7 @@ export function toResponse(error: unknown, path: string): Response {
     const body = { error: error.code, message: error.message, expected_issuer: error.expectedIssuer };
     return jsonResponse(error.status, body);
   }
-  if (error instanceof ForbiddenError) {
+  if (error instanceof ForbiddenError && routeClass === "browser") {
     return jsonResponse(error.status, { error: error.code, message: error.message, reason: error.reason });
   }
   if (error instanceof UnsupportedVersionError) {

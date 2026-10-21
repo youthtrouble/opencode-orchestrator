@@ -184,8 +184,9 @@ service token of that same team for the Mac). Then `wrangler deploy` is not need
 In the Worker's logs these refusals are lines with `"auth":"jwt_wrong_issuer"`. They mean this misconfiguration,
 not an attack: Access in front of the hostname issues the token, so a token from another team means that team's
 application protects the hostname. Only an `iss` shaped like a team domain gets `wrong_issuer`; any other bad
-token is refused with `forbidden`, whose `reason` is the code of the failed check (`jwt_invalid:<jose code>`,
-`browser_email_mismatch`, `browser_write_foreign_origin`, ...), never an email or a token.
+token is refused with `forbidden`. On a page or browser API route its `reason` is the code of the failed check
+(`jwt_invalid:<jose code>`, `browser_email_mismatch`, `browser_write_foreign_origin`, ...), never an email or a
+token; on a machine route the body is the same for every failure, so read the Worker's log for the code.
 
 ## Reference
 
