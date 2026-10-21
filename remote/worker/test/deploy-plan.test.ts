@@ -99,6 +99,19 @@ test("a push that changed the Worker or the protocol deploys", (t) => {
   assert.equal(plan(added, "workflow_run").outputs.skip, "false");
 });
 
+test("a push older than the live commit is skipped, so out-of-order runs never deploy backwards", (t) => {
+  const { deployed, commit, plan } = scratchRepo(t);
+  const newer = commit({ "remote/worker/src/index.ts": "v2" });
+  const newest = commit({ "remote/worker/src/index.ts": "v3" });
+  for (const target of [newer, deployed]) {
+    const result = plan(target, "workflow_run", { STUB_MESSAGE: newest });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(result.outputs, { previous_version: VERSION, deployed_sha: newest, skip: "true" });
+    assert.match(result.stdout, /^::notice::[0-9a-f]{40} is already part of the live/m);
+  }
+  assert.equal(plan(newer, "workflow_dispatch", { STUB_MESSAGE: newest }).outputs.skip, "false", "a manual rollback still deploys");
+});
+
 test("a manual run deploys even when nothing changed, to redeploy or roll back", (t) => {
   const { deployed, plan } = scratchRepo(t);
   const result = plan(deployed, "workflow_dispatch");

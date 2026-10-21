@@ -66,9 +66,9 @@ cannot ask you in a chat, so it uses the mailbox: a shared inbox file in your pr
 and for each other, and where your answers go. Questions come in two kinds:
 
 - **Blocking:** releases, deleting code, spending money, deploying. The conductor asks, keeps
-  working on anything independent, and stops at a human gate only when nothing else is left. A
-  deploy that a configured workflow runs on its own after a push to main (such as Work Trains'
-  `remote-deploy.yml`) is not asked about: the conductor pushes and watches that run.
+  working on anything independent, and stops at a human gate only when nothing else is left. The
+  one exception is this repository's Work Trains deploy: once you configure `remote-deploy.yml`,
+  the conductor pushes and watches that run instead of asking.
 - **Continuing with an assumption:** product questions. The conductor writes its assumption into
   `STATE.md` and the report, asks, and carries on. Answer when you can; it reads your reply on its
   next turn.

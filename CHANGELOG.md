@@ -22,19 +22,23 @@
   Remote workflow passes on a push to main, and on demand with an optional `sha` (redeploy or roll back). It reads
   everything from a GitHub environment, `work-trains-production` (secrets `CLOUDFLARE_API_TOKEN` and
   `CLOUDFLARE_ACCOUNT_ID`; variables `WORK_TRAINS_D1_ID`, `WORK_TRAINS_HOSTNAME` and optional
-  `WORK_TRAINS_WORKERS_DEV`). A repository without that environment skips with a notice, and an incomplete one
-  fails. A run renders `wrangler.deploy.jsonc` from the example (`remote/worker/scripts/render-deploy-config.ts`),
-  and skips when nothing under `remote/worker/` or `remote/protocol/` changed since the live commit. Each deploy
+  `WORK_TRAINS_WORKERS_DEV`). A push in a repository without that environment skips with a notice; a manual run
+  there, or an incomplete environment, fails. The environment must allow deploys from `main` only. A run renders `wrangler.deploy.jsonc` from the example (`remote/worker/scripts/render-deploy-config.ts`),
+  and skips when nothing under `remote/worker/` or `remote/protocol/` changed since the live commit, or when the
+  live commit already contains the pushed one. Each deploy
   records its commit as the version message, which is how the next run finds the live commit. The run refuses
   an edited migration (`scripts/deploy-plan.sh`), applies D1 migrations, deploys, and runs a credential-free
   smoke check (`scripts/smoke-check.ts`): the page must redirect to Access, and a machine route must refuse. If
-  the smoke check fails, the run rolls back to the previous version and fails. Worker secrets, Access and DNS
-  stay manual. `wrangler` 4.118.0 is now a devDependency of `remote/worker`, pinned by its lockfile, and the
-  e2e CI job uses it instead of `npm i -g`. Token scope, environment setup and rollback are in
+  the smoke check, or reading the live version after the deploy, fails, the run rolls back to the previous
+  version and fails. The smoke check proves the deploy completed and Access still fronts the hostname, not that
+  the Worker is healthy: Access answers before the Worker runs, so a crashing Worker passes and is rolled back by
+  hand. Only the steps that run wrangler against the account see the Cloudflare credential. Worker secrets,
+  Access and DNS stay manual. `wrangler` 4.118.0 is now a devDependency of `remote/worker`, pinned by its
+  lockfile, and the e2e CI job uses it instead of `npm i -g`. Token scope, environment setup and rollback are in
   [remote/README.md](remote/README.md#deploy-from-github-actions). The conductor contract (AGENTS.md and
   `claude/agents/conductor.md`, "Keeping the live checkout current", now covered by the word-identical test) no
-  longer counts a deploy that a configured workflow runs after a push as an `ask` item: conductors push and watch
-  the run.
+  longer counts the deploy this repository's `remote-deploy.yml` runs after a push as an `ask` item, once its
+  environment is configured: conductors push and watch the run. No other workflow inherits the exception.
 - remote: fixed the Work Trains header reading "Mac seen 24 s agonull" when the Mac is not stale
   (WT21b). The DOM's `replaceChildren` renders a `null` child as the text "null"; the page now fills
   every node through one helper that drops absent children the way `el` does. A new page test,

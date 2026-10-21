@@ -2,8 +2,8 @@ name: Remote deploy
 
 # Deploys the Work Trains Worker after the Remote workflow passes on a push to main, or on demand (redeploy or
 # roll back). Nothing here names an instance: everything comes from the GitHub environment
-# `work-trains-production`, and a repository without that environment (a fork, someone else's clone) skips
-# with a notice. Setup, token scope and rollback: remote/README.md, "Deploy from GitHub Actions".
+# `work-trains-production`. A push in a repository without that environment (a fork, someone else's clone)
+# skips with a notice; a manual run there fails, since it asked for a deploy that cannot happen. Setup, token scope and rollback: remote/README.md, "Deploy from GitHub Actions".
 
 on:
   workflow_run:
@@ -44,6 +44,7 @@ jobs:
         name: Is the work-trains-production environment configured?
         env:
           GH_TOKEN: ${{ github.token }}
+          TRIGGER: ${{ github.event_name }}
         run: |
           code=$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
@@ -51,6 +52,11 @@ jobs:
           case $code in
             200) echo "configured=true" >>"$GITHUB_OUTPUT" ;;
             404)
+              # A manual run, or a token that may not read the endpoint, must not end green having deployed nothing.
+              if [[ $TRIGGER == workflow_dispatch ]]; then
+                echo "::error::No work-trains-production environment in this repository (or this run may not read it); remote/README.md, \"Deploy from GitHub Actions\", sets one up."
+                exit 1
+              fi
               echo "::notice::No work-trains-production environment in this repository, so nothing is deployed. remote/README.md, \"Deploy from GitHub Actions\", sets one up."
               echo "configured=false" >>"$GITHUB_OUTPUT" ;;
             *) echo "::error::Looking up the environment answered HTTP $code"; exit 1 ;;
@@ -64,15 +70,18 @@ jobs:
     environment: work-trains-production
     permissions:
       contents: read
+    # The Cloudflare credential is given only to the steps that run wrangler against the account, never to
+    # `npm ci`, whose install scripts come from every package in the lockfile.
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       WORK_TRAINS_D1_ID: ${{ vars.WORK_TRAINS_D1_ID }}
       WORK_TRAINS_HOSTNAME: ${{ vars.WORK_TRAINS_HOSTNAME }}
       WORK_TRAINS_WORKERS_DEV: ${{ vars.WORK_TRAINS_WORKERS_DEV }}
       TRIGGER: ${{ github.event_name }}
       TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && (inputs.sha || github.sha) || github.event.workflow_run.head_sha }}
       WRANGLER_SEND_METRICS: 'false'
+      # The account's workers.dev subdomain is not a secret Actions knows to mask, so wrangler's output goes
+      # through this before it reaches the log.
+      HIDE_WORKERS_DEV: 's/[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.workers\.dev/<worker>.<subdomain>.workers.dev/g'
     defaults:
       run:
         shell: bash
@@ -81,6 +90,9 @@ jobs:
       # Variables are not masked the way secrets are, and this repository's run logs may be public.
       - name: Check the environment and hide the instance's identifiers
         working-directory: .
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           missing=""
           for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID WORK_TRAINS_D1_ID WORK_TRAINS_HOSTNAME; do
@@ -125,20 +137,35 @@ jobs:
 
       - id: plan
         name: Plan (skip, or refuse an edited migration)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: scripts/deploy-plan.sh
 
       - name: Apply D1 migrations
         if: steps.plan.outputs.skip == 'false'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: wrangler d1 migrations apply work-trains --remote -c wrangler.deploy.jsonc
 
       - id: deploy
         name: Deploy
         if: steps.plan.outputs.skip == 'false'
-        # The message records the commit, which the next run's plan reads back. The account's workers.dev
-        # subdomain is not a secret Actions knows to mask, so it is cut from the output.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # The message records the commit, which the next run's plan reads back.
+        run: wrangler deploy -c wrangler.deploy.jsonc --message "$TARGET_SHA" 2>&1 | sed -E "$HIDE_WORKERS_DEV"
+
+      # From here on the new version is live, so any failure rolls it back.
+      - id: live
+        name: Read the live version
+        if: steps.deploy.outcome == 'success'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          wrangler deploy -c wrangler.deploy.jsonc --message "$TARGET_SHA" 2>&1 |
-            sed -E 's/[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.workers\.dev/<worker>.<subdomain>.workers.dev/g'
           live=$(wrangler deployments status --json -c wrangler.deploy.jsonc | jq -r '[.versions[] | "\(.version_id) (\(.percentage)%)"] | join(", ")')
           echo "live=$live" >>"$GITHUB_OUTPUT"
 
@@ -152,17 +179,20 @@ jobs:
           done
           exit 1
 
-      - name: Roll back after a failed smoke check
-        if: failure() && steps.smoke.outcome == 'failure'
+      - name: Roll back after a failure following the deploy
+        if: failure() && steps.deploy.outcome == 'success'
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PREVIOUS_VERSION: ${{ steps.plan.outputs.previous_version }}
         run: |
           if [[ -z $PREVIOUS_VERSION ]]; then
-            echo "::error::The smoke check failed and there is no single previous version to roll back to; roll back by hand (remote/README.md)"
+            echo "::error::A step after the deploy of $TARGET_SHA failed and there is no single previous version to roll back to; roll back by hand (remote/README.md)"
             exit 1
           fi
-          wrangler rollback "$PREVIOUS_VERSION" -c wrangler.deploy.jsonc -y -m "smoke check failed for $TARGET_SHA"
-          echo "::error::The smoke check failed for $TARGET_SHA; rolled back to version $PREVIOUS_VERSION. D1 migrations, if any ran, stay applied."
+          wrangler rollback "$PREVIOUS_VERSION" -c wrangler.deploy.jsonc -y -m "checks failed after deploying $TARGET_SHA" 2>&1 |
+            sed -E "$HIDE_WORKERS_DEV"
+          echo "::error::A step after the deploy of $TARGET_SHA failed; rolled back to version $PREVIOUS_VERSION. D1 migrations, if any ran, stay applied."
 
       - name: Summary
         if: always()
@@ -173,7 +203,7 @@ jobs:
           PREVIOUS_VERSION: ${{ steps.plan.outputs.previous_version }}
           DEPLOY: ${{ steps.deploy.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
-          LIVE: ${{ steps.deploy.outputs.live }}
+          LIVE: ${{ steps.live.outputs.live }}
         run: |
           {
             echo "### Work Trains deploy"

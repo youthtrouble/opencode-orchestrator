@@ -1,6 +1,8 @@
 // The deploy workflow's smoke check: with no credentials at all, the page must send a browser to Cloudflare
 // Access and a machine route must refuse. It uses no secret, so it proves only that Access still stands in
-// front of the hostname and the Worker answers there, which is what a bad deploy breaks.
+// front of the hostname and that the hostname answers. Access answers both requests itself, so a Worker that
+// throws on every request still passes: this catches a deploy that dropped Access or the hostname, not a
+// broken Worker.
 //
 //   node scripts/smoke-check.ts https://trains.example.com
 //

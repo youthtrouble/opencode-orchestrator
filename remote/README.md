@@ -115,8 +115,8 @@ To deploy every verified push to main without running wrangler yourself, set up
 
 Once set up, `.github/workflows/remote-deploy.yml` deploys the Worker whenever the Remote workflow passes on a push
 to main, and on demand. The workflow names no instance: everything comes from a GitHub **environment** called
-`work-trains-production`. A repository without that environment, such as a fork, skips the deploy with a notice
-and fails nothing.
+`work-trains-production`. In a repository without that environment, such as a fork, a push skips the deploy with
+a notice and fails nothing; a run started by hand fails, because it asked for a deploy that cannot happen.
 
 **What a run does.** It checks out the exact commit the Remote workflow tested (refusing one that is not on main),
 runs `npm ci` (wrangler is pinned by `remote/worker/package-lock.json`), and renders `wrangler.deploy.jsonc` from
@@ -126,8 +126,14 @@ which commit is live: every CI deploy stores its commit as the version's message
 <sha>`). A push that changed nothing under `remote/worker/` or `remote/protocol/` since then deploys nothing.
 Otherwise the run applies D1 migrations (`wrangler d1 migrations apply --remote`), deploys, and runs a smoke
 check that uses no credentials. The check passes when `GET /` redirects to `*.cloudflareaccess.com` and
-`GET /api/v1/machine/pull` is refused. If the smoke check fails, the run rolls back to the version that was live
-before and fails. The run's summary has the commit and version ids.
+`GET /api/v1/machine/pull` is refused. If the smoke check, or reading the live version after the deploy, fails,
+the run rolls back to the version that was live before and fails. The run's summary has the commit and version ids.
+A push whose commit the live one already contains (two runs finishing out of order) deploys nothing.
+
+**What the smoke check does not catch.** Access answers both of its requests before the Worker runs, so a
+Worker that throws on every request still passes. The check proves that the deploy completed and that Access
+still fronts the hostname; it does not prove the Worker is healthy behind Access. After a deploy, open the page
+or run `orch remote once`; if the Worker is broken, roll back by hand (below).
 
 **Migrations are add-only.** The plan step fails the run if a migration file that is already live was edited:
 D1 records applied migrations by name, so an edit would never run. Add a new numbered file instead. A rollback
@@ -165,7 +171,10 @@ an issue.
 
 **Environment.** **GitHub > your repository > Settings > Environments > New environment** named
 `work-trains-production`. Under **Deployment branches and tags**, choose **Selected branches and tags** and add
-`main`. A required reviewer would hold every deploy until someone approves it, so add one only if you want that.
+`main`. This main-only policy is **required**, not a preference: a run started by hand on another branch uses
+that branch's copy of the workflow, which could be edited to print the secrets, and the branch policy is what keeps
+the environment's secrets away from it. A required reviewer would hold every deploy until someone approves it, so
+add one only if you want that.
 Then add:
 
 | Kind | Name | Value |

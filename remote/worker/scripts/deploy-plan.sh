@@ -4,7 +4,9 @@
 # Every deploy records its commit as the Worker version's message (`wrangler deploy --message <sha>`), so the
 # version live now names the last deployed commit. From it this script decides:
 #   - skip: a push (TRIGGER=workflow_run) that changed nothing under remote/worker or remote/protocol since
-#     that commit deploys nothing; a manual run (workflow_dispatch) always deploys, to redeploy or roll back.
+#     that commit deploys nothing, and neither does one whose commit the live one already contains (two Remote
+#     runs that finish out of order must not deploy the older commit over the newer). A manual run
+#     (workflow_dispatch) always deploys, to redeploy or roll back.
 #   - refuse: a migration file that exists at both commits but differs. D1 records applied migrations by
 #     name, so an edited one would never run; migrations must only ever be added.
 # When the live version names no known commit (the first CI deploy, a deploy by hand, a gradual rollout)
@@ -50,6 +52,12 @@ output deployed_sha "$deployed_sha"
 if [[ -z $deployed_sha ]]; then
   echo "::warning::The live version names no commit of this repository; deploying $TARGET_SHA without the migration check."
   output skip false
+  exit 0
+fi
+
+if [[ $TRIGGER == workflow_run ]] && git -C "$repo_root" merge-base --is-ancestor "$TARGET_SHA" "$deployed_sha"; then
+  echo "::notice::$TARGET_SHA is already part of the live $deployed_sha; not deploying an older commit over it."
+  output skip true
   exit 0
 fi
 
