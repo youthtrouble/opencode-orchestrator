@@ -164,6 +164,12 @@ test("CI lines name the run and its outcome", () => {
   assert.equal(model.ciLine({ ...run, workflow: "" }), "example/app: failure");
 });
 
+test("only a known state has a state class", () => {
+  for (const state of ["needs_you", "working", "paused", "failed", "done", "idle"])
+    assert.equal(model.stateClass(state), `state-${state}`);
+  for (const state of ["rebooting", "", "toString", "__proto__"]) assert.equal(model.stateClass(state), "", state);
+});
+
 test("a CI run's tone is red only for a real failure, and neutral for anything without an outcome", () => {
   const tone = (status: string, conclusion: string | null) =>
     model.ciTone({ repo: "example/app", workflow: "ci", status, conclusion, url: null, at: "" });

@@ -72,6 +72,12 @@ test("every colour pair the page draws meets its WCAG AA minimum", (t) => {
     assert.ok(row.ratio >= row.minimum, `${row.fg} on ${row.bg} is ${row.ratio.toFixed(2)}:1, below ${row.minimum}:1`);
 });
 
+test("every colour token in :root is checked in at least one pair", () => {
+  const paired = new Set(PAIRS.flatMap(([fg, bg]) => [fg, bg]));
+  const unpaired = [...rootColours().keys()].filter((name) => !paired.has(name));
+  assert.deepEqual(unpaired, [], "add a pair for each new colour token");
+});
+
 test("the contrast formula matches WCAG's reference values", () => {
   assert.equal(contrast("#000000", "#ffffff"), 21);
   assert.equal(contrast("#ffffff", "#ffffff"), 1);

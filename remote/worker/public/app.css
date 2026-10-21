@@ -119,9 +119,8 @@ h2 {
   margin: var(--space-6) 0 var(--space-3);
 }
 
-/* The Needs-you count is the one big number on the page. */
 #needs-you-count {
-  font-size: var(--text-headline);
+  font-size: 0.9375rem;
   letter-spacing: 0;
   color: var(--ink);
 }
@@ -248,12 +247,6 @@ p {
   box-shadow: var(--shadow-card);
   padding: var(--space-4);
   margin: 0 0 var(--space-3);
-}
-
-.question.blocking {
-  box-shadow:
-    inset 3px 0 0 var(--needs),
-    var(--shadow-card);
 }
 
 .eyebrow {

@@ -291,7 +291,7 @@ function questionCard({ projectName, question }) {
   const headingId = `q-${question.id}`;
   return el(
     "article",
-    { class: `card question${question.blocking ? " blocking" : ""}`, "aria-labelledby": headingId },
+    { class: "card question", "aria-labelledby": headingId },
     el("p", { class: "eyebrow" }, projectName, question.blocking ? el("span", { class: "badge" }, "blocking") : null),
     el("h3", { id: headingId }, question.subject),
     questionBody(question),
@@ -454,6 +454,8 @@ function noteLine(key) {
 }
 
 function renderProjects(projects) {
+  const keys = new Set(projects.map((project) => project.key));
+  for (const key of page.openEvents) if (!keys.has(key)) page.openEvents.delete(key);
   const { shown, hidden } = model.partitionByVisibility(projects);
   setChildren(
     $("project-list"),
@@ -477,7 +479,7 @@ function projectCard(project) {
       "div",
       { class: "title-row" },
       el("h3", { id: headingId }, project.name),
-      el("span", { class: `pill state-${project.state}` }, model.stateLabel(project.state)),
+      el("span", { class: `pill ${model.stateClass(project.state)}`.trim() }, model.stateLabel(project.state)),
       project.hidden ? unhideButton(project) : overflowMenu(project),
     ),
     project.state_reason ? el("p", { class: "reason" }, project.state_reason) : null,
@@ -509,7 +511,7 @@ function progressLine(progress, state) {
   if (text === null) return null;
   return el(
     "div",
-    { class: `progress state-${state}` },
+    { class: `progress ${model.stateClass(state)}`.trim() },
     el("progress", {
       max: String(progress.total),
       value: String(Math.min(progress.done, progress.total)),

@@ -132,3 +132,34 @@ test("Recent events opened by the owner stay open across the next re-render", as
   assert.ok(reopened);
   assert.equal(reopened.open, true);
 });
+
+test("an open Recent events is forgotten once its project leaves the summary, so it comes back closed", async () => {
+  const summary = summaryWithProject();
+  const project = summary.projects[0];
+  let returned: FakeNode | undefined;
+  await pageShowing(summary, PAGE_ORIGIN, (document) => {
+    const rerender = () => document.getElementById("hidden-toggle").dispatch("click");
+    const [events] = document.getElementById("project-list").findAll(byTag("details"));
+    events.open = true;
+    events.dispatch("toggle");
+    // The page keeps the summary it was served, so changing its projects and re-rendering stands in
+    // for a poll that no longer carries the project, then one that carries it again.
+    summary.projects = [];
+    rerender();
+    summary.projects = [project];
+    rerender();
+    [returned] = document.getElementById("project-list").findAll(byTag("details"));
+  });
+  assert.ok(returned);
+  assert.equal(returned.open, false);
+});
+
+test("a project state the page does not know gets no state class on its pill or progress bar", async () => {
+  const summary = summaryWithProject();
+  summary.projects[0].state = "rebooting";
+  const projects = (await pageShowing(summary)).getElementById("project-list");
+  const pill = projects.findAll((node) => classOf(node)?.startsWith("pill") ?? false);
+  const progress = projects.findAll((node) => classOf(node)?.startsWith("progress") ?? false);
+  assert.deepEqual([...pill, ...progress].map(classOf), ["pill", "progress"]);
+  assert.equal(pill[0].textContent, "rebooting");
+});

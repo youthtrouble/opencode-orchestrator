@@ -104,6 +104,11 @@ export function stateLabel(state) {
   return STATE_LABELS[state] ?? state;
 }
 
+/** A known state's tone class; an unknown state gets none. */
+export function stateClass(state) {
+  return Object.hasOwn(STATE_LABELS, state) ? `state-${state}` : "";
+}
+
 export function runKindLabel(run) {
   return run.kind === "none" ? "no run" : run.kind;
 }
