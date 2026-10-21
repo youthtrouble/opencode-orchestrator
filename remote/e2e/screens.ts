@@ -43,13 +43,46 @@ const DEVICES: readonly Device[] = [
 const DEVICE_SCALE_FACTOR = 2;
 
 const CHROME_START_TIMEOUT_MS = 15_000;
+/** How long Chrome gets to exit after SIGTERM before it is SIGKILLed. */
+const CHROME_STOP_GRACE_MS = 3_000;
+const CDP_COMMAND_TIMEOUT_MS = 15_000;
 const PAGE_READY_TIMEOUT_MS = 10_000;
 const PAGE_READY_POLL_MS = 100;
 /** The page's header text until its first summary renders (remote/worker/public/index.html). */
 const LOADING_TEXT = "Loading…";
+/** Exit codes for a run stopped by a signal, as a shell reports them (128 + signal number). */
+const SIGNAL_EXIT_CODES = { SIGINT: 130, SIGTERM: 143 } as const;
 
 class ScreensError extends Error {
   override name = "ScreensError";
+}
+
+/**
+ * What a run has opened, released in reverse order exactly once: by main's finally, or by a signal handler
+ * when the run is interrupted (SIGTERM to Node alone would otherwise orphan headless Chrome).
+ */
+class Cleanup {
+  readonly #releases: (() => void | Promise<void>)[] = [];
+  #running: Promise<void> | undefined;
+
+  add(release: () => void | Promise<void>): void {
+    this.#releases.push(release);
+  }
+
+  run(): Promise<void> {
+    this.#running ??= this.#releaseAll();
+    return this.#running;
+  }
+
+  async #releaseAll(): Promise<void> {
+    for (const release of this.#releases.reverse()) {
+      try {
+        await release();
+      } catch (error) {
+        console.error("cleanup failed:", error);
+      }
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -57,27 +90,41 @@ async function main(): Promise<void> {
   validateFixtures();
   mkdirSync(out, { recursive: true });
 
-  const fixtureServer = await startFixtureServer();
-  const profileDir = mkdtempSync(join(tmpdir(), "work-trains-screens-"));
-  const browser = await launchChrome(chrome, profileDir);
+  const cleanup = new Cleanup();
+  const stopOnSignal = (signal: keyof typeof SIGNAL_EXIT_CODES) => {
+    void cleanup.run().finally(() => process.exit(SIGNAL_EXIT_CODES[signal]));
+  };
+  process.once("SIGINT", stopOnSignal).once("SIGTERM", stopOnSignal);
   try {
+    const fixtureServer = await startFixtureServer();
+    cleanup.add(() => fixtureServer.close());
+    const profileDir = mkdtempSync(join(tmpdir(), "work-trains-screens-"));
+    cleanup.add(() => rmSync(profileDir, { recursive: true, force: true }));
+    const chromeProcess = startChrome(chrome, profileDir);
+    cleanup.add(() => chromeProcess.stop());
+    const browser = await connectToChrome(chromeProcess.child);
+    cleanup.add(() => browser.close());
+
     const tab = await browser.openTab();
     const foreignRequests = await watchForeignRequests(tab, fixtureServer.origin);
+    const shots: { file: string; png: Buffer }[] = [];
     for (const [state, fixture] of Object.entries(SCREEN_STATES)) {
       fixtureServer.serve(fixture);
       for (const device of DEVICES) {
-        const file = join(out, `${state}-${device.name}.png`);
-        writeFileSync(file, await shoot(tab, `${fixtureServer.origin}/`, device));
-        console.log(file);
+        shots.push({ file: join(out, `${state}-${device.name}.png`), png: await shoot(tab, `${fixtureServer.origin}/`, device) });
       }
     }
+    // Checked before anything is written, so a run that left loopback leaves no shots behind.
     if (foreignRequests.length > 0) {
       throw new ScreensError(`the page requested other origins than the fixture server: ${foreignRequests.join(", ")}`);
     }
+    for (const { file, png } of shots) {
+      writeFileSync(file, png);
+      console.log(file);
+    }
   } finally {
-    await browser.close();
-    fixtureServer.close();
-    rmSync(profileDir, { recursive: true, force: true });
+    await cleanup.run();
+    process.off("SIGINT", stopOnSignal).off("SIGTERM", stopOnSignal);
   }
 }
 
@@ -151,7 +198,10 @@ function startFixtureServer(): Promise<FixtureServer> {
         serve: (fixture) => {
           current = fixture;
         },
-        close: () => server.close(),
+        close: () => {
+          server.close();
+          server.closeAllConnections();
+        },
       });
     });
   });
@@ -167,12 +217,12 @@ function publicAsset(path: string): string | null {
 // ---- Chrome over the DevTools protocol --------------------------------------------------------
 
 type CdpParams = Record<string, unknown>;
-type CdpEventListener = (params: any) => void;
+type CdpEventListener = (params: unknown) => void;
 
 /** One DevTools WebSocket. Commands for a tab carry its flattened session id. */
 class CdpConnection {
   readonly #socket: WebSocket;
-  readonly #pending = new Map<number, { resolve: (result: any) => void; reject: (error: Error) => void }>();
+  readonly #pending = new Map<number, { resolve: (result: unknown) => void; reject: (error: Error) => void }>();
   readonly #listeners = new Map<string, CdpEventListener[]>();
   #nextId = 1;
 
@@ -193,10 +243,29 @@ class CdpConnection {
     });
   }
 
-  send(method: string, params: CdpParams = {}, sessionId?: string): Promise<any> {
+  /** Resolves with the command's result; rejects on a DevTools error, a closed connection or no answer in time. */
+  send<Result>(method: string, params: CdpParams = {}, sessionId?: string): Promise<Result> {
+    if (this.#socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new ScreensError(`DevTools ${method}: the connection to Chrome is closed`));
+    }
     const id = this.#nextId++;
-    this.#socket.send(JSON.stringify({ id, method, params, sessionId }));
-    return new Promise((resolve, reject) => this.#pending.set(id, { resolve, reject }));
+    return new Promise<Result>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.#pending.delete(id);
+        reject(new ScreensError(`DevTools ${method}: no answer within ${CDP_COMMAND_TIMEOUT_MS / 1000} s`));
+      }, CDP_COMMAND_TIMEOUT_MS);
+      this.#pending.set(id, {
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result as Result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
+      this.#socket.send(JSON.stringify({ id, method, params, sessionId }));
+    });
   }
 
   on(method: string, sessionId: string, listener: CdpEventListener): void {
@@ -221,21 +290,30 @@ class CdpConnection {
 }
 
 interface Tab {
-  send(method: string, params?: CdpParams): Promise<any>;
-  on(method: string, listener: CdpEventListener): void;
+  send<Result>(method: string, params?: CdpParams): Promise<Result>;
+  on<Params>(method: string, listener: (params: Params) => void): void;
 }
 
 interface Browser {
   openTab(): Promise<Tab>;
-  close(): Promise<void>;
+  /** Closes the DevTools connection; the Chrome process is stopped separately. */
+  close(): void;
 }
 
-async function launchChrome(binary: string, profileDir: string): Promise<Browser> {
-  // Chrome's own background traffic (updates, sync, safe browsing) is switched off: the run stays on loopback.
+interface ChromeProcess {
+  child: ChildProcess;
+  stop(): Promise<void>;
+}
+
+function startChrome(binary: string, profileDir: string): ChromeProcess {
+  // Chrome's own background traffic (updates, sync, safe browsing) is switched off, and everything but loopback
+  // goes to a proxy that refuses connections, so a request off loopback fails instead of leaving the machine.
   const child = spawn(binary, [
     "--headless",
     "--remote-debugging-port=0",
     `--user-data-dir=${profileDir}`,
+    "--proxy-server=127.0.0.1:1",
+    "--proxy-bypass-list=127.0.0.1",
     "--hide-scrollbars",
     "--no-first-run",
     "--no-default-browser-check",
@@ -248,26 +326,44 @@ async function launchChrome(binary: string, profileDir: string): Promise<Browser
     "--disable-client-side-phishing-detection",
     "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
-  const connection = await CdpConnection.open(await devToolsUrl(child)).catch((error) => {
-    child.kill();
-    throw error;
+  // Registered at once, so an exit at any later moment is seen. A spawn failure emits "error" and no "exit".
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.once("error", () => resolve());
   });
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  return { child, stop: () => stopChrome(child, exited) };
+}
+
+async function connectToChrome(child: ChildProcess): Promise<Browser> {
+  const connection = await CdpConnection.open(await devToolsUrl(child));
   return {
     async openTab() {
-      const { targetId } = await connection.send("Target.createTarget", { url: "about:blank" });
-      const { sessionId } = await connection.send("Target.attachToTarget", { targetId, flatten: true });
+      const { targetId } = await connection.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
+      const { sessionId } = await connection.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
       return {
         send: (method, params) => connection.send(method, params, sessionId),
-        on: (method, listener) => connection.on(method, sessionId, listener),
+        on: (method, listener) => connection.on(method, sessionId, listener as CdpEventListener),
       };
     },
-    async close() {
-      connection.close();
-      if (child.exitCode === null && child.signalCode === null) child.kill();
-      await exited;
-    },
+    close: () => connection.close(),
   };
+}
+
+/** SIGTERM, then SIGKILL if Chrome is still running after a grace period; resolves once it has exited. */
+async function stopChrome(child: ChildProcess, exited: Promise<void>): Promise<void> {
+  const running = child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  if (!running) return;
+  child.kill("SIGTERM");
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const graceOver = new Promise<"grace over">((resolve) => {
+    graceTimer = setTimeout(() => resolve("grace over"), CHROME_STOP_GRACE_MS);
+  });
+  const outcome = await Promise.race([exited, graceOver]);
+  clearTimeout(graceTimer);
+  if (outcome === "grace over") {
+    child.kill("SIGKILL");
+    await exited;
+  }
 }
 
 /**
@@ -285,8 +381,7 @@ function devToolsUrl(child: ChildProcess): Promise<string> {
     };
     const fail = (reason: string) => {
       settle();
-      child.kill();
-      reject(new ScreensError(`${reason}:\n${stderr}`));
+      reject(new ScreensError(stderr.trim() === "" ? reason : `${reason}:\n${stderr.trim()}`));
     };
     const onError = (error: Error) => fail(`cannot start Chrome (${error.message})`);
     const onExit = (code: number | null) => fail(`Chrome exited with ${code}`);
@@ -307,7 +402,7 @@ function devToolsUrl(child: ChildProcess): Promise<string> {
 /** Collects every URL the tab requests outside `origin` (data: URLs are inline, not requests). */
 async function watchForeignRequests(tab: Tab, origin: string): Promise<string[]> {
   const foreign: string[] = [];
-  tab.on("Network.requestWillBeSent", ({ request }: { request: { url: string } }) => {
+  tab.on<{ request: { url: string } }>("Network.requestWillBeSent", ({ request }) => {
     if (!request.url.startsWith(`${origin}/`) && !request.url.startsWith("data:")) foreign.push(request.url);
   });
   await tab.send("Network.enable");
@@ -324,9 +419,10 @@ async function shoot(tab: Tab, url: string, device: Device): Promise<Buffer> {
   });
   // Pinned so a shot does not depend on the host's appearance setting; the redesign is light only.
   await tab.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
-  await tab.send("Page.navigate", { url });
+  const { errorText } = await tab.send<{ errorText?: string }>("Page.navigate", { url });
+  if (errorText) throw new ScreensError(`cannot load ${url}: ${errorText}`);
   await waitForFirstRender(tab);
-  const { data } = await tab.send("Page.captureScreenshot", { format: "png" });
+  const { data } = await tab.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
   return Buffer.from(data, "base64");
 }
 
@@ -334,18 +430,26 @@ async function waitForFirstRender(tab: Tab): Promise<void> {
   const rendered = `document.readyState === "complete" && document.getElementById("mac-seen")?.textContent !== ${JSON.stringify(LOADING_TEXT)}`;
   const deadline = Date.now() + PAGE_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const { result } = await tab.send("Runtime.evaluate", { expression: rendered, returnByValue: true });
-    if (result.value === true) {
+    if ((await evaluate(tab, rendered)) === true) {
       // Two animation frames: the render has been laid out and painted, not just put in the DOM.
-      await tab.send("Runtime.evaluate", {
-        expression: "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))",
-        awaitPromise: true,
-      });
+      await evaluate(tab, "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, PAGE_READY_POLL_MS));
   }
   throw new ScreensError(`the page did not render a summary within ${PAGE_READY_TIMEOUT_MS / 1000} s`);
+}
+
+/** The value of `expression` in the page (awaited if it is a promise); a thrown exception fails the run. */
+async function evaluate(tab: Tab, expression: string): Promise<unknown> {
+  const { result, exceptionDetails } = await tab.send<{
+    result: { value?: unknown };
+    exceptionDetails?: { text: string; exception?: { description?: string } };
+  }>("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+  if (exceptionDetails) {
+    throw new ScreensError(`the page threw evaluating ${expression}: ${exceptionDetails.exception?.description ?? exceptionDetails.text}`);
+  }
+  return result.value;
 }
 
 try {

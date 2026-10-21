@@ -340,6 +340,10 @@ It serves `worker/public/` and fixture summaries (`e2e/screens/fixtures.ts`, fak
 against the protocol's `Summary` first) on loopback with the Worker's security headers, drives headless Chrome
 over the DevTools protocol, and writes `<state>-<phone|desktop>.png` for the states `needs-you`, `calm`,
 `stale-mac`, `failed-ci-paused` and `budget-credits` (phone 390x844, desktop 1280x900, both at 2x, light mode). It fails if a
-fixture is not a valid `Summary` or the page requests anything off loopback. Chrome is `--chrome`, else `$CHROME`,
-else Google Chrome in `/Applications`, else Playwright's `chrome-headless-shell`. It is not a test, so CI never
-needs Chrome; and Chrome is not iOS Safari (no Dynamic Type, no safe-area insets), so the last look is on a phone.
+fixture is not a valid `Summary`. Chrome runs with its background services off and a proxy that refuses every
+connection off loopback, so such a request fails instead of leaving the machine; if the page's tab requests
+anything off loopback, the run fails and writes no shots (other targets, such as service workers, are not watched).
+Chrome is `--chrome`, else `$CHROME`, else, on macOS only, Google Chrome in `/Applications` or Playwright's
+`chrome-headless-shell` for Apple silicon; elsewhere pass `--chrome` or set `CHROME`. Ctrl-C or SIGTERM stops Chrome
+and removes its temporary profile. It is not a test, so CI never needs Chrome; and Chrome is not iOS Safari (no
+Dynamic Type, no safe-area insets), so the last look is on a phone.

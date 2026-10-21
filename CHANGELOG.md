@@ -8,7 +8,10 @@
   `NOTIFY_FROM`/`NOTIFY_TO` are unset. Any value other than `true`, `false` or unset fails the render.
 - remote: `node remote/e2e/screens.ts --out <dir>` takes screenshots of the Work Trains page from fixtures
   (WT22-A): five states (needs you, calm, stale Mac, failed CI and paused, OpenAI on credits) on a phone and a
-  desktop viewport, through headless Chrome on loopback, with no Worker, orch or real data. `remote/docs/design/before/` holds the current page's shots, the baseline for the redesign.
+  desktop viewport, through headless Chrome on loopback, with no Worker, orch or real data. Requests off loopback go
+  to a refusing proxy and fail the run before any shot is written; a Chrome that cannot start fails it at once, and
+  Ctrl-C or SIGTERM stops Chrome and removes its profile. `remote/docs/design/before/` holds the current page's
+  shots, the baseline for the redesign.
 - remote: the Work Trains page's size budget (`remote/worker/test/ui-assets.test.ts`) is now 48 KiB for
   everything in `public/`, up from 40 KiB: the OpenAI credits chip and the WT21c error messages together
   take the page past the old cap. The budget still fails the tests when crossed.
