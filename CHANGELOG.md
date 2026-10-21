@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- remote: the Work Trains page's size budget (`remote/worker/test/ui-assets.test.ts`) is now 48 KiB for
+  everything in `public/`, up from 40 KiB: the OpenAI credits chip and the WT21c error messages together
+  take the page past the old cap. The budget still fails the tests when crossed.
 - remote: after a hostname cut-over the old address no longer fails mysteriously, and Accept delivers what the
   conductor wrote (WT21c). **Accept** now replies on the Mac with the recommendation from the project's mailbox, not
   the copy the snapshot redacted for the Worker (which had turned `/v1/installations/me` and any path into
