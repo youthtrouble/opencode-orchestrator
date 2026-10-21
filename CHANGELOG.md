@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- remote/worker machine API (local only, not yet deployed): `POST /api/v1/machine/push` stores
+  changed project snapshots (an unchanged `snapshot_hash` writes nothing; a project accepted under
+  55 s ago is `deferred` with `retry_after_seconds`; a key pushed by another machine is `deferred`
+  and logged) and keeps each project's questions in step (new, edited, closed, reopened; a
+  machine's first push marks its questions `suppressed`, and a first push that fails part-way still
+  counts as first on retry; a push that loses a race with a concurrent push for the same key is
+  `deferred`, never a 500). `GET /api/v1/machine/pull` returns the answers and actions past their
+  undo window that are not cancelled or settled, oldest first, with `poll_after_seconds: 30`.
+  `POST /api/v1/machine/ack` settles each pulled one once (`settled` counts only rows that changed).
+  Each push costs about 2 D1 queries plus 1-3 per project and one per question written; the Workers
+  Free plan allows 50 per invocation, so large pushes need the Workers Paid plan (1000). Every body is checked against `remote/protocol/v1/schema.json`; another `v`
+  is 400 `unsupported_version` with `supported: [1]`, and a schema failure is 400 `invalid_request`
+  naming the first bad path, never the value.
 - remote/worker scaffold (not yet deployable): a TypeScript Cloudflare Worker that verifies the
   Cloudflare Access JWT and pins the owner's or the Mac's identity on every request (machine routes
   also need the machine token), fails closed with 503 when a secret is missing, the D1 migration,

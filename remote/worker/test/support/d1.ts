@@ -68,6 +68,11 @@ export class D1Double {
     }
   }
 
+  /** Rows inserted, updated or deleted since the database opened; diff it to prove a call wrote nothing. */
+  totalChanges(): number {
+    return Number((this.sqlite.prepare("SELECT total_changes() AS changes").get() as Row).changes);
+  }
+
   prepare(sql: string): PreparedStatement {
     return new PreparedStatement(this.sqlite, sql);
   }

@@ -1,32 +1,14 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { createLocalJWKSet, exportJWK, SignJWT, type JWTPayload } from "jose";
 import { readJsonBody } from "../src/body.ts";
 import { jsonResponse } from "../src/http.ts";
 import { createWorker } from "../src/index.ts";
 import type { Route } from "../src/routes.ts";
-import { D1Double } from "./support/d1.ts";
+import { keys, machineToken, ORIGIN, signingKeys, testEnv, tokensAt } from "./support/access.ts";
 
 const NOW = new Date("2026-10-20T12:00:00Z");
 const NOW_SECONDS = NOW.getTime() / 1000;
-const TEAM = "https://example.cloudflareaccess.com";
-const AUD = "test-audience-tag";
-const ORIGIN = "https://trains.example.com";
-const CLIENT_ID = "test-client.access";
 const FORBIDDEN = { error: "forbidden", message: "forbidden" };
-
-// Generated per run, so no key, token or digest is ever a fixture in the repository.
-const signingKeys = (await crypto.subtle.generateKey(
-  { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
-  true,
-  ["sign", "verify"],
-)) as CryptoKeyPair;
-const publicJwk = { ...(await exportJWK(signingKeys.publicKey)), kid: "key-1", alg: "RS256" };
-const keys = createLocalJWKSet({ keys: [publicJwk] });
-const machineToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
-const machineTokenSha256 = Buffer.from(
-  await crypto.subtle.digest("SHA-256", new TextEncoder().encode(machineToken)),
-).toString("hex");
 
 const ok = (name: string) => async () => jsonResponse(200, { route: name });
 const testRoutes: Route[] = [
@@ -41,39 +23,7 @@ const testRoutes: Route[] = [
 ];
 const worker = createWorker({ keysFor: () => keys, routes: testRoutes, now: () => NOW });
 
-function secrets(): Record<string, string> {
-  return {
-    ACCESS_TEAM_DOMAIN: TEAM,
-    ACCESS_AUD: AUD,
-    OWNER_EMAIL: "Owner@Example.com",
-    ACCESS_SERVICE_CLIENT_ID: CLIENT_ID,
-    MACHINE_TOKEN_SHA256: machineTokenSha256,
-    PUBLIC_ORIGIN: ORIGIN,
-  };
-}
-
-function env(overrides: Record<string, string | undefined> = {}) {
-  const assets = { fetch: async () => new Response("asset", { status: 200 }) };
-  return { DB: new D1Double(), ASSETS: assets, UNDO_SECONDS: "10", ...secrets(), ...overrides } as never;
-}
-
-interface Claims {
-  payload?: JWTPayload;
-  alg?: string;
-  kid?: string;
-  key?: CryptoKey | Uint8Array;
-}
-
-async function accessJwt({ payload = {}, alg = "RS256", kid = "key-1", key = signingKeys.privateKey }: Claims = {}) {
-  return new SignJWT({ iss: TEAM, aud: [AUD], iat: NOW_SECONDS, exp: NOW_SECONDS + 300, ...payload })
-    .setProtectedHeader({ alg, kid })
-    .sign(key);
-}
-
-const browserJwt = (payload: JWTPayload = {}) =>
-  accessJwt({ payload: { type: "app", email: "owner@example.com", sub: "user-1", ...payload } });
-const serviceJwt = (payload: JWTPayload = {}) =>
-  accessJwt({ payload: { type: "app", common_name: CLIENT_ID, sub: "", ...payload } });
+const { accessJwt, browserJwt, serviceJwt } = tokensAt(NOW);
 
 interface Call {
   method?: string;
@@ -87,7 +37,7 @@ async function call(path: string, { method = "GET", jwt, headers = {}, body, env
   const allHeaders: Record<string, string> = { ...headers };
   if (jwt !== undefined) allHeaders["Cf-Access-Jwt-Assertion"] = jwt;
   const init = { method, headers: allHeaders, body, duplex: "half" } as RequestInit;
-  const response = await worker.fetch!(new Request(`${ORIGIN}${path}`, init) as never, env(envOverrides), {} as never);
+  const response = await worker.fetch!(new Request(`${ORIGIN}${path}`, init) as never, testEnv(envOverrides), {} as never);
   return { status: response.status, body: await response.text(), headers: response.headers };
 }
 

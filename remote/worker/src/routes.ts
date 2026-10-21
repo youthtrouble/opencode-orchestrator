@@ -2,6 +2,9 @@
 // auth gate has pinned an identity of the route's class.
 import type { Identity } from "./auth/access.ts";
 import type { Config, WorkerEnv } from "./env.ts";
+import { ackHandler } from "./machine/ack.ts";
+import { pullHandler } from "./machine/pull.ts";
+import { pushHandler, type OnProjectAccepted } from "./machine/push.ts";
 
 export type RouteClass = "machine" | "browser";
 
@@ -28,7 +31,18 @@ export interface RouteMatch {
   params: Record<string, string>;
 }
 
-export const routes: Route[] = [];
+/** What the routes need from outside the request: hooks the entry point injects. */
+export interface RouteDeps {
+  onProjectAccepted: OnProjectAccepted;
+}
+
+export function appRoutes({ onProjectAccepted }: RouteDeps): Route[] {
+  return [
+    { method: "POST", pattern: "/api/v1/machine/push", class: "machine", handler: pushHandler(onProjectAccepted) },
+    { method: "GET", pattern: "/api/v1/machine/pull", class: "machine", handler: pullHandler },
+    { method: "POST", pattern: "/api/v1/machine/ack", class: "machine", handler: ackHandler },
+  ];
+}
 
 const MACHINE_PREFIX = "/api/v1/machine/";
 

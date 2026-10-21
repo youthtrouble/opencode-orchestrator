@@ -8,7 +8,7 @@ import { verifyMachineToken } from "./auth/machine.ts";
 import { MAX_BODY_BYTES, payloadTooLarge } from "./body.ts";
 import { readConfig, type Config, type WorkerEnv } from "./env.ts";
 import { ForbiddenError, HttpError, toResponse } from "./http.ts";
-import { matchRoute, routeClassFor, routes, type Route, type RouteClass } from "./routes.ts";
+import { appRoutes, matchRoute, routeClassFor, type Route, type RouteClass } from "./routes.ts";
 
 export interface WorkerDeps {
   /** The key-set function that verifies Access JWTs issued by a team domain. */
@@ -110,5 +110,8 @@ function remoteAccessKeys(teamDomain: string): JWTVerifyGetKey {
   }
   return keys;
 }
+
+// Until WT9's notifier exists, an accepted project needs nothing further.
+const routes = appRoutes({ onProjectAccepted: async () => {} });
 
 export default createWorker({ keysFor: remoteAccessKeys, routes, now: () => new Date() });

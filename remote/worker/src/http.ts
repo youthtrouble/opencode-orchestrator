@@ -40,6 +40,17 @@ export class NotConfiguredError extends HttpError {
   }
 }
 
+/** A body whose `v` this Worker does not speak; the response lists the versions it does. */
+export class UnsupportedVersionError extends HttpError {
+  readonly supported: readonly number[];
+
+  constructor(supported: readonly number[]) {
+    super(400, "unsupported_version", `protocol version not supported; supported: ${supported.join(", ")}`);
+    this.name = "UnsupportedVersionError";
+    this.supported = supported;
+  }
+}
+
 export function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -53,6 +64,9 @@ export function toResponse(error: unknown, path: string): Response {
   }
   if (error instanceof NotConfiguredError) {
     console.log(JSON.stringify({ not_configured: error.secretNames, path }));
+  }
+  if (error instanceof UnsupportedVersionError) {
+    return jsonResponse(error.status, { error: error.code, message: error.message, supported: error.supported });
   }
   if (error instanceof HttpError) {
     return jsonResponse(error.status, { error: error.code, message: error.message });
