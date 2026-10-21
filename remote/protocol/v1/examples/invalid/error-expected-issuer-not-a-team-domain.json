@@ -1,0 +1,9 @@
+{
+  "def": "Error",
+  "value": {
+    "error": "wrong_issuer",
+    "message": "",
+    "expected_issuer": "https://example.com"
+  },
+  "expect_path": "/expected_issuer"
+}

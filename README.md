@@ -434,9 +434,16 @@ Keychain items, the last push, pull and error, and the projects found. The sync 
 
 **Troubleshooting.**
 
-- *The page shows 403, or keeps returning to the Access login.* The email you sign in with must be the one in the
-  Access policy and in the `OWNER_EMAIL` secret, and `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and `PUBLIC_ORIGIN` must
-  match the application exactly. A 503 means a Worker secret is missing.
+- *The page shows 403, or keeps returning to the Access login.* The email you sign in with must be in the Access
+  policy and in the `OWNER_EMAIL` secret (a comma-separated list when you sign in with more than one address), and
+  `ACCESS_AUD`, `ACCESS_TEAM_DOMAIN` and `PUBLIC_ORIGIN` must match the application exactly. A 503 means a Worker
+  secret is missing.
+- *The page says "Access token from another team domain" (`wrong_issuer`).* The Access application in front of the
+  hostname belongs to another Zero Trust team than `ACCESS_TEAM_DOMAIN`; the message names the team the Worker
+  expects. See [Moving to another hostname](remote/README.md#moving-to-another-hostname) in remote/README.md.
+- *Moving the page to a new hostname* (a Custom Domain instead of `workers.dev`, say): a one-step cut-over of
+  `PUBLIC_ORIGIN`, the deploy config's `routes` and `orch remote init --url`; the steps are in
+  [remote/README.md](remote/README.md#moving-to-another-hostname).
 - *`orch remote` reports `access_denied`.* Access refused the Mac before the Worker saw it: the service token expired
   or its secret was rotated (`orch remote service-token set`), or the application lacks the **Service Auth** policy
   for `work-trains-mac`. A 403 from the Worker itself (`HTTP 403 forbidden`) usually means `MACHINE_TOKEN_SHA256`

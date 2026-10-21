@@ -1,0 +1,8 @@
+{
+  "def": "Error",
+  "value": {
+    "error": "wrong_issuer",
+    "message": "Access token from another team domain; this Worker expects https://example.cloudflareaccess.com",
+    "expected_issuer": "https://example.cloudflareaccess.com"
+  }
+}

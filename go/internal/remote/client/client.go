@@ -23,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"syscall"
 	"time"
@@ -106,16 +107,22 @@ func (e *AccessDeniedError) Error() string {
 
 // HTTPStatusError is a non-2xx response from the Worker. ErrorCode is the Error body's error
 // code when the protocol defines it, UnknownErrorCode when the body names another, and empty
-// when the body has none. The body's message is left out: it is free text.
+// when the body has none. ExpectedIssuer is the Access team domain a wrong_issuer body says the
+// Worker expects, kept only when it has exactly a team domain's shape; empty otherwise. The
+// body's message is left out: it is free text.
 type HTTPStatusError struct {
-	Route     string
-	Code      int
-	ErrorCode string
+	Route          string
+	Code           int
+	ErrorCode      string
+	ExpectedIssuer string
 }
 
 func (e *HTTPStatusError) Error() string {
-	if e.ErrorCode == "" {
+	switch {
+	case e.ErrorCode == "":
 		return fmt.Sprintf("%s: HTTP %d", e.Route, e.Code)
+	case e.ExpectedIssuer != "":
+		return fmt.Sprintf("%s: HTTP %d %s (the Worker expects Access team %s)", e.Route, e.Code, e.ErrorCode, e.ExpectedIssuer)
 	}
 	return fmt.Sprintf("%s: HTTP %d %s", e.Route, e.Code, e.ErrorCode)
 }
@@ -267,7 +274,8 @@ func decodeReply(r route, reply *http.Response, data []byte, response any) error
 		return &HTTPStatusError{Route: r.String(), Code: reply.StatusCode}
 	}
 	if !success {
-		return &HTTPStatusError{Route: r.String(), Code: reply.StatusCode, ErrorCode: errorCodeOf(data)}
+		code, expectedIssuer := workerErrorOf(data)
+		return &HTTPStatusError{Route: r.String(), Code: reply.StatusCode, ErrorCode: code, ExpectedIssuer: expectedIssuer}
 	}
 	if err := wire.Decode(bytes.NewReader(data), response); err != nil {
 		return &ProtocolError{Route: r.String(), Problem: schemaProblem(err)}
@@ -292,26 +300,37 @@ func isJSON(reply *http.Response) bool {
 // $defs.Error.error in remote/protocol/v1/schema.json; a test keeps the two in step).
 var workerErrorCodes = []string{
 	"forbidden", "not_found", "invalid_request", "unsupported_version", "conflict",
-	"too_late", "payload_too_large", "not_configured", "internal",
+	"too_late", "payload_too_large", "not_configured", "wrong_issuer", "internal",
 }
 
 // UnknownErrorCode stands in for an error code the protocol does not define: the response
 // chose it, and it could be anything, an echoed secret included.
 const UnknownErrorCode = "unknown"
 
-// errorCodeOf is the error code of an Error body: one the protocol defines, else
-// UnknownErrorCode; empty when data has no error code.
-func errorCodeOf(data []byte) string {
+// accessTeamDomain is the shape of an Error body's expected_issuer (its schema pattern). A value
+// of any other shape is dropped, so the field cannot carry text a response echoed.
+var accessTeamDomain = regexp.MustCompile(`^https://[a-z0-9-]+\.cloudflareaccess\.com$`)
+
+// workerErrorOf is the error code of an Error body: one the protocol defines, else
+// UnknownErrorCode; empty when data has no error code. The expected issuer comes with it when
+// the code is wrong_issuer and the value is a team domain.
+func workerErrorOf(data []byte) (code, expectedIssuer string) {
 	var body struct {
 		Error *string `json:"error"`
+		// Untyped, so a non-string value drops only this field, not the error code.
+		ExpectedIssuer any `json:"expected_issuer"`
 	}
 	if json.Unmarshal(data, &body) != nil || body.Error == nil {
-		return ""
+		return "", ""
 	}
-	if slices.Contains(workerErrorCodes, *body.Error) {
-		return *body.Error
+	if !slices.Contains(workerErrorCodes, *body.Error) {
+		return UnknownErrorCode, ""
 	}
-	return UnknownErrorCode
+	issuer, isString := body.ExpectedIssuer.(string)
+	if *body.Error == "wrong_issuer" && isString && accessTeamDomain.MatchString(issuer) {
+		return *body.Error, issuer
+	}
+	return *body.Error, ""
 }
 
 // schemaProblem names, in fixed words, why wire.Decode refused a body that is valid JSON. Only

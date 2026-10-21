@@ -8,7 +8,7 @@ import { join } from "node:path";
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 // Hostnames are case-insensitive, so an upper- or mixed-case Access host names the same team.
 const ACCESS_HOST = /([A-Za-z0-9<>_-]+)\.cloudflareaccess\.com/gi;
-const ALLOWED_ACCESS_TEAMS = new Set(["<team>", "example"]);
+const ALLOWED_ACCESS_TEAMS = new Set(["<team>", "example", "other-example"]);
 const HEX_64 = /[0-9a-fA-F]{64,}/g;
 // A Cloudflare account, zone or D1 id is 32 hex digits. Such runs are common in code (digests,
 // project keys), so they count only in config or credential contexts. Requiring no adjacent letter

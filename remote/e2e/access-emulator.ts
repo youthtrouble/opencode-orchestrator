@@ -1,7 +1,8 @@
 // A local stand-in for Cloudflare Access in front of `wrangler dev`. Like Access it admits a request only
-// with the run's service token (the Mac) or the owner's session cookie (the phone), and forwards it with a
+// with the run's service token (the Mac) or a signed-in session cookie (a phone), and forwards it with a
 // Cf-Access-Jwt-Assertion it signs itself; anything else gets the redirect to the login page Access sends.
-// It also injects the faults the end-to-end run needs: a lost ack response, and Access going away.
+// It also injects the faults the end-to-end run needs: a lost ack response, Access going away, and Access of
+// another team answering for the hostname.
 import { createRequire } from "node:module";
 import { createServer, request as forward, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
@@ -15,12 +16,22 @@ const { exportJWK, generateKeyPair, SignJWT } = await import(pathToFileURL(worke
 export const TEAM_DOMAIN = "https://example.cloudflareaccess.com";
 export const AUD = "e2e-audience-tag";
 export const OWNER_EMAIL = "owner@example.com";
-/** The session cookie the phone presents; Access would have set it at login. */
+/** The owner's second sign-in: the Worker's OWNER_EMAIL lists both. */
+export const CO_OWNER_EMAIL = "co-owner@example.com";
+/** The session cookies the phone presents; Access would have set them at login. */
 export const OWNER_COOKIE = "CF_Authorization=e2e-owner";
+export const CO_OWNER_COOKIE = "CF_Authorization=e2e-co-owner";
+/** Someone a loosened Access policy lets in, on the owner's domain, whom the Worker does not list. */
+export const OUTSIDER_COOKIE = "CF_Authorization=e2e-outsider";
 const LOGIN_URL = `${TEAM_DOMAIN}/cdn-cgi/access/login/trains.example.com`;
 const KEY_ID = "e2e-key";
 const ACK_PATH = "/api/v1/machine/ack";
 const OWNER_CLAIMS = { type: "app", email: OWNER_EMAIL, sub: "e2e-owner" };
+const SESSIONS = new Map([
+  [OWNER_COOKIE, OWNER_CLAIMS],
+  [CO_OWNER_COOKIE, { type: "app", email: CO_OWNER_EMAIL, sub: "e2e-co-owner" }],
+  [OUTSIDER_COOKIE, { type: "app", email: "outsider@example.com", sub: "e2e-outsider" }],
+]);
 
 export interface ServiceToken {
   clientId: string;
@@ -46,6 +57,7 @@ export class AccessEmulator {
   #server: Server | null = null;
   #port = 0;
   #dropNextAck = false;
+  #issuer = TEAM_DOMAIN;
 
   constructor(options: EmulatorOptions, privateKey: CryptoKey, publicJwk: object) {
     this.#upstream = new URL(options.upstream);
@@ -105,6 +117,11 @@ export class AccessEmulator {
     this.#dropNextAck = true;
   }
 
+  /** Signs every assertion as `teamDomain`, as Access of another team would; TEAM_DOMAIN restores the run's. */
+  issueAs(teamDomain: string): void {
+    this.#issuer = teamDomain;
+  }
+
   async #handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const claims = this.#claimsFor(request);
     if (claims === null) {
@@ -124,7 +141,7 @@ export class AccessEmulator {
     upstream.pipe(response);
   }
 
-  /** The identity Access would vouch for: the service token, the owner's cookie, or nobody. */
+  /** The identity Access would vouch for: the service token, a session's cookie, or nobody. */
   #claimsFor(request: IncomingMessage): Record<string, string> | null {
     const { clientId, clientSecret } = this.#serviceToken;
     const { "cf-access-client-id": id, "cf-access-client-secret": secret } = request.headers;
@@ -132,14 +149,14 @@ export class AccessEmulator {
       return { type: "app", common_name: clientId, sub: "" };
     }
     const cookies = (request.headers.cookie ?? "").split(";").map((cookie) => cookie.trim());
-    if (cookies.includes(OWNER_COOKIE)) return OWNER_CLAIMS;
-    return null;
+    const session = cookies.find((cookie) => SESSIONS.has(cookie));
+    return session === undefined ? null : SESSIONS.get(session)!;
   }
 
   #sign(claims: Record<string, string>): Promise<string> {
     return new SignJWT(claims)
       .setProtectedHeader({ alg: "RS256", kid: KEY_ID })
-      .setIssuer(TEAM_DOMAIN)
+      .setIssuer(this.#issuer)
       .setAudience(AUD)
       .setIssuedAt()
       .setExpirationTime("5m")

@@ -189,7 +189,8 @@ never followed, nor their `Location` parsed (requests go through the HTTP transp
 `http.Client`). Errors are typed: a redirect, or a 2xx/4xx that is not JSON, came from Access, not the
 Worker (`access denied ...; check the Access service token (orch remote service-token set) and the
 Access Service Auth policy`); a Worker error is `HTTP <code> <error code>` (its free-text message is
-dropped, and a code outside the protocol's `Error` enum shows as `unknown`); a response that breaks
+dropped, and a code outside the protocol's `Error` enum shows as `unknown`; a `wrong_issuer` adds
+`(the Worker expects Access team <expected_issuer>)` when that field is exactly a team domain); a response that breaks
 the schema is a protocol error saying how in fixed words (`a field not in the schema`, `a field of
 the wrong type`, `a field missing, null or not in the schema`), never which field or value; no
 usable response is a network error with a fixed cause (`could not connect`, `timed out`,

@@ -47,8 +47,8 @@ presents a service token. The Worker checks the Access assertion on every reques
 4. **Application**: **Zero Trust > Access controls > Applications > Create new application > Self-hosted and
    private > Add public hostname**: subdomain `trains`, domain `example.com` (yours), path empty
    (<https://developers.cloudflare.com/cloudflare-one/applications/configure-apps/self-hosted-public-app/>).
-   - Policy 1 "owner": Action **Allow**; Include **Emails** = `owner@example.com` (yours). Session duration 24 hours
-     (longer means fewer PIN prompts).
+   - Policy 1 "owner": Action **Allow**; Include **Emails** = `owner@example.com` (yours; add each address you sign in
+     with). Session duration 24 hours (longer means fewer PIN prompts).
    - Policy 2 "mac": Action **Service Auth**; Include **Service Token** = `work-trains-mac`.
    - Login methods: One-time PIN only. Optionally enable instant authentication when it is the only method.
    - Save. On the application's overview copy the **Application Audience (AUD) Tag**
@@ -77,7 +77,7 @@ wrangler deploy -c wrangler.deploy.jsonc   # 503 on every route until the secret
 # Each command prompts for its value; paste it at the prompt, never as an argument:
 wrangler secret put ACCESS_TEAM_DOMAIN       -c wrangler.deploy.jsonc   # https://<team>.cloudflareaccess.com
 wrangler secret put ACCESS_AUD               -c wrangler.deploy.jsonc   # the AUD tag
-wrangler secret put OWNER_EMAIL              -c wrangler.deploy.jsonc   # the email in the Access policy
+wrangler secret put OWNER_EMAIL              -c wrangler.deploy.jsonc   # the policy's emails, comma-separated
 wrangler secret put ACCESS_SERVICE_CLIENT_ID -c wrangler.deploy.jsonc   # the service token's Client ID
 wrangler secret put PUBLIC_ORIGIN            -c wrangler.deploy.jsonc   # https://trains.example.com, no trailing slash
 wrangler secret put MACHINE_TOKEN_SHA256     -c wrangler.deploy.jsonc   # the hash token rotate printed
@@ -133,6 +133,51 @@ moving or replacing the `orch` binary, since the plist holds its absolute path.
 `orch remote once` runs one cycle and prints `pulled N, applied N, pushed N, deferred N`; it refuses to run while
 `serve` holds the lock, and then `serve` syncs on its own. `orch remote status` should show a recent `last push` and
 `last pull` and `last error: none`, and the page lists your projects.
+
+## Moving to another hostname
+
+The Worker serves the page on one origin, `PUBLIC_ORIGIN`: a browser write (Accept, a typed answer, Undo, pause,
+resume, hide) from any other origin is refused, and notification emails link to it. Moving the page, say from the
+`workers.dev` URL to `https://trains.example.com`, is therefore a one-step cut-over, in this order:
+
+1. **Custom Domain**: **Workers & Pages > work-trains > Settings > Domains & Routes > Add > Custom Domain** =
+   `trains.example.com` (<https://developers.cloudflare.com/workers/configuration/routing/custom-domains/>).
+   Cloudflare creates the DNS record and the certificate.
+2. **Access**: the Access application must cover the new hostname (**Zero Trust > Access controls > Applications >
+   your app > Add public hostname**), so it keeps the same AUD tag. A second application would have another AUD, and
+   the Worker would refuse every request it lets through.
+3. **Config**: put the hostname in `routes` in `wrangler.deploy.jsonc`, even though step 1 added it in the
+   dashboard: `"routes": [{ "pattern": "trains.example.com", "custom_domain": true }]`. The config is the source of
+   truth: a `wrangler deploy` whose `routes` list custom domains replaces the Worker's custom domains with that
+   list (wrangler 4.118; with no `routes` it leaves them alone). Keep `"workers_dev": true` while you move if the
+   old URL should keep answering.
+4. **Worker**: point it at the new origin and deploy:
+
+   ```sh
+   cd remote/worker
+   wrangler secret put PUBLIC_ORIGIN -c wrangler.deploy.jsonc   # https://trains.example.com
+   wrangler deploy -c wrangler.deploy.jsonc
+   ```
+
+5. **Mac**: point `orch remote` at it and restart the LaunchAgent, which reads the config only at start:
+
+   ```sh
+   orch remote init --url https://trains.example.com --force    # keep your --root/--exclude flags
+   launchctl kickstart -k gui/$(id -u)/org.opencode-orchestrator.work-trains
+   orch remote status                                             # a new last push, last error: none
+   ```
+
+6. **Phone**: open the new address and add it to the home screen again. A page still open on the old address can
+   read but not write; reload it from the new one.
+
+**Sign-in works at Access but the page says "Access token from another team domain".** The Access application in
+front of the hostname belongs to another Zero Trust team than the Worker's `ACCESS_TEAM_DOMAIN`, for example one
+created under another Cloudflare account. The Worker answers 403 `wrong_issuer` with the team domain it expects
+(`expected_issuer`; a team domain is public, the AUD tag and emails are never shown), and `orch remote status` shows
+`HTTP 403 wrong_issuer (the Worker expects Access team https://<team>.cloudflareaccess.com)` once the Mac hits it.
+Fix it on one side: protect the hostname with the application of the team the Worker expects, or set
+`ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` to the team and AUD tag of the application that does protect it (and use a
+service token of that same team for the Mac). Then `wrangler deploy` is not needed: secrets apply at once.
 
 ## Reference
 

@@ -241,6 +241,35 @@ func TestAWorkerErrorIsAStatusErrorWithItsCodeAndWithoutItsMessage(t *testing.T)
 	}
 }
 
+func TestAWrongIssuerErrorNamesTheTeamDomainTheWorkerExpectsAndNothingElse(t *testing.T) {
+	c, _ := serve(t, jsonReply(403, example(t, "error-wrong-issuer.json")))
+	_, err := c.Pull(context.Background())
+	want := "GET /api/v1/machine/pull: HTTP 403 wrong_issuer (the Worker expects Access team https://example.cloudflareaccess.com)"
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+
+	for _, issuer := range []string{
+		`"https://example.cloudflareaccess.com/` + credentials.MachineToken + `"`,
+		`"https://example.com"`,
+		`42`,
+	} {
+		body := `{"error":"wrong_issuer","message":"","expected_issuer":` + issuer + `}`
+		c, _ := serve(t, jsonReply(403, json.RawMessage(body)))
+		_, err := c.Pull(context.Background())
+		if err == nil || err.Error() != "GET /api/v1/machine/pull: HTTP 403 wrong_issuer" {
+			t.Errorf("expected_issuer %s: err = %v, want the code alone", issuer, err)
+		}
+		noSecrets(t, err)
+	}
+
+	forbidden := `{"error":"forbidden","message":"","expected_issuer":"https://example.cloudflareaccess.com"}`
+	c, _ = serve(t, jsonReply(403, json.RawMessage(forbidden)))
+	if _, err := c.Pull(context.Background()); err == nil || err.Error() != "GET /api/v1/machine/pull: HTTP 403 forbidden" {
+		t.Errorf("err = %v, want the issuer only with wrong_issuer", err)
+	}
+}
+
 func TestAPullWithAnUnknownFieldIsAProtocolError(t *testing.T) {
 	var pull map[string]any
 	if err := json.Unmarshal(example(t, "pull-response.json"), &pull); err != nil {

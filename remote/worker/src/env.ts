@@ -2,6 +2,9 @@ import { NotConfiguredError } from "./http.ts";
 
 // Identity values are Worker secrets, never committed config, so a deploy without them must fail
 // closed. NOTIFY_* are optional: without both the Worker simply sends no email.
+// OWNER_EMAIL is a comma-separated allowlist of the emails the browser routes accept (one is fine).
+// PUBLIC_ORIGIN is exactly one origin, the hostname the page is served on: moving to a new hostname is
+// a one-step cut-over (set PUBLIC_ORIGIN to it), and a write from any other origin is refused.
 const REQUIRED_SECRETS = [
   "ACCESS_TEAM_DOMAIN",
   "ACCESS_AUD",
@@ -23,8 +26,8 @@ export type WorkerEnv = Env & Partial<Record<RequiredSecret | OptionalSecret, st
 export interface Config {
   accessTeamDomain: string;
   accessAud: string;
-  /** Lower-cased, so identity checks compare case-insensitively. */
-  ownerEmail: string;
+  /** The owners' emails, lower-cased and de-duplicated, so identity checks compare case-insensitively. */
+  ownerEmails: ReadonlySet<string>;
   accessServiceClientId: string;
   machineTokenSha256: Uint8Array;
   publicOrigin: string;
@@ -33,7 +36,8 @@ export interface Config {
 }
 
 const SECRET_FORMATS: Partial<Record<RequiredSecret, (value: string) => boolean>> = {
-  ACCESS_TEAM_DOMAIN: (value) => /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(value),
+  ACCESS_TEAM_DOMAIN: isAccessTeamDomain,
+  OWNER_EMAIL: (value) => parseEmailList(value) !== null,
   MACHINE_TOKEN_SHA256: (value) => /^[0-9a-f]{64}$/.test(value),
   PUBLIC_ORIGIN: isHttpsOrigin,
 };
@@ -46,13 +50,28 @@ export function readConfig(env: WorkerEnv): Config {
   return {
     accessTeamDomain: secret("ACCESS_TEAM_DOMAIN"),
     accessAud: secret("ACCESS_AUD"),
-    ownerEmail: secret("OWNER_EMAIL").toLowerCase(),
+    ownerEmails: new Set(parseEmailList(secret("OWNER_EMAIL"))),
     accessServiceClientId: secret("ACCESS_SERVICE_CLIENT_ID"),
     machineTokenSha256: hexToBytes(secret("MACHINE_TOKEN_SHA256")),
     publicOrigin: secret("PUBLIC_ORIGIN"),
     notifyFrom: env.NOTIFY_FROM || null,
     notifyTo: env.NOTIFY_TO || null,
   };
+}
+
+/** An Access team domain as Access writes it in a JWT's `iss`: `https://<team>.cloudflareaccess.com`. */
+export function isAccessTeamDomain(value: string): boolean {
+  return /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com$/.test(value);
+}
+
+/**
+ * OWNER_EMAIL is a comma-separated allowlist, so one deploy can admit more than one sign-in of the
+ * same owner; a single address is a list of one. Returns the addresses lower-cased, or null when any
+ * entry, an empty one included, is not an email: a typo must fail closed, never shorten the list.
+ */
+function parseEmailList(value: string): string[] | null {
+  const emails = value.split(",").map((entry) => entry.trim().toLowerCase());
+  return emails.every(isEmailShaped) ? emails : null;
 }
 
 function isUsable(name: RequiredSecret, value: string | undefined): boolean {

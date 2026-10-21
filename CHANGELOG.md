@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- remote: Work Trains for more than one sign-in and a new hostname (WT21). `OWNER_EMAIL` is now a
+  comma-separated allowlist (trimmed, lower-cased, de-duplicated; any empty or malformed entry fails closed
+  with 503 `not_configured`, as a missing secret does); a single address works as before. An Access JWT
+  whose `iss` is another Zero Trust team domain is refused with 403 `wrong_issuer` and `expected_issuer`, the
+  team domain the Worker expects (new in the v1 protocol's `Error`; a team domain is public, the AUD and
+  emails are never shown), instead of the opaque 403, and `orch remote status` shows it as `HTTP 403
+  wrong_issuer (the Worker expects Access team https://<team>.cloudflareaccess.com)`. `PUBLIC_ORIGIN` stays
+  one exact origin: [remote/README.md](remote/README.md#moving-to-another-hostname) has the cut-over steps
+  to a Custom Domain (dashboard, `routes` in the deploy config, `PUBLIC_ORIGIN`, `orch remote init --url
+  --force`, LaunchAgent restart) and the wrong-team fix. The end-to-end test now signs in two owners,
+  refuses an unlisted email and a write from the old hostname, and checks `wrong_issuer` on the phone and
+  in `orch remote status`.
 - Work Trains (WT1-WT17): an optional, private, self-hosted status page for every orchestrator project
   on a Mac, built for a phone. A Cloudflare Worker with D1 behind Cloudflare Access holds the latest
   snapshots; the Mac runs `orch remote serve` (Go-only, kept running by a LaunchAgent), which pushes

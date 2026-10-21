@@ -9,9 +9,18 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { AccessEmulator, AUD, OWNER_COOKIE, OWNER_EMAIL, TEAM_DOMAIN } from "./access-emulator.ts";
+import {
+  AccessEmulator,
+  AUD,
+  CO_OWNER_COOKIE,
+  CO_OWNER_EMAIL,
+  OUTSIDER_COOKIE,
+  OWNER_COOKIE,
+  OWNER_EMAIL,
+  TEAM_DOMAIN,
+} from "./access-emulator.ts";
 import { buildOrch, OrchSandbox, type Credentials } from "./orch.ts";
-import { PAGE_ORIGIN, Phone, type Json } from "./phone.ts";
+import { OLD_PAGE_ORIGIN, PAGE_ORIGIN, Phone, type Json } from "./phone.ts";
 import { delay, freePort, startWorkerDev, type WorkerDev } from "./worker-dev.ts";
 
 /** A little over the e2e Worker's 1 s undo window (wrangler.e2e.jsonc). */
@@ -25,6 +34,9 @@ const DATABASE_QUESTION = "Which database?";
 const NAMING_QUESTION = "What do we call the service?";
 const OUTAGE_QUESTION = "Ship the beta on Friday?";
 const LOST_ACK_QUESTION = "Keep the old endpoint?";
+/** An Access team other than the run's, as when the hostname's Access app lives in another account. */
+const ANOTHER_TEAM_DOMAIN = "https://other-example.cloudflareaccess.com";
+const FORBIDDEN = { error: "forbidden", message: "forbidden" };
 
 interface OnceResult {
   code: number;
@@ -42,6 +54,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
   let dev: WorkerDev | undefined;
   let orch: OrchSandbox;
   let phone: Phone;
+  let coOwnerPhone: Phone;
   let alpha: string;
   let beta: string;
   /** When the cycle that first pushed alpha returned: its next push is due 60 s after. */
@@ -76,7 +89,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     dev = await startWorkerDev(tmp, workerPort, {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
       ACCESS_AUD: AUD,
-      OWNER_EMAIL,
+      OWNER_EMAIL: `${OWNER_EMAIL}, ${CO_OWNER_EMAIL}`,
       ACCESS_SERVICE_CLIENT_ID: credentials.accessClientId,
       MACHINE_TOKEN_SHA256: createHash("sha256").update(credentials.machineToken).digest("hex"),
       PUBLIC_ORIGIN: PAGE_ORIGIN,
@@ -84,6 +97,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     });
     await emulator.start();
     phone = new Phone(emulator.url);
+    coOwnerPhone = new Phone(emulator.url, { cookie: CO_OWNER_COOKIE });
     orch = new OrchSandbox(tmp, orchBinary, credentials);
     await orch.init(emulator.url);
     alpha = orch.createProject("alpha");
@@ -157,6 +171,14 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal(machineAsOwner.status, 403, "the service token's own JWT replaces the owner assertion it carried");
   });
 
+  it("A1: each email OWNER_EMAIL lists signs in; someone else Access lets in is refused", async () => {
+    assert.equal((await phone.loadSummary()).status, 200, "the owner");
+    assert.equal((await coOwnerPhone.loadSummary()).status, 200, "the owner's second email");
+    const outsider = await new Phone(emulator.url, { cookie: OUTSIDER_COOKIE }).loadSummary();
+    assert.equal(outsider.status, 403, "an email on the owner's domain that the Worker does not list");
+    assert.deepEqual(outsider.body, FORBIDDEN);
+  });
+
   it("pushes the machine's first project on its first cycle", async () => {
     const { code, report } = await once();
     alphaPushedAt = Date.now();
@@ -196,6 +218,9 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     const question = await phone.question("beta", DATABASE_QUESTION);
     assert.equal(question.recommended, "Use Postgres");
     assert.equal(question.blocking, true);
+    const fromOldHostname = await new Phone(emulator.url, { origin: OLD_PAGE_ORIGIN }).accept(question.id);
+    assert.equal(fromOldHostname.status, 403, "after the move, a page on the old hostname cannot write");
+    assert.deepEqual(fromOldHostname.body, FORBIDDEN);
     const tappedAt = Date.now();
     const tapKey = randomUUID();
     const tap = await phone.accept(question.id, tapKey);
@@ -236,8 +261,8 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal((await phone.question("beta", NAMING_QUESTION)).answer, null);
 
     const tappedAt = Date.now();
-    const typed = await phone.reply(question.id, "Call it Lovelace");
-    assert.equal(typed.status, 201, "an undone answer leaves the question open to another");
+    const typed = await coOwnerPhone.reply(question.id, "Call it Lovelace");
+    assert.equal(typed.status, 201, "an undone answer leaves the question open to another, from either owner");
     await delay(PAST_UNDO_WINDOW_MS);
     const { code, report } = await once();
     assert.equal(code, 0, report.error);
@@ -249,7 +274,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal(replies[0].body, "Call it Lovelace");
   });
 
-  it("notifies the owner once about the blocking question, without its text", async () => {
+  it("notifies the owner once about the blocking question, without its text, linking to PUBLIC_ORIGIN", async () => {
     const notifications = await phone.notifications();
     assert.deepEqual(notifications, [
       { subject: "Work Trains: beta needs you", text: `Work Trains: beta needs you\n${PAGE_ORIGIN}\n` },
@@ -292,6 +317,27 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     assert.equal((await repliesTo(beta, question.id)).length, 1);
     const stored = await phone.reply(question.id, "Keep it until June", tapKey);
     assert.equal(stored.body.answer.status, "applied");
+  });
+
+  it("Access of another team is refused, naming the team domain the Worker expects, to phone and Mac", async () => {
+    emulator.issueAs(ANOTHER_TEAM_DOMAIN);
+    try {
+      const refused = await phone.loadSummary();
+      assert.equal(refused.status, 403);
+      assert.equal(refused.body.error, "wrong_issuer");
+      assert.equal(refused.body.expected_issuer, TEAM_DOMAIN);
+      const failed = await once();
+      assert.equal(failed.code, 1);
+      const status = await orch.run(["remote", "status", "--json"]);
+      const lastError = JSON.parse(status.stdout).last_error;
+      assert.equal(lastError.kind, "http_status");
+      assert.ok(
+        lastError.message.endsWith(`HTTP 403 wrong_issuer (the Worker expects Access team ${TEAM_DOMAIN})`),
+        lastError.message,
+      );
+    } finally {
+      emulator.issueAs(TEAM_DOMAIN);
+    }
   });
 
   it("A2, A4: the paused state is pushed after the spacing; resume clears the gate, starts no supervisor", async () => {

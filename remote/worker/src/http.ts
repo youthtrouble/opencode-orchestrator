@@ -27,6 +27,22 @@ export class ForbiddenError extends HttpError {
 }
 
 /**
+ * An Access JWT from another Access team than the Worker's: Access and ACCESS_TEAM_DOMAIN disagree, so
+ * every sign-in would fail. Unlike ForbiddenError it says so, and names the team domain the Worker
+ * expects, so the misconfiguration can be found from the phone or `orch remote status`. A team domain
+ * is public (Access's login redirect shows it); the response names nothing else.
+ */
+export class WrongIssuerError extends HttpError {
+  readonly expectedIssuer: string;
+
+  constructor(expectedIssuer: string) {
+    super(403, "wrong_issuer", `Access token from another team domain; this Worker expects ${expectedIssuer}`);
+    this.name = "WrongIssuerError";
+    this.expectedIssuer = expectedIssuer;
+  }
+}
+
+/**
  * A deploy whose secrets are missing or malformed. The gate checks config before the JWT, so the
  * caller may be anyone: the response names nothing, and the bad secret names go to the log only.
  */
@@ -69,6 +85,11 @@ export function toResponse(error: unknown, path: string): Response {
   }
   if (error instanceof NotConfiguredError) {
     console.log(JSON.stringify({ not_configured: error.secretNames, path }));
+  }
+  if (error instanceof WrongIssuerError) {
+    console.log(JSON.stringify({ auth: "jwt_wrong_issuer", path }));
+    const body = { error: error.code, message: error.message, expected_issuer: error.expectedIssuer };
+    return jsonResponse(error.status, body);
   }
   if (error instanceof UnsupportedVersionError) {
     return jsonResponse(error.status, { error: error.code, message: error.message, supported: error.supported });

@@ -1,10 +1,12 @@
-// The owner's phone, simulated: the page's own API calls, made through the Access emulator with the owner's
-// session cookie and the page's origin, as the browser would make them.
+// The owner's phone, simulated: the page's own API calls, made through the Access emulator with a session
+// cookie (the owner's unless told otherwise) and the page's origin, as the browser would make them.
 import { randomUUID } from "node:crypto";
 import { OWNER_COOKIE } from "./access-emulator.ts";
 
 /** The Worker's PUBLIC_ORIGIN in the run: a browser write must come from it. */
 export const PAGE_ORIGIN = "https://trains.example.com";
+/** Where the page was served before the hostname moved to PAGE_ORIGIN. */
+export const OLD_PAGE_ORIGIN = "https://work-trains.example.workers.dev";
 
 // Loose views of the summary: the protocol tests own its exact shape.
 export type Json = Record<string, any>;
@@ -14,15 +16,29 @@ export interface Reply {
   body: Json;
 }
 
+export interface PhoneOptions {
+  cookie?: string;
+  origin?: string;
+}
+
 export class Phone {
   readonly #accessUrl: string;
+  readonly #cookie: string;
+  readonly #origin: string;
 
-  constructor(accessUrl: string) {
+  constructor(accessUrl: string, { cookie = OWNER_COOKIE, origin = PAGE_ORIGIN }: PhoneOptions = {}) {
     this.#accessUrl = accessUrl;
+    this.#cookie = cookie;
+    this.#origin = origin;
+  }
+
+  /** The summary call as it answered, refusals included. */
+  loadSummary(): Promise<Reply> {
+    return this.#call("GET", "/api/v1/summary");
   }
 
   async summary(): Promise<Json> {
-    const { status, body } = await this.#call("GET", "/api/v1/summary");
+    const { status, body } = await this.loadSummary();
     if (status !== 200) throw new Error(`GET /api/v1/summary answered ${status}`);
     return body;
   }
@@ -63,7 +79,7 @@ export class Phone {
   }
 
   async #call(method: string, path: string, payload?: Json): Promise<Reply> {
-    const headers: Record<string, string> = { Cookie: OWNER_COOKIE, Origin: PAGE_ORIGIN };
+    const headers: Record<string, string> = { Cookie: this.#cookie, Origin: this.#origin };
     // The Worker takes a write, DELETE included, only as JSON (its CSRF defence).
     if (method !== "GET") headers["Content-Type"] = "application/json";
     const response = await fetch(this.#accessUrl + path, {

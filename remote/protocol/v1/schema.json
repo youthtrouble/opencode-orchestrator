@@ -1007,7 +1007,7 @@
       }
     },
     "Error": {
-      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version.",
+      "description": "Every non-2xx body. supported lists the protocol versions, sent with unsupported_version. expected_issuer is the Access team domain the Worker expects, sent with wrong_issuer.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1025,6 +1025,7 @@
             "too_late",
             "payload_too_large",
             "not_configured",
+            "wrong_issuer",
             "internal"
           ]
         },
@@ -1039,6 +1040,10 @@
             "type": "integer",
             "minimum": 1
           }
+        },
+        "expected_issuer": {
+          "type": "string",
+          "pattern": "^https://[a-z0-9-]+\\.cloudflareaccess\\.com$"
         }
       }
     }

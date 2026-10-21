@@ -5,11 +5,17 @@
 // never config:
 //   ACCESS_TEAM_DOMAIN        https://<team>.cloudflareaccess.com
 //   ACCESS_AUD                the Access application's AUD tag
-//   OWNER_EMAIL               the one email address the browser routes accept
+//   OWNER_EMAIL               the emails the browser routes accept, comma-separated (one is fine):
+//                             owner@example.com,owner.other@example.com; each must also be in the Access policy
 //   ACCESS_SERVICE_CLIENT_ID  the Access service token's client id (the Mac's)
 //   MACHINE_TOKEN_SHA256      64 lowercase hex: SHA-256 of the machine token
-//   PUBLIC_ORIGIN             https://trains.example.com (no trailing slash)
+//   PUBLIC_ORIGIN             https://trains.example.com (no trailing slash): the routes hostname below, the only
+//                             origin a browser write may come from and the link in notification emails
 //   NOTIFY_FROM, NOTIFY_TO    optional: sender on an Email Routing domain, and the verified recipient
+//
+// The custom domain lives here, in "routes", even when it was first added in the dashboard: a deploy whose
+// routes list custom domains replaces the Worker's custom domains with that list. To serve workers.dev as well (say during a move),
+// set "workers_dev" to true.
 {
   "name": "work-trains",
   "main": "src/index.ts",

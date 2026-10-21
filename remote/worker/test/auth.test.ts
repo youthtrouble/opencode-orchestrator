@@ -1,10 +1,12 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { compileSchema } from "../../protocol/validate.ts";
 import { readJsonBody } from "../src/body.ts";
 import { jsonResponse } from "../src/http.ts";
 import { createWorker } from "../src/index.ts";
 import type { Route } from "../src/routes.ts";
-import { keys, machineToken, ORIGIN, signingKeys, testEnv, tokensAt } from "./support/access.ts";
+import { keys, machineToken, ORIGIN, signingKeys, TEAM, testEnv, tokensAt } from "./support/access.ts";
 
 const NOW = new Date("2026-10-20T12:00:00Z");
 const NOW_SECONDS = NOW.getTime() / 1000;
@@ -66,6 +68,18 @@ test("a valid owner JWT reaches a browser route", async () => {
 test("the owner email is compared case-insensitively", async () => {
   const result = await call("/api/v1/ping", { jwt: await browserJwt({ email: "OWNER@example.COM" }) });
   assert.equal(result.status, 200);
+});
+
+test("every email OWNER_EMAIL lists is an owner, normalised; another email on the same domain is not", async (t) => {
+  const envOverrides = { OWNER_EMAIL: " Owner@Example.com ,CO-OWNER@example.com, owner@example.com" };
+  for (const email of ["owner@example.com", "co-owner@example.com", "Co-Owner@Example.COM"]) {
+    const result = await call("/api/v1/ping", { jwt: await browserJwt({ email }), envOverrides });
+    assert.equal(result.status, 200, email);
+  }
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: string) => logged.push(line));
+  assertForbidden(await call("/api/v1/ping", { jwt: await browserJwt({ email: "other@example.com" }), envOverrides }));
+  assert.deepEqual(logged.map((line) => JSON.parse(line).auth), ["browser_email_mismatch"]);
 });
 
 test("a service token JWT plus the machine token reaches a machine route", async () => {
@@ -132,6 +146,37 @@ for (const [name, reason, run] of forbiddenCases) {
     t.mock.method(console, "log", (line: string) => logged.push(line));
     assertForbidden(await run());
     assert.deepEqual(logged.map((line) => JSON.parse(line).auth), [reason]);
+  });
+}
+
+const validate = compileSchema(
+  JSON.parse(readFileSync(new URL("../../protocol/v1/schema.json", import.meta.url), "utf8")),
+);
+const ANOTHER_TEAM = "https://other-example.cloudflareaccess.com";
+
+// Access of another team signs with that team's keys, which this Worker does not know: the realistic
+// misconfiguration, which must still say which team the Worker expects.
+const wrongTeamCases: Array<[string, () => Promise<{ status: number; body: string }>]> = [
+  ["a browser JWT", async () => ping(await browserJwt({ iss: ANOTHER_TEAM }))],
+  ["a browser JWT signed with another team's key", async () =>
+    ping(await accessJwt({ kid: "key-2", payload: { ...ownerClaims, iss: ANOTHER_TEAM } }))],
+  ["a service JWT", async () => machineCall(await serviceJwt({ iss: ANOTHER_TEAM }), bearer)],
+];
+
+for (const [name, run] of wrongTeamCases) {
+  test(`403 wrong_issuer names the expected team domain: ${name} from another team`, async (t) => {
+    const logged: string[] = [];
+    t.mock.method(console, "log", (line: string) => logged.push(line));
+    const result = await run();
+    assert.equal(result.status, 403);
+    const body = JSON.parse(result.body);
+    assert.deepEqual(body, {
+      error: "wrong_issuer",
+      message: `Access token from another team domain; this Worker expects ${TEAM}`,
+      expected_issuer: TEAM,
+    });
+    assert.deepEqual(validate("Error", body), { ok: true });
+    assert.deepEqual(logged.map((line) => JSON.parse(line).auth), ["jwt_wrong_issuer"]);
   });
 }
 
@@ -228,6 +273,22 @@ test("missing or malformed secrets fail closed with a 503 that names nothing; th
   // Names only: a malformed value never reaches the log.
   const { loggedNames } = await callMisconfigured(t, { MACHINE_TOKEN_SHA256: "ABC" });
   assert.deepEqual(loggedNames, [["MACHINE_TOKEN_SHA256"]]);
+});
+
+test("an OWNER_EMAIL with any malformed or empty entry fails closed", async (t) => {
+  const notAllowlists = [
+    ",",
+    "owner@example.com,",
+    "owner@example.com,,co-owner@example.com",
+    "owner@example.com,co-owner",
+    "owner@example.com;co-owner@example.com",
+    "owner @example.com",
+  ];
+  for (const value of notAllowlists) {
+    const { result, loggedNames } = await callMisconfigured(t, { OWNER_EMAIL: value });
+    assert.equal(result.status, 503, value);
+    assert.deepEqual(loggedNames, [["OWNER_EMAIL"]], value);
+  }
 });
 
 test("PUBLIC_ORIGIN must be exactly an https origin", async (t) => {
