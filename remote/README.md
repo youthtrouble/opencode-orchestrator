@@ -101,6 +101,9 @@ wrangler secret put NOTIFY_FROM -c wrangler.deploy.jsonc   # a sender address on
 wrangler secret put NOTIFY_TO   -c wrangler.deploy.jsonc   # your verified address
 ```
 
+When GitHub Actions deploys (below), also set the environment variable `WORK_TRAINS_SEND_EMAIL` to `true`, or the
+rendered config leaves out the `send_email` binding and no email is sent.
+
 **Check it.** Opening `https://trains.example.com/` in a private window redirects to
 `https://<team>.cloudflareaccess.com/...`. On your phone, sign in with the PIN: the page loads and shows "Mac seen
 never". `wrangler deployments list -c wrangler.deploy.jsonc` lists the deployment.
@@ -184,6 +187,7 @@ Then add:
 | Variable | `WORK_TRAINS_D1_ID` | The `database_id` that `wrangler d1 create` printed |
 | Variable | `WORK_TRAINS_HOSTNAME` | `trains.example.com` (yours; no scheme or slash) |
 | Variable | `WORK_TRAINS_WORKERS_DEV` | Optional: `true` keeps the workers.dev URL answering; unset means `false` |
+| Variable | `WORK_TRAINS_SEND_EMAIL` | Optional: `true` declares the `send_email` binding email notifications need; unset means `false`: the binding is left out (as an account without Email Routing needs) and the Worker sends no email |
 
 With `gh`, pass each value on stdin so it never appears in argv or shell history:
 `gh secret set CLOUDFLARE_API_TOKEN --env work-trains-production` (it prompts) and

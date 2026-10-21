@@ -27,7 +27,7 @@ function changedLines(before: string, after: string): Array<[string, string]> {
 }
 
 test("rendering fills exactly the D1 id, the hostname and workers.dev, and keeps the rest of the template", () => {
-  const rendered = renderDeployConfig(template, instanceFromEnv(ENV));
+  const rendered = renderDeployConfig(template, instanceFromEnv({ ...ENV, WORK_TRAINS_SEND_EMAIL: "true" }));
   assert.equal(rendered.split("\n").length, template.split("\n").length);
   assert.deepEqual(changedLines(template, rendered), [
     [`"routes": [{ "pattern": "trains.example.com", "custom_domain": true }],`, `"routes": [{ "pattern": "${HOSTNAME}", "custom_domain": true }],`],
@@ -44,9 +44,21 @@ test("WORK_TRAINS_WORKERS_DEV=true keeps workers.dev on; unset or false keeps it
   assert.equal(workersDev(""), "false");
 });
 
+test("WORK_TRAINS_SEND_EMAIL=true keeps the send_email binding; unset or false drops it and its comment", () => {
+  const render = (value: string | undefined) => renderDeployConfig(template, instanceFromEnv({ ...ENV, WORK_TRAINS_SEND_EMAIL: value }));
+  const kept = render("true");
+  assert.match(kept, /"send_email": \[\{ "name": "EMAIL" \}\]/);
+  for (const value of [undefined, "", "false"]) {
+    const dropped = render(value);
+    assert.ok(!dropped.includes("send_email"), String(value));
+    assert.ok(!dropped.includes("NOTIFY_TO secret"), "the binding's comment goes with it");
+    assert.equal(dropped, kept.replace(/ *\/\/ No destination restriction[^\n]*\n *"send_email"[^\n]*\n/, ""));
+  }
+});
+
 test("values are trimmed and lower-cased", () => {
   const instance = instanceFromEnv({ WORK_TRAINS_D1_ID: ` ${D1_ID.toUpperCase()} `, WORK_TRAINS_HOSTNAME: "Status.Example.org\n" });
-  assert.deepEqual(instance, { d1Id: D1_ID, hostname: HOSTNAME, workersDev: false });
+  assert.deepEqual(instance, { d1Id: D1_ID, hostname: HOSTNAME, workersDev: false, sendEmail: false });
 });
 
 test("a missing, malformed or placeholder value is refused without echoing it", () => {
@@ -61,6 +73,7 @@ test("a missing, malformed or placeholder value is refused without echoing it", 
     { ...ENV, WORK_TRAINS_HOSTNAME: "localhost" },
     { ...ENV, WORK_TRAINS_HOSTNAME: "trains.example.com" },
     { ...ENV, WORK_TRAINS_WORKERS_DEV: "yes" },
+    { ...ENV, WORK_TRAINS_SEND_EMAIL: "TRUE" },
   ];
   for (const env of refused) {
     assert.throws(
@@ -79,6 +92,7 @@ test("a template that lost or doubled a placeholder is refused", () => {
   const instance = instanceFromEnv(ENV);
   assert.throws(() => renderDeployConfig(template.replace(`"workers_dev": false`, `"workers_dev": true`), instance), DeployConfigError);
   assert.throws(() => renderDeployConfig(`${template}\n"workers_dev": false`, instance), DeployConfigError);
+  assert.throws(() => renderDeployConfig(template.replace(`"send_email": [{ "name": "EMAIL" }],`, ""), instance), DeployConfigError);
 });
 
 test("the config is written owner-only and never over an existing file", (t) => {

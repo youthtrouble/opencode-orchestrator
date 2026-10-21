@@ -76,6 +76,7 @@ jobs:
       WORK_TRAINS_D1_ID: ${{ vars.WORK_TRAINS_D1_ID }}
       WORK_TRAINS_HOSTNAME: ${{ vars.WORK_TRAINS_HOSTNAME }}
       WORK_TRAINS_WORKERS_DEV: ${{ vars.WORK_TRAINS_WORKERS_DEV }}
+      WORK_TRAINS_SEND_EMAIL: ${{ vars.WORK_TRAINS_SEND_EMAIL }}
       TRIGGER: ${{ github.event_name }}
       TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && (inputs.sha || github.sha) || github.event.workflow_run.head_sha }}
       WRANGLER_SEND_METRICS: 'false'

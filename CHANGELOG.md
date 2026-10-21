@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- remote: the deploy workflow leaves the `send_email` binding out of the rendered `wrangler.deploy.jsonc` unless
+  the `work-trains-production` environment sets the new optional variable `WORK_TRAINS_SEND_EMAIL` to `true`, so an
+  account without Email Routing deploys. Without the binding the Worker skips email notifications, as it does when
+  `NOTIFY_FROM`/`NOTIFY_TO` are unset. Any value other than `true`, `false` or unset fails the render.
 - remote: the Work Trains page's size budget (`remote/worker/test/ui-assets.test.ts`) is now 48 KiB for
   everything in `public/`, up from 40 KiB: the OpenAI credits chip and the WT21c error messages together
   take the page past the old cap. The budget still fails the tests when crossed.
