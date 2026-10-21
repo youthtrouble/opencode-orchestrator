@@ -15,6 +15,9 @@ All tooling lives in `~/.config/opencode/orchestrator` (README there). Shell com
 - Background worker + supervisor: `worker.mjs start --brief .orchestrator/briefs/X.md --harness codex --detach --breadth standard`, `supervisor.mjs start`, `supervisor.mjs status|ack --event ID`.
 - Answer a headless conductor: `mailbox.mjs inbox`, then `mailbox.mjs reply <id> "answer"`. Autonomy: `policy.mjs show|unattended`.
 - Mailbox: `mailbox.mjs post --from claude --to coordinator --kind release --subject "..." --ref path`, `mailbox.mjs list --unacked-by claude`.
+  A question carries the reply you recommend and whether it blocks you:
+  `mailbox.mjs post --from claude --to human --kind question --subject "..." --body "..." --recommended "..." --blocking true|false`.
+- Session heartbeat (start of a task, every brief boundary): `session.mjs beat --door claude --now "<one line>" --slice <id> --progress <done>/<total>` (`--state done` when the plan is finished); `session.mjs show` reads it.
 - Manifests: `manifest.mjs create --task T --author claude --out .orchestrator/manifests/T.json <paths>`; `manifest.mjs verify file.json`.
 
 Conventions (same as the opencode side): frontier models plan, Opus 5.5 / Sol write, the other

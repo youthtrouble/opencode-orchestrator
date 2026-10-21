@@ -27,6 +27,8 @@ When the user gives you an idea, first restate it as outcome + acceptance criter
 five lines, gather repo facts with `explore`, then get a plan from the planner. Surface genuine
 product ambiguities to the human in one batch; make routine engineering calls yourself. Prefer
 finishing one slice end to end (coded, reviewed, verified, recorded) over starting many.
+Every question for the human follows "Questions for the human" in AGENTS.md: post it with
+`orch_mailbox_post` (kind `question`, to `human`) with `recommended` and `blocking` set.
 
 Size every delegation (trivial|small|medium|large|hard) so effort matches the work; most slices are medium. Default delegation targets by budget are in `<orchestrator_budget>`. If a vendor is red, do not wait
 idly: shift the role to the other vendor, or do the review/verification side first. If both are red,

@@ -210,16 +210,17 @@ every 5 minutes rather than on every read. Both runtimes share this cache.
 | Key | Default | Meaning |
 |---|---|---|
 | `push_to_main` | `auto` | Push a verified slice (review pass + checks green) |
-| `release`, `delete_code`, `spend`, `deploy` | `ask` | Post a `question`, keep working on independent slices |
+| `release`, `delete_code`, `spend`, `deploy` | `ask` | Post a `question` (with `--recommended` and `--blocking`), keep working on independent slices |
 | `force_push` | `never` | Cannot be set to anything else |
-| `product_questions` | `continue_with_assumption` | Record the assumption in `STATE.md` and the report, post the question, continue |
+| `product_questions` | `continue_with_assumption` | Record the assumption in `STATE.md` and the report, post the question (with `--recommended` and `--blocking`; an interactive conductor also posts the questions it asks in chat), continue |
 
 `policy.mjs set` refuses `key=never` except for `force_push`. `policy.mjs unattended` (also
 `kickoff --unattended`) sets `push_to_main=auto` and `product_questions=continue_with_assumption`.
 
 A headless conductor that reaches a human gate with nothing independent left posts the question and
 runs `flip.mjs gate --active <door> --reason "..." --question <id>`. The supervisor will not
-relaunch while the gate is set. `kickoff` and `flip.mjs run` clear it and start a conductor.
+relaunch while the gate is set, and `flip.mjs decide` answers `gate`: a headless conductor updates
+`STATE.md` and stops, while an interactive conductor reports the gate and keeps working with the human. `kickoff` and `flip.mjs run` clear it and start a conductor.
 `flip.mjs gate --clear`, and `mailbox.mjs reply` to the gate's question (its full id or a prefix of
 it, as recorded by `--question`), clear it and record `pending_launch` for the gated door, which the
 supervisor launches once the conductor lane is idle and unlocked (within a minute); `gate --clear`

@@ -65,6 +65,22 @@ independent slice; record a human gate (`flip.mjs gate`) only when nothing indep
 `product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
 post the question, continue.
 
+## Questions for the human
+<!-- Word-identical in AGENTS.md and claude/agents/conductor.md (Claude Code does not load AGENTS.md): change both. -->
+Every question for the human goes in the mailbox with the answer you recommend and whether it blocks you:
+`orch mailbox post --from <you> --to human --kind question --subject "..." --body "..." --recommended "..." --blocking true|false`.
+The recommended answer is a complete reply the human could send as-is (Work Trains offers it as one-tap Accept);
+`--blocking true` only when no independent work can continue without the answer. A reply may arrive from the
+terminal or from Work Trains (`"via": "remote"` on the reply); treat both the same.
+In an interactive session under the unattended policy (`product_questions: continue_with_assumption`), also post
+every question you ask in chat this way, then continue with your assumption; when the human answers in chat, run
+`orch mailbox ack --id <id> --by human --note "answered in chat"`.
+If `orch worker status --lane conductor` shows a running headless conductor, an interactive session is not the
+conductor: report what it is doing and do not act unless the human stops that lane.
+Keep your session heartbeat current at the start of a task and at every brief boundary:
+`orch session beat --door <door> --now "<one line>" --slice <id> --progress <done>/<total>`; when the plan is
+finished, add `--state done`.
+
 ## Keeping the live checkout current
 <!-- Word-identical in AGENTS.md and claude/agents/conductor.md (Claude Code does not load AGENTS.md): change both. -->
 The live install (the `~/.config/opencode` symlinks) runs from the MAIN checkout, so a push made from a
@@ -84,7 +100,8 @@ interactive session to exactly one headless conductor. A typed `/away` needs no 
 a spoken trigger, first ask once "Hand off to a headless conductor and enable unattended push?"
 and continue only on a yes. Arguments: an optional brief path and `--dry-run`.
 1. Update `.orchestrator/STATE.md` (the exact next action) and write any remaining briefs under
-   `.orchestrator/briefs/`.
+   `.orchestrator/briefs/`; post every question still open in this chat to the mailbox with
+   `--recommended` and `--blocking` (see "Questions for the human").
 2. Pick the brief to continue with: the argument, else STATE.md's next brief, else
    `.orchestrator/briefs/conductor-continue.md` (the brief `orch flip run` writes; if it is absent,
    write it as "Continue from .orchestrator/STATE.md.").
@@ -120,6 +137,8 @@ Claude Code conductor (`claude --agent conductor`, Anthropic-native). Both use t
 - At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active <door>`.
   `flip`/`handback` => update STATE.md, post a `handoff`, run `flip.mjs run --to <door> --from <you>`,
   and stop. `stay` => continue. `pause` => write the remaining briefs and stop. Then run `node ~/.config/opencode/orchestrator/bin/flip.mjs pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `supervisor.mjs start` running).
+  `gate` => the human has paused the project: update STATE.md, post nothing new, and stop (never pause or
+  flip on it). In an interactive session, report the gate and its question and carry on with the human instead.
 At a HUMAN gate while headless (push, deploy, spend, product question): post the `question` to the mailbox, run `node ~/.config/opencode/orchestrator/bin/flip.mjs gate --active <door> --reason "..." --question <id>`, and stop. Never use `pause` for a human gate; pause is for budgets only.
 - A conductor whose own provider dies is flipped automatically (plugin hook or supervisor); the
   away conductor hands back at the first boundary after the home vendor is stably green.

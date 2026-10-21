@@ -236,6 +236,9 @@ orch mailbox inbox                     # the open questions: (blocking), the rec
 orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"   # the id or its first 8 characters
 ```
 
+Every question shows the answer the conductor recommends and whether it is blocked on you; to accept
+the recommendation, reply with it as written.
+
 **Clearing a gate.** A conductor stopped at a human gate stays stopped until you clear the gate.
 Answer its question with `orch mailbox reply <id> "..."`, or do the thing it asked for and run
 `orch flip gate --clear`. Either clears the gate, and the supervisor restarts that door's conductor

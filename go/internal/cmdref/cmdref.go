@@ -78,7 +78,7 @@ func ConductorContinueBrief(to, from, reason string) string {
 		"At each brief boundary run: " + Script("flip") + " decide --active " + to + "\n" +
 		"If it says handback or flip: update STATE.md, post a handoff, run " + flip + " run --to <door> --from " + to + ", and stop.\n" +
 		"If it says gate: the project is waiting for the human; update STATE.md and stop, without running " + flip + " pause, run or gate.\n" +
-		"You cannot ask the human interactively: put questions in the mailbox (kind question) and continue with independent work, or stop at human gates.\n" +
+		"You cannot ask the human interactively: put each question in the mailbox with the answer you recommend and whether it blocks you (" + ScriptFile("mailbox") + " post --from conductor-" + to + " --to human --kind question --subject \"...\" --body \"...\" --recommended \"<a complete reply>\" --blocking true|false) and continue with independent work, or stop at human gates.\n" +
 		"HEADLESS RULE: ending your turn ends this session and kills background subagents. Run every subagent in the FOREGROUND and wait; any background agents from a previous headless session are gone, re-run them in the foreground. " +
 		"Do not finish until the loop is complete or you have handed off with " + flip + " run/pause, or stopped at a human gate with " + flip + " gate (never pause for a human gate).\n"
 }

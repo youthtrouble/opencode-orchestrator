@@ -7,7 +7,8 @@ import { spawnSync } from "node:child_process";
 
 const repo = path.dirname(path.dirname(new URL(import.meta.url).pathname));
 const read = (rel) => fs.readFileSync(path.join(repo, rel), "utf8");
-const ruleHeading = "## Going away (`/away`)";
+const awayHeading = "## Going away (`/away`)";
+const questionsHeading = "## Questions for the human";
 
 function frontmatter(rel) {
   const match = /^---\n([\s\S]*?)\n---\n/.exec(read(rel));
@@ -15,13 +16,26 @@ function frontmatter(rel) {
   return Object.fromEntries(match[1].split("\n").map((line) => line.split(/:\s*(.*)/s).slice(0, 2)));
 }
 
-// The rule is the one copy of the procedure both doors load: AGENTS.md (opencode) and the Claude
+// A shared section is the one copy of a rule both doors load: AGENTS.md (opencode) and the Claude
 // conductor's own instructions, which do not include AGENTS.md.
-function rule(rel) {
+function section(rel, heading) {
   const text = read(rel);
-  const start = text.indexOf(ruleHeading);
-  assert.notEqual(start, -1, `${rel} has the /away rule`);
+  const start = text.indexOf(heading);
+  assert.notEqual(start, -1, `${rel} has "${heading}"`);
   return text.slice(start, text.indexOf("\n## ", start + 1));
+}
+
+// Every `orch <script> [<verb>] [--option ...]` a section names must exist: the verb in the script's
+// usage (`<script>.mjs <verb>`) and each option somewhere in the script.
+function assertOrchCommandsExist(text, minimum) {
+  const commands = [...text.matchAll(/`orch (\w+)((?: [^`]*)?)`/g)];
+  assert.ok(commands.length >= minimum, `at least ${minimum} orch commands`);
+  for (const [, script, rest] of commands) {
+    const source = read(`orchestrator/bin/${script}.mjs`);
+    const verb = /^ (\w+)/.exec(rest)?.[1];
+    if (verb) assert.match(source, new RegExp(`${script}\\.mjs ${verb}\\b`), `orch ${script} ${verb}`);
+    for (const [option] of rest.matchAll(/--[\w-]+/g)) assert.match(source, new RegExp(`${option}(?![\\w-])`), `orch ${script} ${option}`);
+  }
 }
 
 test("/away is an opencode command for the conductor and a Claude skill only the human invokes", () => {
@@ -32,17 +46,18 @@ test("/away is an opencode command for the conductor and a Claude skill only the
   for (const rel of ["commands/away.md", "claude/skills/away/SKILL.md"]) assert.match(read(rel), /\$ARGUMENTS/);
 });
 
-test("the /away rule is word-identical in both contracts", () => {
-  assert.equal(rule("claude/agents/conductor.md"), rule("AGENTS.md"));
+for (const heading of [awayHeading, questionsHeading]) {
+  test(`"${heading}" is word-identical in both contracts`, () => {
+    assert.equal(section("claude/agents/conductor.md", heading), section("AGENTS.md", heading));
+  });
+}
+
+test("every orch command the /away rule names exists in its script", () => {
+  assertOrchCommandsExist(section("AGENTS.md", awayHeading), 5);
 });
 
-test("every orch command the /away rule names exists in its script's usage", () => {
-  const commands = [...rule("AGENTS.md").matchAll(/`orch (\w+) ?(\w+)?/g)];
-  assert.ok(commands.length >= 5);
-  for (const [, script, verb] of commands) {
-    const source = read(`orchestrator/bin/${script}.mjs`);
-    if (verb) assert.match(source, new RegExp(`${script}\\.mjs ${verb}\\b`), `orch ${script} ${verb}`);
-  }
+test("every orch command the questions rule names exists in its script", () => {
+  assertOrchCommandsExist(section("AGENTS.md", questionsHeading), 4);
 });
 
 test("install-claude.sh links the away skill and --uninstall removes it", (t) => {

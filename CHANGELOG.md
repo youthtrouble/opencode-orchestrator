@@ -19,6 +19,14 @@
   (new nullable `projects.push_id`, migration `0002_projects_push_id.sql`) rather than on the
   snapshot hash and receive time, so the loser is `deferred`.
 - remote/worker: an Access JWT without `exp` is now refused (403) instead of never expiring, and the public-repo guard matches Access team hosts in any case and flags 32-hex Cloudflare account/zone/D1 ids in config files and `account_id`-style lines.
+- conductors: AGENTS.md and the Claude conductor share a word-identical "Questions for the human"
+  section: every question goes to the mailbox with `--recommended` and `--blocking`, an interactive
+  session under the unattended policy also posts the questions it asks in chat (and acks them when
+  answered there), a Work Trains reply (`"via": "remote"`) counts as a human reply, an interactive
+  session defers to a running headless conductor, and conductors keep `session beat` current. `/away`
+  step 1 posts the open chat questions; `flip decide` answering `gate` means stop (an interactive
+  conductor reports it and keeps working with the human). The continue brief `flip run` writes (JS and
+  Go) shows the question form with `--recommended` and `--blocking` (WT6).
 - plugin: `orch_mailbox_post` takes `recommended` and `blocking`, so a conductor can post a contract-complete
   question (both runtimes; a question without `recommended` is a tool error). An opencode `conductor` session
   now beats `.orchestrator/sessions/opencode.json`: `working` from the per-call context hook, `waiting` on
