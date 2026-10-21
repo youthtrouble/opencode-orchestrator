@@ -1,5 +1,6 @@
 // Command orch is the Go runtime of the orchestrator: `orch <subcommand> [args]`, one
-// subcommand per orchestrator/bin/*.mjs script. The exit code is the subcommand's return.
+// subcommand per orchestrator/bin/*.mjs script, plus the Go-only `remote`. The exit code is
+// the subcommand's return.
 package main
 
 import (
@@ -9,8 +10,8 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cli"
 )
 
-// commands maps subcommand names to implementations. json-echo is hidden from the usage text:
-// it exists for the parity harness only.
+// commands maps subcommand names to implementations. remote is Go-only (no bin/*.mjs twin).
+// json-echo is hidden from the usage text: it exists for the parity harness only.
 var commands = map[string]cli.Command{
 	"version":       cli.Version,
 	"usage":         cli.Usage,
@@ -31,10 +32,11 @@ var commands = map[string]cli.Command{
 	"watch":         cli.Watch,
 	"kickoff":       cli.Kickoff,
 	"session":       cli.Session,
+	"remote":        cli.Remote,
 	"json-echo":     cli.JSONEcho,
 }
 
-const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox, manifest, incident, policy, claude-exec, codex-exec, opencode-exec, worker, flip, supervisor, doctor, watch, kickoff, session"
+const usage = "usage: orch <command> [args]\ncommands: version, usage, routing, budget, effort, mailbox, manifest, incident, policy, claude-exec, codex-exec, opencode-exec, worker, flip, supervisor, doctor, watch, kickoff, session, remote"
 
 func main() {
 	os.Exit(run(os.Args[1:], cli.Stdio{In: os.Stdin, Out: os.Stdout, Err: os.Stderr}))

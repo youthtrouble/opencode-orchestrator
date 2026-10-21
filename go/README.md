@@ -48,6 +48,36 @@ crash).
 
 The hidden `orch json-echo [--indent N]` exists for the parity harness.
 
+### orch remote (Go-only)
+
+`orch remote` is the Mac side of Work Trains, the remote status page. It has **no JS twin** (no
+`bin/*.mjs` script) and so no parity group: it uses the standard `flag` package and plain
+`encoding/json`. Usage errors exit 2 with the usage text; runtime errors exit 1 with one line
+`orch remote: <message>`. So far it only sets up the machine; it does not talk to the Worker yet.
+
+| Command | Behaviour |
+|---|---|
+| `orch remote init --url URL [--root DIR]... [--exclude NAME]... [--force]` | Writes the config (refuses to replace it without `--force`) and creates the state file with a random machine id, kept across later `init --force` runs. `--url` must be `https://` (plain `http://` only for `127.0.0.1`, `localhost` or `[::1]`). `--root` defaults to `~/Developer`; `--exclude` takes directory names or absolute paths. Prints the config path, the machine id and the next steps; never a secret. |
+| `orch remote status [--json]` | The config, the machine id, whether each Keychain item exists (`yes`/`no`, or `unknown` with the error when the Keychain cannot be asked), the last push, pull and error, and the project count (`not yet`; `null` in JSON). Never reads a secret. Exits 0 without a config. A refused config (insecure mode, inside a git work tree, invalid) is shown as `refused: <reason>` (`config_error` in JSON, `null` otherwise) with everything else still reported, and status exits 1. |
+| `orch remote token rotate` | Stores a new machine token (32 random bytes, unpadded base64url) in the Keychain and prints only its SHA-256 hex and the `wrangler secret put MACHINE_TOKEN_SHA256` line to run. This Mac sends the new token at once, and the Worker accepts it only once `MACHINE_TOKEN_SHA256` holds the new hash, so replace the secret before the next push or pushes get 403. |
+| `orch remote token revoke` | Deletes the three Keychain items (absent ones are reported as `not present`, so it is idempotent) and says what to revoke on the Worker side. |
+| `orch remote service-token set` | Reads the Access service token from stdin, client id then client secret, one per line (on a terminal it prompts with echo off, and turns echo back on however the prompt ends, Ctrl-C included), checks both values before storing either, and stores both. If the second write fails it says the client id changed and the secret did not, so run it again. Never echoes them. |
+
+Files:
+
+- Config: `~/.config/orch/remote.json` (directory 0700, file 0600; override with `ORCH_REMOTE_CONFIG`).
+  Fields `url`, `roots`, `exclude`, `include_worktrees` (default false), `ci` (default true),
+  `poll_seconds` (15..300, default 30); unknown fields are refused. It is deliberately **not** under
+  `~/.config/opencode/orchestrator`, which is a symlink into the checkout: orch refuses a config whose
+  real path lies inside any git work tree, and one readable or writable by group or others. It holds
+  no secrets.
+- State: `~/.local/state/opencode/orchestrator/remote/state.json` (0600): `machine_id`, per-project
+  last pushed hash and times, `last_push_at`, `last_pull_at`, `last_error`.
+- Secrets: the login Keychain, service `opencode-orchestrator.work-trains`, accounts `machine-token`,
+  `access-client-id` and `access-client-secret`. They are written by feeding the
+  `add-generic-password` command line to `security -i` on stdin, so no secret appears in argv (`ps`).
+  Values with whitespace, quotes or backslashes are refused.
+
 ## Build
 
 Go 1.25+, no third-party dependencies, no cgo.
@@ -187,6 +217,7 @@ Written for version `X.Y.Z`; 0.5.0 was released this way on 2026-10-19.
 |---|---|---|
 | `ORCH_HOME` | `~/.config/opencode/orchestrator` | The orchestrator tree (the JS `ROOT`). |
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
+| `ORCH_REMOTE_CONFIG` | `~/.config/orch/remote.json` | The `orch remote` config file. |
 | `ORCH_NO_POST_RUN_REFRESH` | unset | `1` stops `orch claude-exec` and `orch codex-exec` from starting their detached post-run usage refresh (PE-12). Set only by the parity harness. |
 | `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
 

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- go: new Go-only `orch remote init|status|token rotate|token revoke|service-token set` sets up
+  this Mac for Work Trains (no network yet). The config lives in `~/.config/orch/remote.json`
+  (owner-only, refused inside a git work tree or when group/other can access it; override
+  `ORCH_REMOTE_CONFIG`), the machine id in `~/.local/state/opencode/orchestrator/remote/state.json`,
+  and the machine token and Access service token in the login Keychain, written through
+  `security -i` on stdin so no secret appears in argv. `token rotate` prints only the token's
+  SHA-256 for the Worker's `MACHINE_TOKEN_SHA256`; this Mac switches to the new token at once, so
+  pushes get 403 until that secret holds the new hash. `status` still reports everything when the
+  config is refused (`config_error`) and exits 1. Typed Go structs for the v1 wire payloads
+  (`internal/remote/wire`) decode every protocol example, refusing unknown and missing properties
+  and a null where the schema does not allow one. See `go/README.md`.
+
 - remote/worker machine API (local only, not yet deployed): `POST /api/v1/machine/push` stores
   changed project snapshots (an unchanged `snapshot_hash` writes nothing; a project accepted under
   55 s ago is `deferred` with `retry_after_seconds`; a key pushed by another machine is `deferred`
