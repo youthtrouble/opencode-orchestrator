@@ -31,6 +31,8 @@
   AGENTS.md and the Claude conductor's "Questions for the human" now say recommended answers are for decisions only
   and that a reply to an action question is a claim to verify. **Rollout:** deploy the Worker first; an older Worker
   rejects a push that carries `ask`.
+- remote: the Work Trains page's weight budget (`test/ui-assets.test.ts`) is 64 KiB, up from 48 KiB, so WT25's
+  action questions fit beside the WT22-B restyle and its home-screen icon (owner approved, question 6bf313bf).
 - remote: the deploy workflow leaves the `send_email` binding out of the rendered `wrangler.deploy.jsonc` unless
   the `work-trains-production` environment sets the new optional variable `WORK_TRAINS_SEND_EMAIL` to `true`, so an
   account without Email Routing deploys. Without the binding the Worker skips email notifications, as it does when
