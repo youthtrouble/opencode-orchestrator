@@ -141,13 +141,17 @@ The sync loop (`once` runs one cycle; `serve` repeats them):
    `retry_after` from a `deferred` result has passed (a `retry_after_seconds` outside the
    schema's 1..300 counts as 60). The schema caps a push at 50 projects; any
    beyond that stay due and go 15 s later. `accepted` records the hash and time, `unchanged` the
-   hash, `deferred` the retry time.
+   hash, `deferred` the retry time. Every push carries the budget, and the Worker stores it only
+   on push: when no project is due but the budget differs from the one last pushed (a new
+   reading, or `null` once the cached one is over 30 minutes old), the push goes without projects,
+   at least 60 s after the last push and never before a first push has landed (a projectless first
+   push would end the Worker's first-push backlog window).
 5. Save the state (private temp file, then rename), with the cycle's error as `last_error`
    (redacted) or none.
 
 `serve` pulls again after `poll_after_seconds` (the Worker's value clamped to 15..300 s; the config's
 `poll_seconds` until the first pull) and checks local state every 15 s in between, touching the network
-only when a project is due. After a failed cycle it backs off: a random wait between half the
+only when a project or the budget is due. After a failed cycle it backs off: a random wait between half the
 ceiling and the ceiling (equal jitter, so a retry never comes at once), where the ceiling starts at
 5 s and doubles per consecutive failure up to 5 minutes, reset by a good cycle. A project or root that cannot be read is logged once while it lasts and never fails a cycle.
 
@@ -180,14 +184,17 @@ Files:
 
 - Config: `~/.config/orch/remote.json` (directory 0700, file 0600; override with `ORCH_REMOTE_CONFIG`).
   Fields `url`, `roots`, `exclude`, `include_worktrees` (default false), `ci` (default true),
-  `poll_seconds` (15..300, default 30); unknown fields are refused. It is deliberately **not** under
+  `poll_seconds` (15..300, default 30); unknown fields are refused. `url` is https (plain http
+  only to 127.0.0.1, localhost or [::1]) with no user info, query or fragment; it may end in a
+  slash or carry a base path, under which every route goes. It is deliberately **not** under
   `~/.config/opencode/orchestrator`, which is a symlink into the checkout: orch refuses a config whose
   real path lies inside any git work tree, and one readable or writable by group or others. It holds
   no secrets.
 - State: `~/.local/state/opencode/orchestrator/remote/state.json` (0600): `machine_id`, per-project
   `last_hash`, `last_accepted_at` and `retry_after`, `last_push_at`, `last_pull_at`, `last_error`
   (`at`, `kind`: `network`, `access_denied`, `http_status`, `protocol`, `keychain` or `local`, and a
-  redacted `message`). The file is created
+  redacted `message`), and `last_budget_hash` (the sha256 of the budget last pushed; a file
+  without it still loads). The file is created
   complete and only if absent (written to a private temp, then hard-linked into place), so
   concurrent `orch remote init` runs all report the one machine id that was stored. A state file
   that does not parse, has unknown fields, a `machine_id` that is not a lowercase UUID v4, or a

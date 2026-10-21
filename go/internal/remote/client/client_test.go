@@ -139,6 +139,39 @@ func TestEveryRequestCarriesTheCredentialsAndPushAnIdempotencyKey(t *testing.T) 
 	}
 }
 
+func TestEveryRouteGoesUnderTheBaseURLsPath(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		jsonReply(200, example(t, "pull-response.json"))(w, r)
+	}))
+	t.Cleanup(server.Close)
+	// Config validation refuses a query or a fragment; the client still keeps them out of the path.
+	for base, want := range map[string]string{
+		"":               "/api/v1/machine/pull",
+		"/":              "/api/v1/machine/pull",
+		"/trains":        "/trains/api/v1/machine/pull",
+		"/trains/":       "/trains/api/v1/machine/pull",
+		"/?source=setup": "/api/v1/machine/pull",
+		"/#dashboard":    "/api/v1/machine/pull",
+	} {
+		mu.Lock()
+		paths = nil
+		mu.Unlock()
+		if _, err := New(server.URL+base, credentials, machineID, "1.2.3").Pull(context.Background()); err != nil {
+			t.Errorf("base %q: %v", base, err)
+		}
+		mu.Lock()
+		if len(paths) != 1 || paths[0] != want {
+			t.Errorf("base %q requested %q, want %q", base, paths, want)
+		}
+		mu.Unlock()
+	}
+}
+
 func TestARedirectIsAccessDeniedAndNotFollowed(t *testing.T) {
 	c, rec := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/cdn-cgi/access/login" {

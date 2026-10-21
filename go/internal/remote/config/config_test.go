@@ -54,6 +54,10 @@ func TestLoadRejectsBadContent(t *testing.T) {
 		"credentials, no scheme": {`{"url":"user:pw@trains.example.com"}`, "has no host"},
 		"credentials over http":  {`{"url":"http://user:pw@trains.example.com"}`, "must not carry credentials"},
 		"credentials, opaque":    {`{"url":"ftp:user:pw@trains.example.com"}`, "has no host"},
+		"query in url":           {`{"url":"https://trains.example.com/?source=setup"}`, "must not have a query or a fragment"},
+		"empty query in url":     {`{"url":"https://trains.example.com/?"}`, "must not have a query or a fragment"},
+		"fragment in url":        {`{"url":"https://trains.example.com/#dashboard"}`, "must not have a query or a fragment"},
+		"empty fragment in url":  {`{"url":"https://trains.example.com/#"}`, "must not have a query or a fragment"},
 		"unknown field":          {`{"url":"https://trains.example.com","token":"x"}`, `unknown field "token"`},
 		"relative root":          {`{"url":"https://trains.example.com","roots":["src"]}`, `root "src" must be absolute`},
 		"relative exclude path":  {`{"url":"https://trains.example.com","exclude":["a/b"]}`, `exclude "a/b"`},
@@ -77,6 +81,14 @@ func TestLoadRejectsBadContent(t *testing.T) {
 
 func TestLoadAllowsPlainHTTPOnlyOnLoopback(t *testing.T) {
 	for _, url := range []string{"http://127.0.0.1:8787", "http://localhost:8787", "http://[::1]:8787"} {
+		if _, err := Load(writeConfig(t, `{"url":"`+url+`"}`, 0o600), home); err != nil {
+			t.Errorf("%s: %v", url, err)
+		}
+	}
+}
+
+func TestLoadAcceptsATrailingSlashAndABasePath(t *testing.T) {
+	for _, url := range []string{"https://trains.example.com/", "https://example.com/trains", "https://example.com/trains/"} {
 		if _, err := Load(writeConfig(t, `{"url":"`+url+`"}`, 0o600), home); err != nil {
 			t.Errorf("%s: %v", url, err)
 		}

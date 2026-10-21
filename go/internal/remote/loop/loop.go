@@ -1,6 +1,6 @@
 // Package loop is orch remote's sync loop with the Work Trains Worker (plan D6, D7, D10). A
 // cycle pulls what the owner did on the page, applies it on this Mac, acks every outcome, then
-// pushes the projects whose snapshot changed. Serve repeats cycles forever under launchd,
+// pushes the projects whose snapshot changed, or the budget alone when only it changed. Serve repeats cycles forever under launchd,
 // checking local state every 15 s in between and backing off while the Worker is unreachable.
 //
 // Exactly-once rests on the apply layer: an ack that is lost makes the next cycle pull the same
@@ -11,6 +11,8 @@ package loop
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -274,25 +276,43 @@ func countApplied(results []wire.AckResult) int {
 	return applied
 }
 
-// push sends every due project in one request and records the Worker's verdict on each.
+// push sends every due project in one request and records the Worker's verdict on each. It
+// sends a request without projects when only the budget is due: the Worker stores the budget on
+// push alone, so a reading that changed or expired would otherwise stay on the page for as long
+// as no project changed.
 func (c *cycle) push(ctx context.Context, projects []localProject, report *Report) error {
 	due := c.dueSnapshots(projects)
-	if len(due) == 0 {
+	budget, budgetHash := c.budget()
+	if len(due) == 0 && !c.isBudgetDue(budgetHash) {
 		return nil
 	}
 	remote, err := c.connect()
 	if err != nil {
 		return err
 	}
-	request := snapshot.NewPushRequest(c.state.MachineID, c.loop.OrchVersion, c.now, c.budget(), due)
+	request := snapshot.NewPushRequest(c.state.MachineID, c.loop.OrchVersion, c.now, budget, due)
 	response, err := remote.Push(ctx, request)
 	if err != nil {
 		return err
 	}
 	c.state.LastPushAt = &c.now
+	c.state.LastBudgetHash = budgetHash
+	if len(due) == 0 {
+		c.loop.logf("pushed the budget only")
+		return nil
+	}
 	report.Pushed = len(due)
 	report.Deferred = c.record(due, response.Projects)
 	return nil
+}
+
+// isBudgetDue reports whether a push for the budget alone is due: its hash differs from the
+// one last pushed and the last push is at least pushSpacing old. Never before a first push has
+// landed: the Worker takes a machine's first push as its backlog, and one without projects
+// would end that before any project's questions came.
+func (c *cycle) isBudgetDue(budgetHash string) bool {
+	last := c.state.LastPushAt
+	return last != nil && budgetHash != c.state.LastBudgetHash && c.now.Sub(*last) >= pushSpacing
 }
 
 // dueSnapshots builds every project's snapshot and keeps those due, at most one push's worth.
@@ -327,14 +347,20 @@ func (c *cycle) isDue(built wire.ProjectSnapshot) bool {
 	return true
 }
 
-// budget is the cached budget to push, or null when it cannot be read.
-func (c *cycle) budget() *wire.Budget {
+// budget is the cached budget to push, or null when it cannot be read, with the hash of its
+// wire form.
+func (c *cycle) budget() (*wire.Budget, string) {
 	budget, err := c.loop.Budget()
+	var encoded []byte
+	if err == nil {
+		encoded, err = json.Marshal(budget)
+	}
 	if err != nil {
 		c.problems = append(c.problems, "budget left out: "+err.Error())
-		return nil
+		budget, encoded = nil, []byte("null")
 	}
-	return budget
+	sum := sha256.Sum256(encoded)
+	return budget, hex.EncodeToString(sum[:])
 }
 
 // record stores the Worker's verdict on each pushed project and returns how many it deferred.

@@ -201,6 +201,11 @@ func validateURL(raw string) error {
 	if parsed.User != nil {
 		return errors.New("url must not carry credentials")
 	}
+	// Every route is joined to the url's path, so a query or a fragment has no place to go.
+	// After a successful parse a "#" can only open the fragment, an empty one included.
+	if parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(raw, "#") {
+		return errors.New("url must not have a query or a fragment")
+	}
 	// The messages below never quote the raw url: a malformed one such as
 	// "user:pw@host" parses with no host and no userinfo, yet still holds credentials.
 	switch {

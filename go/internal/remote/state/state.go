@@ -1,6 +1,7 @@
 // Package state keeps orch remote's runtime state in
 // ~/.local/state/opencode/orchestrator/remote/state.json: the machine id, what was last pushed
-// per project, and the last push, pull and error. It is owner-only and never holds secrets.
+// per project, the last push, pull and error, and the budget last pushed. It is owner-only and
+// never holds secrets.
 package state
 
 import (
@@ -27,6 +28,9 @@ type State struct {
 	LastPushAt *time.Time         `json:"last_push_at"`
 	LastPullAt *time.Time         `json:"last_pull_at"`
 	LastError  *LastError         `json:"last_error"`
+	// LastBudgetHash is the hash of the budget (null included) the last push the Worker
+	// answered carried; empty before the first push. The Worker stores the budget only on push.
+	LastBudgetHash string `json:"last_budget_hash"`
 }
 
 // Project is what the Worker last accepted for one project key.

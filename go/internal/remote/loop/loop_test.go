@@ -487,6 +487,115 @@ func TestAProjectChangingEvery10sIsPushedAtMostOncePerMinute(t *testing.T) {
 	}
 }
 
+// budgetAt is a budget whose Anthropic five-hour use is pct percent.
+func budgetAt(pct float64) *wire.Budget {
+	return &wire.Budget{Anthropic: &wire.Posture{Level: "green", FiveHourPct: &pct}}
+}
+
+// readBudget makes the loop read *reading as the cached budget.
+func (h *harness) readBudget(reading **wire.Budget) {
+	h.loop.Budget = func() (*wire.Budget, error) { return *reading, nil }
+}
+
+// pushedBudget is the five-hour percent a push carried, or -1 for a null budget.
+func pushedBudget(push timedPush) float64 {
+	if push.request.Budget == nil {
+		return -1
+	}
+	return *push.request.Budget.Anthropic.FiveHourPct
+}
+
+func TestABudgetChangeAloneIsPushedOnceWithoutProjects(t *testing.T) {
+	h := newHarness(t)
+	h.project("alpha")
+	reading := budgetAt(10)
+	h.readBudget(&reading)
+	if _, err := h.pushDue(); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(61 * time.Second)
+	if report, err := h.pushDue(); err != nil || len(h.worker.pushLog()) != 1 {
+		t.Fatalf("unchanged budget = %+v, %v, %d pushes; want no second push", report, err, len(h.worker.pushLog()))
+	}
+
+	reading = budgetAt(40)
+	if report, err := h.pushDue(); err != nil || report.Pushed != 0 {
+		t.Fatalf("budget-only push = %+v, %v", report, err)
+	}
+	// A restarted loop reads what was last pushed from the state file and sends nothing more.
+	restarted := *h.loop
+	restarted.reported, restarted.unsettled = nil, nil
+	h.loop = &restarted
+	for range 4 {
+		h.clock.advance(61 * time.Second)
+		if _, err := h.pushDue(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pushes := h.worker.pushLog()
+	if len(pushes) != 2 || len(pushes[1].request.Projects) != 0 || pushedBudget(pushes[1]) != 40 {
+		t.Fatalf("pushes = %+v; want one more push, of the new budget and no project", pushes)
+	}
+	if !strings.Contains(h.log.String(), "pushed the budget only") {
+		t.Errorf("log lacks the budget-only push:\n%s", h.log)
+	}
+}
+
+func TestAnExpiredBudgetIsPushedAsNull(t *testing.T) {
+	h := newHarness(t)
+	h.project("alpha")
+	reading := budgetAt(10)
+	h.readBudget(&reading)
+	if _, err := h.pushDue(); err != nil {
+		t.Fatal(err)
+	}
+	h.clock.advance(31 * time.Minute)
+	reading = nil // the cached reading is past its 30 minutes
+	if _, err := h.pushDue(); err != nil {
+		t.Fatal(err)
+	}
+	pushes := h.worker.pushLog()
+	if len(pushes) != 2 || len(pushes[1].request.Projects) != 0 || pushedBudget(pushes[1]) != -1 {
+		t.Errorf("pushes = %+v; want a second push carrying a null budget", pushes)
+	}
+}
+
+func TestABudgetChangeWaitsForThePushSpacing(t *testing.T) {
+	h := newHarness(t)
+	h.project("alpha")
+	reading := budgetAt(10)
+	h.readBudget(&reading)
+	if _, err := h.pushDue(); err != nil {
+		t.Fatal(err)
+	}
+	reading = budgetAt(20)
+	for range 4 {
+		h.clock.advance(15 * time.Second)
+		if _, err := h.pushDue(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pushes := h.worker.pushLog()
+	if len(pushes) != 2 || !pushes[1].at.Equal(start.Add(60*time.Second)) || pushedBudget(pushes[1]) != 20 {
+		t.Errorf("pushes = %+v; want the new budget at the first check 60 s after the last push", pushes)
+	}
+}
+
+func TestNoBudgetOnlyPushBeforeAFirstPushLands(t *testing.T) {
+	h := newHarness(t) // no project: nothing ever pushed
+	reading := budgetAt(10)
+	h.readBudget(&reading)
+	for range 3 {
+		if _, err := h.pushDue(); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(61 * time.Second)
+	}
+	if pushes := h.worker.pushLog(); len(pushes) != 0 {
+		t.Errorf("pushes = %+v; want none: a projectless first push would end the Worker's backlog window", pushes)
+	}
+}
+
 func TestADeferredProjectWaitsForTheWorkersRetryAfter(t *testing.T) {
 	h := newHarness(t)
 	alpha := h.project("alpha")

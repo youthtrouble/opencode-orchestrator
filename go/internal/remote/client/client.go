@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strings"
 	"syscall"
 	"time"
 
@@ -152,10 +151,11 @@ type Client struct {
 }
 
 // New is a client for the Worker at baseURL, which must have passed config validation (https,
-// or plain http to a loopback host).
+// or plain http to a loopback host; no query or fragment). baseURL may end in a slash or carry
+// a path: every route goes under it.
 func New(baseURL string, credentials Credentials, machineID, orchVersion string) *Client {
 	return &Client{
-		baseURL:     strings.TrimRight(baseURL, "/"),
+		baseURL:     baseURL,
 		credentials: credentials,
 		machineID:   machineID,
 		userAgent:   "orch/" + orchVersion,
@@ -225,7 +225,11 @@ func (c *Client) newRequest(ctx context.Context, r route, body any) (*http.Reque
 			return nil, err
 		}
 	}
-	request, err := http.NewRequestWithContext(ctx, r.method, c.baseURL+r.path, bytes.NewReader(payload))
+	endpoint, err := c.endpoint(r)
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, r.method, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, withoutURL(err)
 	}
@@ -240,6 +244,13 @@ func (c *Client) newRequest(ctx context.Context, r route, body any) (*http.Reque
 		request.Header.Set("Idempotency-Key", hex.EncodeToString(sum[:]))
 	}
 	return request, nil
+}
+
+// endpoint is r's URL: r's path joined to the base URL's path, so a trailing slash or a base
+// path never doubles or drops a segment.
+func (c *Client) endpoint(r route) (string, error) {
+	endpoint, err := url.JoinPath(c.baseURL, r.path)
+	return endpoint, withoutURL(err)
 }
 
 // decodeReply maps a non-redirect response to the decoded body or a typed error. Every Worker

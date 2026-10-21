@@ -24,6 +24,10 @@
   `last_error` and `once --json`: a Worker error code outside the protocol's enum is `unknown`, a
   schema or transport failure is a fixed phrase that names no field, value or header, and a pulled
   id is logged only when it is a UUID. `orch remote push` without `--dry-run` now points at `once`.
+  A budget that changed or expired while no project did goes in a push without projects (60 s
+  spacing, only after a first push has landed; `state.json` gains `last_budget_hash`). The
+  config's `url` is now refused with a query or fragment (`url must not have a query or a
+  fragment`), and routes are joined to its path, so a trailing slash or base path works.
 
 - go: `orch remote push --dry-run [--json]` prints the exact Work Trains `PushRequest` this Mac
   would send, built only from local `.orchestrator/` state and the cached usage reading, and sends
