@@ -1,0 +1,19 @@
+{
+  // Type-checks the Worker sources only. Tests run under Node (node:test, node:sqlite) and would
+  // need @types/node, whose globals clash with the Workers runtime types; Node strips their types.
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "worker-configuration.d.ts"]
+}

@@ -2,3 +2,5 @@ service.json
 *.log
 node_modules/
 .orchestrator/
+# Work Trains config must never live in this checkout (~/.config/opencode/orchestrator links here).
+orchestrator/remote.json

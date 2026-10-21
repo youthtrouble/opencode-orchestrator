@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- remote/worker scaffold (not yet deployable): a TypeScript Cloudflare Worker that verifies the
+  Cloudflare Access JWT and pins the owner's or the Mac's identity on every request (machine routes
+  also need the machine token), fails closed with 503 when a secret is missing, the D1 migration,
+  a node:sqlite D1 test double, a public-repo guard test and the `Remote` CI workflow.
 - go (Linux): after relaying a Ctrl-C (or SIGTERM/SIGHUP) to a captured child, orch now dies of
   the signal before RunSync returns. It used to send the signal to its own pid, which Linux could
   deliver to another thread later, so orch sometimes ran on and exited 0. That was the ubuntu CI

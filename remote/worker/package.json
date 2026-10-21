@@ -1,0 +1,15 @@
+{
+  "name": "work-trains-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test 'test/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "6.2.13"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

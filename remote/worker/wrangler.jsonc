@@ -1,0 +1,20 @@
+// Local-only Worker config, safe to commit to this public repository: a placeholder D1 id, no routes,
+// and no workers.dev or preview URL that could bypass the Access application. The owner's real deploy
+// config is wrangler.deploy.jsonc (gitignored), created from wrangler.deploy.example.jsonc.
+{
+  "name": "work-trains",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "workers_dev": false,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "work-trains",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+  "vars": { "UNDO_SECONDS": "10" }
+}

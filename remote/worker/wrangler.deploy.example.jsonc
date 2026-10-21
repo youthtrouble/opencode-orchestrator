@@ -1,0 +1,32 @@
+// Template for the owner's deploy config. Copy it to wrangler.deploy.jsonc (gitignored), fill in the
+// placeholders, and deploy with `wrangler deploy --config wrangler.deploy.jsonc`.
+//
+// Identity values are Worker secrets (`wrangler secret put <NAME> --config wrangler.deploy.jsonc`),
+// never config:
+//   ACCESS_TEAM_DOMAIN        https://<team>.cloudflareaccess.com
+//   ACCESS_AUD                the Access application's AUD tag
+//   OWNER_EMAIL               the one email address the browser routes accept
+//   ACCESS_SERVICE_CLIENT_ID  the Access service token's client id (the Mac's)
+//   MACHINE_TOKEN_SHA256      64 lowercase hex: SHA-256 of the machine token
+//   PUBLIC_ORIGIN             https://trains.example.com (no trailing slash)
+//   NOTIFY_FROM, NOTIFY_TO    optional: sender on an Email Routing domain, and the verified recipient
+{
+  "name": "work-trains",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-30",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "trains.example.com", "custom_domain": true }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "work-trains",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // No destination restriction here: the recipient comes from the NOTIFY_TO secret.
+  "send_email": [{ "name": "EMAIL" }],
+  "assets": { "directory": "public", "binding": "ASSETS", "run_worker_first": true },
+  "vars": { "UNDO_SECONDS": "10" }
+}

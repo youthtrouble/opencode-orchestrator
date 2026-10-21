@@ -1,0 +1,26 @@
+name: Remote
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26' # runs the TypeScript sources directly (type stripping)
+      - run: node --version
+      - name: Protocol contract tests
+        run: node --test 'remote/protocol/test/*.test.ts'
+      - name: Worker tests and typecheck
+        working-directory: remote/worker
+        run: |
+          npm ci
+          npm test
+          npm run typecheck
