@@ -8,6 +8,7 @@ import { verifyMachineToken } from "./auth/machine.ts";
 import { MAX_BODY_BYTES, payloadTooLarge } from "./body.ts";
 import { readConfig, type Config, type WorkerEnv } from "./env.ts";
 import { ForbiddenError, HttpError, toResponse } from "./http.ts";
+import { withSecurityHeaders } from "./http/headers.ts";
 import { notifierFor } from "./notify/notifier.ts";
 import { notifyOnAccepted } from "./notify/triggers.ts";
 import { countingDb, QueryCounter } from "./queries.ts";
@@ -26,9 +27,9 @@ export function createWorker(deps: WorkerDeps): ExportedHandler<WorkerEnv> {
       const path = new URL(request.url).pathname;
       const waitUntil = (task: Promise<unknown>) => executionCtx.waitUntil(task);
       try {
-        return await gateThenDispatch(request, env, deps, path, waitUntil);
+        return withSecurityHeaders(await gateThenDispatch(request, env, deps, path, waitUntil));
       } catch (error) {
-        return toResponse(error, path);
+        return withSecurityHeaders(toResponse(error, path));
       }
     },
   };

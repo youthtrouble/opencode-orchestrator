@@ -1,10 +1,39 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>Work Trains</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="app.css" />
+    <script type="module" src="app.js"></script>
   </head>
   <body>
-    <h1>Work Trains</h1>
+    <header class="site">
+      <h1>Work Trains</h1>
+      <p id="mac-seen" class="seen">Loading…</p>
+      <ul id="budget" class="chips" aria-label="Budget"></ul>
+    </header>
+    <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+    <main>
+      <section aria-labelledby="needs-you-heading">
+        <h2 id="needs-you-heading">Needs you <span id="needs-you-count"></span></h2>
+        <div id="questions"></div>
+      </section>
+      <section aria-labelledby="projects-heading">
+        <h2 id="projects-heading">Projects</h2>
+        <div id="project-list"></div>
+      </section>
+      <section id="hidden" aria-label="Hidden projects" hidden>
+        <h2>
+          <button id="hidden-toggle" type="button" class="link" aria-expanded="false" aria-controls="hidden-list">
+            Hidden (0)
+          </button>
+        </h2>
+        <div id="hidden-list"></div>
+      </section>
+    </main>
   </body>
 </html>

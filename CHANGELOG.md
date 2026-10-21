@@ -42,6 +42,18 @@
   `NOTIFY_TO` from `NOTIFY_FROM`; without all three it sends nothing and logs `{"notify":"disabled"}`
   once per isolate.
 
+- remote/worker page (local only, not yet deployed; the browser API it calls is WT9): a
+  mobile-first, dependency-free page in `remote/worker/public/` (plain HTML, CSS and ES2022
+  modules, no build step, under 40 KB). It polls `GET /api/v1/summary` every 15 s while visible,
+  shows when the Mac was last seen (a `stale` badge after 3 min, `never` without a pull), budget
+  chips, a "Needs you" stack (blocking first, then oldest) with Accept and Reply, a 10 s undo
+  countdown on the server's clock, and a card per project with Pause/Resume and Hide/Unhide.
+  A stored answer or action shows its Undo at once from the write's own response. Each write keeps
+  its `client_key` with its exact body: after an unconfirmed send (network error, 5xx) the card
+  offers only Retry of that same request until a response settles it (the stored row or a 4xx);
+  a summary never does. An unreadable summary keeps the last good one, shows the banner and
+  polling carries on. Every Worker response now carries a strict Content-Security-Policy,
+  `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and a `Permissions-Policy`.
 - remote/worker machine API (local only, not yet deployed): `POST /api/v1/machine/push` stores
   changed project snapshots (an unchanged `snapshot_hash` writes nothing; a project accepted under
   55 s ago is `deferred` with `retry_after_seconds`; a key pushed by another machine is `deferred`

@@ -24,6 +24,7 @@ export type Json = Record<string, any>;
 
 export interface Reply {
   status: number;
+  headers: Headers;
   body: Json | null;
 }
 
@@ -62,7 +63,7 @@ export function trainsApp({ env = {}, notifier = new RecordingNotifier(), queryL
     const response = await worker.fetch!(request as never, workerEnv as never, executionCtx as never);
     await Promise.all(tasks);
     const text = await response.text();
-    return { status: response.status, body: text === "" ? null : JSON.parse(text) };
+    return { status: response.status, headers: response.headers, body: text === "" ? null : JSON.parse(text) };
   }
 
   async function machine(method: string, path: string, body?: unknown): Promise<Reply> {

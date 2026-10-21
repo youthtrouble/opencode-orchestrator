@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Work Trains">
+  <rect width="64" height="64" rx="14" fill="#1f4fbf"/>
+  <rect x="14" y="14" width="36" height="28" rx="6" fill="#fff"/>
+  <rect x="19" y="19" width="26" height="10" rx="2" fill="#1f4fbf"/>
+  <circle cx="23" cy="36" r="3" fill="#1f4fbf"/>
+  <circle cx="41" cy="36" r="3" fill="#1f4fbf"/>
+  <path d="M20 50l6-8M44 50l-6-8" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+</svg>
