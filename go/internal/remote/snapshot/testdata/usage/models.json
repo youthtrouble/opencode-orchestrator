@@ -1,0 +1,3 @@
+{
+  "thresholds": { "amber": 60, "red": 85, "soon_minutes": 20, "balance_margin": 15 }
+}

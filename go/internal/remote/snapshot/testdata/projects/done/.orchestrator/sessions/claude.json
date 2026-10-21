@@ -1,0 +1,12 @@
+{
+  "door": "claude",
+  "session_id": "s1",
+  "state": "done",
+  "now": "All slices shipped",
+  "slice": "WT9",
+  "progress": {
+    "done": 7,
+    "total": 7
+  },
+  "updated_at": "2026-10-20T11:00:00.000Z"
+}

@@ -1,0 +1,12 @@
+{
+  "door": "opencode",
+  "session_id": null,
+  "state": "ended",
+  "now": null,
+  "slice": "WT3",
+  "progress": {
+    "done": 2,
+    "total": 5
+  },
+  "updated_at": "2026-10-20T09:00:00.000Z"
+}

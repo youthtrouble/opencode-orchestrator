@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- go: `orch remote push --dry-run [--json]` prints the exact Work Trains `PushRequest` this Mac
+  would send, built only from local `.orchestrator/` state and the cached usage reading, and sends
+  and writes nothing (WT12). Projects are discovered under the config's roots (the root and its
+  direct children with a `.orchestrator/` directory; linked worktrees and `exclude` matches
+  skipped; one per real path). Each snapshot derives the project state (`needs_you`, `failed`,
+  `paused`, `working`, `done`, `idle`), door, run, slice and progress, the open questions to the
+  human and the last 10 message headlines; free text is redacted and capped, paths are never sent,
+  a message whose id is not mailbox-shaped is left out, `orch_version` is the bare release number
+  and the project is keyed by an opaque hash. `orch remote status` now shows the discovered
+  projects' count and names and any root it could not scan. Snapshot goldens are checked against
+  the protocol schema by `remote/protocol/test/go-goldens.test.ts`.
 - go: `orch remote` state and wire fixes (WT11 review R1-R3). Concurrent `orch remote init` runs
   (separate processes included) now all get the same machine id: `state.json` is published
   complete and only if absent, and a run that loses reads the winner's id. Before, each could

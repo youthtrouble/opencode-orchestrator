@@ -1,0 +1,46 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "431c3527eb497e9585da3a22b3f16213",
+      "name": "done",
+      "state": "done",
+      "state_reason": "the last session finished",
+      "door": "claude",
+      "run": {
+        "kind": "none",
+        "since": null,
+        "last_activity_at": "2026-10-20T11:00:00.000Z"
+      },
+      "slice": "WT9",
+      "now": "All slices shipped",
+      "progress": {
+        "done": 7,
+        "total": 7
+      },
+      "ci": [],
+      "events": [],
+      "questions": [],
+      "snapshot_hash": "566974caa80b569bb94a4257edcc4f37be9b87c1d579977276c7bbbe5d969426"
+    }
+  ]
+}

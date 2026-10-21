@@ -1,0 +1,43 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "80b4d96acde39a0996bc64418a5a721e",
+      "name": "page-paused",
+      "state": "paused",
+      "state_reason": "paused from Work Trains",
+      "door": "claude",
+      "run": {
+        "kind": "none",
+        "since": null,
+        "last_activity_at": "2026-10-20T11:21:00.000Z"
+      },
+      "slice": null,
+      "now": null,
+      "progress": null,
+      "ci": [],
+      "events": [],
+      "questions": [],
+      "snapshot_hash": "0d68652ba5ec2da6cdfdc863033c2e4a4467e837a487e8614d8f2d16761a900c"
+    }
+  ]
+}

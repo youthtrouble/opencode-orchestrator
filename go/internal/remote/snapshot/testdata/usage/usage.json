@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-10-20T11:50:00.000Z",
+  "claude": {
+    "ok": true,
+    "session": { "pct": 72.5, "resets_at": "2026-10-20T14:00:00.422467+00:00" },
+    "weekly": { "pct": 40, "resets_at": "2026-10-25T03:00:00+00:00" },
+    "weekly_by_model": {},
+    "locked_reason": null
+  },
+  "codex": {
+    "ok": false,
+    "error": "codex app-server unavailable"
+  }
+}

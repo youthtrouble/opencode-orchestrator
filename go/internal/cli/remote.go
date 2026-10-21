@@ -18,8 +18,14 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/config"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/discover"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/keychain"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/snapshot"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/state"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/version"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/worker"
 )
 
 // orch remote is Go-only: it has no bin/*.mjs twin, so it parses flags with the standard flag
@@ -27,6 +33,7 @@ import (
 
 const remoteUsage = `usage: orch remote init --url URL [--root DIR]... [--exclude NAME]... [--force]
        orch remote status [--json]
+       orch remote push --dry-run [--json]
        orch remote token rotate | token revoke
        orch remote service-token set`
 
@@ -43,9 +50,10 @@ type remoteEnv struct {
 	home       string
 	configPath string
 	stateFile  string
+	paths      paths.Paths // the usage cache and registry the budget is read from
 }
 
-// Remote implements `orch remote init|status|token rotate|token revoke|service-token set`.
+// Remote implements `orch remote init|status|push --dry-run|token rotate|token revoke|service-token set`.
 func Remote(args []string, stdio Stdio) int {
 	err := runRemote(args, stdio)
 	var usage *remoteUsageError
@@ -80,6 +88,8 @@ func runRemote(args []string, stdio Stdio) error {
 		return remoteInit(rest, env, stdio)
 	case "status":
 		return remoteStatus(rest, env, stdio)
+	case "push":
+		return remotePush(rest, env, stdio)
 	case "token rotate":
 		return remoteTokenRotate(rest, stdio)
 	case "token revoke":
@@ -101,7 +111,7 @@ func resolveRemoteEnv() (remoteEnv, error) {
 	if err != nil {
 		return remoteEnv{}, err
 	}
-	return remoteEnv{home: resolved.Home, configPath: configPath, stateFile: state.File(resolved.Home)}, nil
+	return remoteEnv{home: resolved.Home, configPath: configPath, stateFile: state.File(resolved.Home), paths: resolved}, nil
 }
 
 // stringList is a flag that may be repeated, collecting every value.
@@ -193,7 +203,10 @@ type remoteStatusReport struct {
 	LastPushAt    *time.Time                  `json:"last_push_at"`
 	LastPullAt    *time.Time                  `json:"last_pull_at"`
 	LastError     *state.LastError            `json:"last_error"`
-	Projects      *int                        `json:"projects"` // null until discovery exists
+	// The discovered projects; null (with no names) without a usable config.
+	Projects        *int     `json:"projects"`
+	ProjectNames    []string `json:"project_names"`
+	DiscoveryErrors []string `json:"discovery_errors"` // roots or directories that could not be examined
 }
 
 func remoteStatus(args []string, env remoteEnv, stdio Stdio) error {
@@ -227,6 +240,7 @@ func buildRemoteStatus(env remoteEnv) (report remoteStatusReport, configErr, err
 	switch {
 	case loadErr == nil:
 		report.Config = &cfg
+		report.reportDiscovery(discover.Projects(cfg))
 	case !errors.Is(loadErr, fs.ErrNotExist):
 		message := loadErr.Error()
 		report.ConfigError, configErr = &message, loadErr
@@ -298,7 +312,91 @@ func printRemoteStatus(out io.Writer, r remoteStatusReport) {
 	} else {
 		fmt.Fprintf(out, "last error:  %s %s: %s\n", r.LastError.At.UTC().Format(time.RFC3339), r.LastError.Kind, r.LastError.Message)
 	}
-	fmt.Fprintln(out, "projects:    not yet (project discovery is not built yet)")
+	switch {
+	case r.Projects == nil:
+		fmt.Fprintln(out, "projects:    unknown (no usable config)")
+	case *r.Projects == 0:
+		fmt.Fprintln(out, "projects:    none found under the roots")
+	default:
+		fmt.Fprintf(out, "projects:    %d (%s)\n", *r.Projects, strings.Join(r.ProjectNames, ", "))
+	}
+	for _, problem := range r.DiscoveryErrors {
+		fmt.Fprintf(out, "             skipped %s\n", problem)
+	}
+}
+
+func (r *remoteStatusReport) reportDiscovery(projects []discover.Project, errs []*discover.Error) {
+	count := len(projects)
+	r.Projects, r.ProjectNames, r.DiscoveryErrors = &count, []string{}, []string{}
+	for _, project := range projects {
+		r.ProjectNames = append(r.ProjectNames, project.Name)
+	}
+	for _, err := range errs {
+		r.DiscoveryErrors = append(r.DiscoveryErrors, err.Error())
+	}
+}
+
+// remotePush implements `push --dry-run`: it discovers the projects and prints the PushRequest
+// a push would send, so the owner can audit exactly what leaves the Mac. It sends nothing and
+// writes nothing. A project or budget that cannot be read is reported on stderr and left out.
+func remotePush(args []string, env remoteEnv, stdio Stdio) error {
+	flags := flag.NewFlagSet("push", flag.ContinueOnError)
+	dryRun := flags.Bool("dry-run", false, "")
+	asJSON := flags.Bool("json", false, "")
+	if err := parseRemoteFlags(flags, args); err != nil {
+		return err
+	}
+	if !*dryRun {
+		return &remoteUsageError{"push needs --dry-run; sending is not built yet"}
+	}
+	cfg, err := config.Load(env.configPath, env.home)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("no config at %s; run orch remote init --url URL", env.configPath)
+	} else if err != nil {
+		return err
+	}
+	st, err := state.Load(env.stateFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return errors.New("no machine id yet; run orch remote init --url URL")
+	} else if err != nil {
+		return err
+	}
+	now := time.Now()
+	projects, scanErrs := discover.Projects(cfg)
+	for _, scanErr := range scanErrs {
+		fmt.Fprintf(stdio.Err, "orch remote: skipped %s\n", scanErr)
+	}
+	snapshots := buildSnapshots(projects, snapshot.Env{MachineID: st.MachineID, Home: env.home, Now: now, Alive: worker.Alive}, stdio.Err)
+	budget, err := snapshot.Budget(usage.NewConfig(env.paths))
+	if err != nil {
+		fmt.Fprintf(stdio.Err, "orch remote: budget left out: %s\n", err)
+	}
+	// The release number only: the build's VCS revision (and +dirty) is the owner's business,
+	// and it would change the machine row on every local edit.
+	request := snapshot.NewPushRequest(st.MachineID, version.Number(), now, budget, snapshots)
+	if !*asJSON {
+		fmt.Fprintf(stdio.Out, "dry run: nothing was sent to %s\n", cfg.URL)
+		fmt.Fprintf(stdio.Out, "would push %d project(s); this is the whole request body:\n", len(snapshots))
+	}
+	encoder := json.NewEncoder(stdio.Out)
+	encoder.SetEscapeHTML(false) // keep redaction placeholders such as <email> readable
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(request)
+}
+
+// buildSnapshots builds each project's snapshot; one that cannot be read is reported on errOut
+// and left out, so the others still go.
+func buildSnapshots(projects []discover.Project, env snapshot.Env, errOut io.Writer) []wire.ProjectSnapshot {
+	snapshots := []wire.ProjectSnapshot{}
+	for _, project := range projects {
+		built, err := snapshot.Build(project, env)
+		if err != nil {
+			fmt.Fprintf(errOut, "orch remote: skipped %s: %s\n", project.Name, err)
+			continue
+		}
+		snapshots = append(snapshots, built)
+	}
+	return snapshots
 }
 
 func listOrNone(items []string) string {

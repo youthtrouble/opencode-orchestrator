@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-20T08:00:00.000Z",
+  "from": "claude",
+  "to": "opencode",
+  "reason": "flip",
+  "previous": null,
+  "paused": {
+    "at": "2026-10-20T10:00:00.000Z",
+    "door": "opencode",
+    "reason": "both vendors red"
+  }
+}

@@ -8,10 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/keychain/keychaintest"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/version"
 )
 
 // remoteSandbox points HOME and the remote config at temp dirs and installs a fake security,
@@ -39,6 +42,9 @@ func TestRemoteRefusesABadCommandLineWithExit2(t *testing.T) {
 		{"status", "--yaml"},
 		{"token", "rotate", "now"},
 		{"service-token", "set", "x"},
+		{"push"},
+		{"push", "--json"},
+		{"push", "--dry-run", "now"},
 	} {
 		code, stdout, stderr := run(t, Remote, args, "")
 		if code != 2 || stdout != "" || !strings.HasPrefix(stderr, "orch remote: ") || !strings.Contains(stderr, "usage: orch remote init") {
@@ -199,7 +205,7 @@ func TestRemoteStatusJSONReportsPresenceButNoSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantKeychain := map[string]string{"machine-token": "yes", "access-client-id": "no", "access-client-secret": "yes"}
-	if report.Config.URL != "https://trains.example.com" || report.MachineID == nil || report.Projects != nil || !maps.Equal(report.Keychain, wantKeychain) {
+	if report.Config.URL != "https://trains.example.com" || report.MachineID == nil || report.Projects == nil || *report.Projects != 0 || !maps.Equal(report.Keychain, wantKeychain) {
 		t.Errorf("status = %s", stdout)
 	}
 }
@@ -217,7 +223,7 @@ func TestRemoteStatusWithoutConfigAndALockedKeychain(t *testing.T) {
 		"keychain:    machine-token unknown, access-client-id unknown, access-client-secret unknown\n",
 		"the login Keychain is locked",
 		"last push:   never\n",
-		"projects:    not yet",
+		"projects:    unknown (no usable config)\n",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("status lacks %q:\n%s", want, stdout)
@@ -256,5 +262,142 @@ func TestRemoteStatusReportsARefusedConfigAndTheRestThenExits1(t *testing.T) {
 	if code != 1 || report.Config != nil || report.ConfigError == nil || !strings.Contains(*report.ConfigError, "must be owner-only") ||
 		report.MachineID == nil || report.Keychain["machine-token"] != "no" {
 		t.Errorf("status --json: code %d, %s", code, stdout)
+	}
+}
+
+// workTrainsProjects makes two projects under a root of home, one whose mailbox plants the home
+// path, an email and a token, and points the registry at an empty one so the budget is simply
+// absent (no usage cache).
+func workTrainsProjects(t *testing.T, home string) (root string) {
+	t.Helper()
+	root = filepath.Join(home, "Developer")
+	question := `{"id":"00000000-0000-4000-8000-000000000101","at":"2026-10-20T11:00:00.000Z","from":"conductor-claude",` +
+		`"to":"human","kind":"question","subject":"Push from ` + home + `/Developer/app for owner@example.com?",` +
+		`"body":"token sk-test000000000000000000000000FAKE","refs":[],"thread":null,"recommended":"Yes","blocking":true}` + "\n"
+	for path, content := range map[string]string{
+		"app/.orchestrator/mailbox/messages.jsonl": question,
+		"lib/.orchestrator/flip.json":              `{"to":"claude"}`,
+		"not-a-project/README.md":                  "x",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(registry, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORCH_REGISTRY", registry)
+	return root
+}
+
+// listTree lists every path under dir with its size and modification time, to show a command
+// wrote nothing.
+func listTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	listing := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		listing[path] = info.ModTime().String() + " " + strconv.FormatInt(info.Size(), 10)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return listing
+}
+
+func TestRemotePushDryRunPrintsTheRedactedRequestAndWritesNothing(t *testing.T) {
+	home, _, _ := remoteSandbox(t)
+	workTrainsProjects(t, home)
+	if code, _, stderr := run(t, Remote, []string{"init", "--url", "https://trains.example.com"}, ""); code != 0 {
+		t.Fatalf("init: %s", stderr)
+	}
+	before := listTree(t, home)
+
+	code, stdout, stderr := run(t, Remote, []string{"push", "--dry-run", "--json"}, "")
+	if code != 0 || stderr != "" {
+		t.Fatalf("push --dry-run --json: code %d, stderr %q", code, stderr)
+	}
+	var request wire.PushRequest
+	if err := wire.Decode(strings.NewReader(stdout), &request); err != nil {
+		t.Fatalf("stdout is not a PushRequest: %v\n%s", err, stdout)
+	}
+	if len(request.Projects) != 2 || request.Projects[0].Name != "app" || request.Projects[1].Name != "lib" || request.Budget != nil {
+		t.Errorf("request = %s", stdout)
+	}
+	// orch_version is the bare release number, within the schema's maxLength of 60.
+	if got := request.Machine.OrchVersion; got != version.Number() || len(got) > 60 {
+		t.Errorf("orch_version = %q, want the release number %q (at most 60 characters)", got, version.Number())
+	}
+	if app := request.Projects[0]; app.State != "needs_you" || len(app.Questions) != 1 {
+		t.Errorf("app = %+v, want needs_you with its question", app)
+	}
+	for _, leak := range []string{home, "owner@example.com", "sk-test"} {
+		if strings.Contains(stdout, leak) {
+			t.Errorf("the dry run shows %q:\n%s", leak, stdout)
+		}
+	}
+	if !strings.Contains(stdout, `"Push from ~/Developer/app for <email>?"`) {
+		t.Errorf("the question subject is not redacted as expected:\n%s", stdout)
+	}
+
+	code, stdout, _ = run(t, Remote, []string{"push", "--dry-run"}, "")
+	if code != 0 || !strings.HasPrefix(stdout, "dry run: nothing was sent to https://trains.example.com\nwould push 2 project(s)") ||
+		!strings.Contains(stdout, "<email>") {
+		t.Errorf("push --dry-run: code %d, stdout %q", code, stdout)
+	}
+	if after := listTree(t, home); !maps.Equal(before, after) {
+		t.Error("push --dry-run changed files under HOME")
+	}
+}
+
+func TestRemotePushDryRunReportsAnUnreadableProjectAndPushesTheRest(t *testing.T) {
+	home, _, _ := remoteSandbox(t)
+	root := workTrainsProjects(t, home)
+	if err := os.MkdirAll(filepath.Join(root, "lib", ".orchestrator", "mailbox", "messages.jsonl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := run(t, Remote, []string{"init", "--url", "https://trains.example.com"}, ""); code != 0 {
+		t.Fatalf("init: %s", stderr)
+	}
+	code, stdout, stderr := run(t, Remote, []string{"push", "--dry-run", "--json"}, "")
+	var request wire.PushRequest
+	if err := wire.Decode(strings.NewReader(stdout), &request); err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || len(request.Projects) != 1 || !strings.HasPrefix(stderr, "orch remote: skipped lib: ") {
+		t.Errorf("code %d, %d projects, stderr %q", code, len(request.Projects), stderr)
+	}
+}
+
+func TestRemotePushDryRunNeedsTheConfigAndTheMachineID(t *testing.T) {
+	_, configPath, _ := remoteSandbox(t)
+	code, _, stderr := run(t, Remote, []string{"push", "--dry-run"}, "")
+	if code != 1 || !strings.Contains(stderr, "no config at "+configPath) {
+		t.Errorf("without config: code %d, stderr %q", code, stderr)
+	}
+}
+
+func TestRemoteStatusListsTheDiscoveredProjects(t *testing.T) {
+	home, _, _ := remoteSandbox(t)
+	workTrainsProjects(t, home)
+	missing := filepath.Join(home, "gone")
+	if code, _, stderr := run(t, Remote, []string{"init", "--url", "https://trains.example.com", "--root", "~/Developer", "--root", missing}, ""); code != 0 {
+		t.Fatalf("init: %s", stderr)
+	}
+	code, stdout, _ := run(t, Remote, []string{"status"}, "")
+	if code != 0 || !strings.Contains(stdout, "projects:    2 (app, lib)\n") || !strings.Contains(stdout, "             skipped "+missing+": ") {
+		t.Errorf("status: code %d\n%s", code, stdout)
 	}
 }

@@ -1,0 +1,10 @@
+{
+  "lane": "conductor",
+  "status": "running",
+  "pid": 4242,
+  "harness": "opencode",
+  "started_at": "2026-10-20T11:00:00.000Z",
+  "last_progress_at": "2026-10-20T11:59:30.000Z",
+  "last_tool": "bash",
+  "updated_at": "2026-10-20T11:59:30.000Z"
+}

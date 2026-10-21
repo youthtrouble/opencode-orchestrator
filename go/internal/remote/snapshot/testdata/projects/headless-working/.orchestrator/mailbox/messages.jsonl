@@ -1,0 +1,2 @@
+{"id":"00000000-0000-4000-8000-000000000101","at":"2026-10-20T11:10:00.000Z","from":"conductor-opencode","to":"*","kind":"progress","subject":"WT11 merged locally","body":"Checks green.","refs":[],"thread":null}
+{"id":"00000000-0000-4000-8000-000000000102","at":"2026-10-20T11:40:00.000Z","from":"coder","to":"conductor-opencode","kind":"report","subject":"WT12 discovery done","body":"Long report body that never leaves the Mac.","refs":[],"thread":null}

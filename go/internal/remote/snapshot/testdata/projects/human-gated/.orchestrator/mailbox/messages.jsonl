@@ -1,0 +1,2 @@
+{"id":"00000000-0000-4000-8000-000000000301","at":"2026-10-20T11:44:00.000Z","from":"conductor-opencode","to":"human","kind":"question","subject":"Push slice WT12 to main?","body":"Review passed; checks green.","refs":[],"thread":null,"recommended":"Yes, push it.","blocking":false}
+{"id":"00000000-0000-4000-8000-000000000302","at":"2026-10-20T11:45:00.000Z","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: push approval","body":"Supervisor will not relaunch until cleared.","refs":[],"thread":null}

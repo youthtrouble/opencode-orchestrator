@@ -53,15 +53,59 @@ The hidden `orch json-echo [--indent N]` exists for the parity harness.
 `orch remote` is the Mac side of Work Trains, the remote status page. It has **no JS twin** (no
 `bin/*.mjs` script) and so no parity group: it uses the standard `flag` package and plain
 `encoding/json`. Usage errors exit 2 with the usage text; runtime errors exit 1 with one line
-`orch remote: <message>`. So far it only sets up the machine; it does not talk to the Worker yet.
+`orch remote: <message>`. So far it sets up the machine and shows what it would push; it does not
+talk to the Worker yet.
 
 | Command | Behaviour |
 |---|---|
 | `orch remote init --url URL [--root DIR]... [--exclude NAME]... [--force]` | Writes the config (refuses to replace it without `--force`) and creates the state file with a random machine id, kept across later `init --force` runs. `--url` must be `https://` (plain `http://` only for `127.0.0.1`, `localhost` or `[::1]`). `--root` defaults to `~/Developer`; `--exclude` takes directory names or absolute paths. Prints the config path, the machine id and the next steps; never a secret. |
-| `orch remote status [--json]` | The config, the machine id, whether each Keychain item exists (`yes`/`no`, or `unknown` with the error when the Keychain cannot be asked), the last push, pull and error, and the project count (`not yet`; `null` in JSON). Never reads a secret. Exits 0 without a config. A refused config (insecure mode, inside a git work tree, invalid) is shown as `refused: <reason>` (`config_error` in JSON, `null` otherwise) with everything else still reported, and status exits 1. |
+| `orch remote status [--json]` | The config, the machine id, whether each Keychain item exists (`yes`/`no`, or `unknown` with the error when the Keychain cannot be asked), the last push, pull and error, and the discovered projects: their count and names, plus each root or directory that could not be examined (`projects`, `project_names`, `discovery_errors` in JSON; `null` without a usable config). Never reads a secret. Exits 0 without a config. A refused config (insecure mode, inside a git work tree, invalid) is shown as `refused: <reason>` (`config_error` in JSON, `null` otherwise) with everything else still reported, and status exits 1. |
+| `orch remote push --dry-run [--json]` | Discovers the projects and prints, indented, the exact `PushRequest` a push would send (machine id, the release number from `VERSION` without the build's git revision, the cached budget and one snapshot per project), so the owner can audit what leaves the Mac. It sends nothing and writes nothing. Without `--json` two summary lines come first. A project whose state cannot be read, a root that cannot be scanned, or an unreadable usage registry is reported on stderr (`orch remote: skipped ...`) and left out; the exit is still 0. Needs the config and the machine id (`orch remote init`). Without `--dry-run` it is a usage error until sending is built. |
 | `orch remote token rotate` | Stores a new machine token (32 random bytes, unpadded base64url) in the Keychain and prints only its SHA-256 hex and the `wrangler secret put MACHINE_TOKEN_SHA256` line to run. This Mac sends the new token at once, and the Worker accepts it only once `MACHINE_TOKEN_SHA256` holds the new hash, so replace the secret before the next push or pushes get 403. |
 | `orch remote token revoke` | Deletes the three Keychain items (absent ones are reported as `not present`, so it is idempotent) and says what to revoke on the Worker side. |
 | `orch remote service-token set` | Reads the Access service token from stdin, client id then client secret, one per line (on a terminal it prompts with echo off, and turns echo back on however the prompt ends, Ctrl-C included), checks both values before storing either, and stores both. If the second write fails it says the client id changed and the secret did not, so run it again. Never echoes them. |
+
+Discovery: for each root in the config, the root itself and each direct child directory that holds a
+`.orchestrator/` directory, deduplicated by real path and sorted by name. A linked git worktree (a
+`.git` file whose git dir has a `commondir`) is skipped unless `include_worktrees`; an `exclude` entry
+matches a directory's basename, or its absolute path as found or resolved; the as-found match is
+made before the directory is read, so an excluded directory you cannot read is not reported.
+
+What a snapshot carries, read only from the project's `.orchestrator/` (flip.json, the `conductor`
+lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected or refreshed by
+`orch remote`):
+
+- `key`: the first 32 hex digits of `sha256("work-trains/v1\0" + machine id + "\0" + real path)`;
+  `name`: the directory basename. Paths are never sent.
+- `state`, the first that applies: `needs_you` (an open blocking question to the human, counted
+  over all open questions, not only the 20 sent, or a gate waiting on a question), `failed` (the
+  conductor lane `failed`, or `running` with a dead pid), `paused` (a gate without a question,
+  which includes a pause from the page, or a budget pause), `working` (a live conductor lane, or a
+  `working` heartbeat under 15 minutes old and at most 2 minutes in the future, the clock-skew
+  allowance), `done` (the newest heartbeat is `done`), else `idle`; `state_reason` is a short
+  sentence. `flip.json`'s `awaiting_human` and `paused` count when JavaScript-truthy, as the
+  supervisor reads them (a hand-edited `true` is a gate or a pause). A lane is live when its pid
+  answers signal 0, so a pid the system has since given to another process reads as live.
+- `door` (the live lane's harness, else `flip.json`'s `to`, else the newest heartbeat's door),
+  `run` (`headless`, `interactive` for a heartbeat under 15 minutes old that has not ended, or
+  `none`; `since` is the lane's start; `last_activity_at` the latest lane progress, heartbeat or
+  message), and `slice`, `now`, `progress` from the newest heartbeat.
+- `questions`: the newest 20 questions to `human` or `*` not acked by `human`, newest first; a
+  question posted without `recommended` has none and never blocks. `events`: the newest 10
+  messages as `{id, at, kind, from, subject}`, never a body. `ci` is empty for now. A message id
+  is sent as is, so a message whose id is not 1-64 of `A-Z a-z 0-9 -` (orch writes uuids), or
+  looks like a token, is left out.
+- Every free-text field is redacted (`incident.Redact` then `ScrubTokens`: home directory, user
+  paths, emails, tokens, uuids and session ids become placeholders) and cut to the schema's cap,
+  ending in `…` when cut.
+- `budget`: both vendors' postures from the cached usage reading; `null` when there is no cache or
+  it is more than 30 minutes old.
+
+The snapshot goldens in `internal/remote/snapshot/testdata/*.golden.json` are built from the fixture
+projects under `testdata/projects/` with a fixed clock and machine id; `go test` compares them byte
+for byte and `go test ./internal/remote/snapshot -update` rewrites them.
+`remote/protocol/test/go-goldens.test.ts` validates every golden against the `PushRequest` schema and
+checks that none carries the fixtures' planted secrets.
 
 Files:
 

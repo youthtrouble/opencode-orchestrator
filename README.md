@@ -350,6 +350,7 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 | [orchestrator/README.md](orchestrator/README.md) | Scripts and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
 | [go/README.md](go/README.md) | The `orch` binary: commands, building, install, plugin runtime, parity harness, release checklist |
 | [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
+| [go/README.md](go/README.md#orch-remote-go-only) | `orch remote`, the Mac side of Work Trains: `init`, `status`, and `push --dry-run`, which prints exactly what a push would send and sends nothing |
 | [remote/protocol/README.md](remote/protocol/README.md) | The Work Trains wire protocol: the versioned v1 JSON Schema, its validator and examples; test with `node --test 'remote/protocol/test/*.test.ts'` |
 | [remote/worker/](remote/worker/) | The Work Trains Cloudflare Worker, not yet deployed: the Access auth gate, the D1 migrations, the machine API (push, pull, ack), the browser API (summary, answer, pause/resume, undo, hide) and the email notifier; test with `npm ci && npm test && npm run typecheck` in that directory |
 | [AGENTS.md](AGENTS.md) | The operating contract every conductor and worker follows |

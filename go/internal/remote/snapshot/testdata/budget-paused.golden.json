@@ -1,0 +1,54 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "c8e63e8d10a829bbbd29293e301ddf2a",
+      "name": "budget-paused",
+      "state": "paused",
+      "state_reason": "both vendors red until a reset",
+      "door": "opencode",
+      "run": {
+        "kind": "none",
+        "since": null,
+        "last_activity_at": "2026-10-20T10:00:00.000Z"
+      },
+      "slice": "WT3",
+      "now": null,
+      "progress": {
+        "done": 2,
+        "total": 5
+      },
+      "ci": [],
+      "events": [
+        {
+          "id": "00000000-0000-4000-8000-000000000501",
+          "at": "2026-10-20T10:00:00.000Z",
+          "kind": "handoff",
+          "from": "conductor-opencode",
+          "subject": "conductor paused: both vendors red"
+        }
+      ],
+      "questions": [],
+      "snapshot_hash": "1e81be09161e7b03f84c47bed37bb9f92367f10d4cf08aa5a15778b1bb630aae"
+    }
+  ]
+}

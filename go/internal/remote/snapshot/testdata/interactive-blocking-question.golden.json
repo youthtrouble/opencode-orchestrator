@@ -1,0 +1,91 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "778bb4b2dcf7bc5a9ef014dd44ee254f",
+      "name": "interactive-blocking-question",
+      "state": "needs_you",
+      "state_reason": "1 blocking question",
+      "door": "claude",
+      "run": {
+        "kind": "interactive",
+        "since": null,
+        "last_activity_at": "2026-10-20T11:57:00.000Z"
+      },
+      "slice": "WT5",
+      "now": "Waiting for the owner",
+      "progress": null,
+      "ci": [],
+      "events": [
+        {
+          "id": "00000000-0000-4000-8000-000000000204",
+          "at": "2026-10-20T11:32:00.000Z",
+          "kind": "question",
+          "from": "conductor-opencode",
+          "subject": "Internal question for the coder"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000203",
+          "at": "2026-10-20T11:31:00.000Z",
+          "kind": "question",
+          "from": "conductor-opencode",
+          "subject": "Rename the lane?"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000202",
+          "at": "2026-10-20T11:30:00.000Z",
+          "kind": "question",
+          "from": "conductor-opencode",
+          "subject": "Ship the beta behind a flag?"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000201",
+          "at": "2026-10-20T11:00:00.000Z",
+          "kind": "question",
+          "from": "conductor-opencode",
+          "subject": "Old question, already answered"
+        }
+      ],
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000203",
+          "at": "2026-10-20T11:31:00.000Z",
+          "from": "conductor-opencode",
+          "subject": "Rename the lane?",
+          "body": "Cosmetic.",
+          "recommended": "Keep the name.",
+          "blocking": false
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000202",
+          "at": "2026-10-20T11:30:00.000Z",
+          "from": "conductor-opencode",
+          "subject": "Ship the beta behind a flag?",
+          "body": "The slice is green. A flag keeps the old path live.",
+          "recommended": "Yes, behind a flag.",
+          "blocking": true
+        }
+      ],
+      "snapshot_hash": "9b54bb984cdbccfcbfb61c18501ea43bd7e72db44cf5ab8636fa79ef12333455"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "lane": "conductor",
+  "status": "running",
+  "pid": 999,
+  "harness": "claude",
+  "started_at": "2026-10-20T10:00:00.000Z",
+  "last_progress_at": "2026-10-20T10:30:00.000Z"
+}

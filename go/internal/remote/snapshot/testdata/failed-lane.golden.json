@@ -1,0 +1,43 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "a4ada05d5c25d077e11e4911470edaf8",
+      "name": "failed-lane",
+      "state": "failed",
+      "state_reason": "the headless conductor stopped without reporting (its process is gone)",
+      "door": null,
+      "run": {
+        "kind": "none",
+        "since": null,
+        "last_activity_at": "2026-10-20T10:30:00.000Z"
+      },
+      "slice": null,
+      "now": null,
+      "progress": null,
+      "ci": [],
+      "events": [],
+      "questions": [],
+      "snapshot_hash": "981d415fd1aed4ccd73cb1a9e4cfdac224d6fca157cb0850f74fc5a1b901f001"
+    }
+  ]
+}

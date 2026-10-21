@@ -1,0 +1,1 @@
+{"id":"00000000-0000-4000-8000-000000000501","at":"2026-10-20T10:00:00.000Z","from":"conductor-opencode","to":"supervisor","kind":"handoff","subject":"conductor paused: both vendors red","body":"Supervisor will relaunch when a window resets.","refs":[],"thread":null}

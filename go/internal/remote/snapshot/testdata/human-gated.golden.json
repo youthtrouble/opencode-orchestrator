@@ -1,0 +1,68 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "b7097deb4598e2cf6dad0b810c016f3c",
+      "name": "human-gated",
+      "state": "needs_you",
+      "state_reason": "awaiting your answer: push approval",
+      "door": "opencode",
+      "run": {
+        "kind": "none",
+        "since": null,
+        "last_activity_at": "2026-10-20T11:45:00.000Z"
+      },
+      "slice": null,
+      "now": null,
+      "progress": null,
+      "ci": [],
+      "events": [
+        {
+          "id": "00000000-0000-4000-8000-000000000302",
+          "at": "2026-10-20T11:45:00.000Z",
+          "kind": "handoff",
+          "from": "conductor-opencode",
+          "subject": "awaiting human: push approval"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000301",
+          "at": "2026-10-20T11:44:00.000Z",
+          "kind": "question",
+          "from": "conductor-opencode",
+          "subject": "Push slice WT12 to main?"
+        }
+      ],
+      "questions": [
+        {
+          "id": "00000000-0000-4000-8000-000000000301",
+          "at": "2026-10-20T11:44:00.000Z",
+          "from": "conductor-opencode",
+          "subject": "Push slice WT12 to main?",
+          "body": "Review passed; checks green.",
+          "recommended": "Yes, push it.",
+          "blocking": false
+        }
+      ],
+      "snapshot_hash": "d777c52bf563162ed56ec149198151007763df942cde6fd6c82c826eb88ac6cb"
+    }
+  ]
+}

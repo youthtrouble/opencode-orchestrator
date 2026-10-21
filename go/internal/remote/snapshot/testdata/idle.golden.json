@@ -1,0 +1,43 @@
+{
+  "v": 1,
+  "machine": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "orch_version": "0.0.0-test",
+    "sent_at": "2026-10-20T12:00:00.000Z"
+  },
+  "budget": {
+    "anthropic": {
+      "level": "amber",
+      "five_hour_pct": 72.5,
+      "weekly_pct": 40,
+      "resets_at": "2026-10-20T14:00:00.422Z"
+    },
+    "openai": {
+      "level": "unknown",
+      "five_hour_pct": null,
+      "weekly_pct": null,
+      "resets_at": null
+    }
+  },
+  "projects": [
+    {
+      "key": "1fddfa78c68d4db2d67a946e86c4010e",
+      "name": "idle",
+      "state": "idle",
+      "state_reason": "nothing is running",
+      "door": "claude",
+      "run": {
+        "kind": "none",
+        "since": null,
+        "last_activity_at": null
+      },
+      "slice": null,
+      "now": null,
+      "progress": null,
+      "ci": [],
+      "events": [],
+      "questions": [],
+      "snapshot_hash": "4c45fdd634bffa4ecacf7501c667da2257ac62a3bb9457d5ac16693b1766eaf9"
+    }
+  ]
+}

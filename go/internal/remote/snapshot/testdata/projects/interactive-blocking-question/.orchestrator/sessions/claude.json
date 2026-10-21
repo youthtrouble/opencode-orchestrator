@@ -1,0 +1,9 @@
+{
+  "door": "claude",
+  "session_id": "abc",
+  "state": "waiting",
+  "now": "Waiting for the owner",
+  "slice": "WT5",
+  "progress": null,
+  "updated_at": "2026-10-20T11:57:00.000Z"
+}
