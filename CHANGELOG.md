@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- plugin: `orch_delegate` gives the verifier write access by default, as it does the coder (incident 3ad1e76b).
+  A verifier on Claude Code ran with `--permission-mode plan`, which blocks Bash, so it returned a plan instead of
+  running the checks; on Codex it got a `read-only` sandbox, which blocks its report and the temp dirs tests
+  create. It now gets `--permission-mode auto` / `--sandbox workspace-write`; an explicit `write: false` still
+  wins, and the other read-only roles are unchanged. `tests/plugin-tools.test.mjs` pins all three cases.
 - remote: an interrupted Work Trains e2e run cleans up after itself (Sol review R1). SIGINT or SIGTERM ended the
   test process without its `after` hook, so the detached `wrangler dev` kept listening and the run's temp directory
   stayed. One idempotent cleanup (`remote/e2e/cleanup.ts`) now serves both the hook and the signals, owns the dev

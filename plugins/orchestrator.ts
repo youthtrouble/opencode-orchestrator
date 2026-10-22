@@ -540,7 +540,7 @@ export default {
             model: { type: "string", description: "Override model id for the chosen harness" },
             size: { type: "string", enum: ["trivial", "small", "medium", "large", "hard"], description: "Task size; picks reasoning effort from the effort policy (cost vs quality). Default medium. Escalate on failure, not pre-emptively." },
             effort: { type: "string", description: "Explicit reasoning effort override (low|medium|high|xhigh|max); normally leave unset and pass size instead" },
-            write: { type: "boolean", description: "Allow file edits (default true for coder, false for planner/reviewer/researcher)" },
+            write: { type: "boolean", description: "Allow file edits and commands (default true for coder and verifier, false for planner/reviewer/researcher/explorer)" },
             max_turns: { type: "integer", description: "Claude only: cap agentic turns" },
             timeout_min: { type: "integer", description: "Kill after N minutes (default 90)" },
             force: { type: "boolean", description: "Run even if the vendor budget is red" },
@@ -550,7 +550,8 @@ export default {
           const cwd = cwdOf(input, c);
           const r = await routing(false);
           let role = r.resolved.roles[input.role];
-          const writeDefault = input.role === "coder";
+          // The verifier runs tests and builds and writes its report, so it needs write access like the coder.
+          const writeDefault = input.role === "coder" || input.role === "verifier";
           const write = input.write ?? writeDefault;
           let harness = input.harness && input.harness !== "auto" ? input.harness : null;
           // An explicit model name decides the harness when none was given (gpt-* -> codex, claude-* -> claude).
@@ -585,7 +586,14 @@ export default {
           if (input.force) args.push("--force");
           if (harness === "claude") { args.push("--permission-mode", write ? "auto" : "plan"); if (input.max_turns) args.push("--max-turns", String(input.max_turns)); }
           else args.push("--sandbox", write ? "workspace-write" : "read-only");
-          const preface = `You are acting as the ${input.role.toUpperCase()} for an orchestrated project at ${cwd}. Work only within this brief, report precisely, mark anything not done or not verified. ${write ? "You may edit files in scope." : "Do NOT modify files; produce your output as text (or write only to .orchestrator/ if the brief says so)."}\n\n`;
+          // The verifier's write access is for running checks and writing its report, never for fixing code;
+          // no harness sandbox is that narrow, so the preface carries the rule.
+          const writeRule = !write
+            ? "Do NOT modify files; produce your output as text (or write only to .orchestrator/ if the brief says so)."
+            : input.role === "verifier"
+              ? "You may run checks and write your report and temporary files, but do NOT modify product code."
+              : "You may edit files in scope.";
+          const preface = `You are acting as the ${input.role.toUpperCase()} for an orchestrated project at ${cwd}. Work only within this brief, report precisely, mark anything not done or not verified. ${writeRule}\n\n`;
           await c.progress?.({ title: `${input.role} -> ${harness} ${model}` });
           const res = await run(bridge.cmd, args, { cwd, input: preface + input.prompt, signal: c.signal, timeoutMs: (Number(input.timeout_min || 90) + 2) * 60 * 1000 });
           const out = lastJson(res.stdout) || {};

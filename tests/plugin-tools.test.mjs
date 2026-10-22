@@ -432,6 +432,58 @@ describe("spawn tools: the go argv is the js script argv", { skip }, () => {
   });
 });
 
+// Incident 3ad1e76b: a verifier defaulted to plan mode / a read-only sandbox, which blocks the
+// tests, builds and report writing that are its whole job.
+describe("delegate: write access by role", { skip }, () => {
+  const bridgeOk = { stdout: '{"ok":true,"final_message":"done"}\n' };
+
+  /** The value after `flag` in the bridge argv a delegate call spawned. */
+  /** The bridge call (argv and stdin) a delegate call spawned. */
+  async function bridgeCall(t, input) {
+    const bridge = `${input.harness}-exec`;
+    const { sandbox, plugin } = await loadGo(t, { effort: { stdout: "null\n" }, [bridge]: bridgeOk });
+    await plugin.callTool("delegate", { prompt: "x", ...input });
+    return orchCalls(sandbox, bridge)[0];
+  }
+
+  /** The value after `flag` in the bridge argv a delegate call spawned. */
+  async function bridgeFlag(t, input, flag) {
+    const { argv } = await bridgeCall(t, input);
+    return argv[argv.indexOf(flag) + 1];
+  }
+
+  const noProductEdits = /do NOT modify product code/;
+
+  test("claude: the verifier gets --permission-mode auto by default", async (t) => {
+    assert.equal(await bridgeFlag(t, { role: "verifier", harness: "claude" }, "--permission-mode"), "auto");
+  });
+
+  test("claude: the reviewer gets --permission-mode plan by default", async (t) => {
+    assert.equal(await bridgeFlag(t, { role: "reviewer", harness: "claude" }, "--permission-mode"), "plan");
+  });
+
+  test("claude: an explicit write:false still gives the verifier plan", async (t) => {
+    assert.equal(await bridgeFlag(t, { role: "verifier", harness: "claude", write: false }, "--permission-mode"), "plan");
+  });
+
+  test("codex: the verifier gets --sandbox workspace-write by default", async (t) => {
+    assert.equal(await bridgeFlag(t, { role: "verifier", harness: "codex" }, "--sandbox"), "workspace-write");
+  });
+
+  test("codex: the reviewer gets --sandbox read-only by default", async (t) => {
+    assert.equal(await bridgeFlag(t, { role: "reviewer", harness: "codex" }, "--sandbox"), "read-only");
+  });
+
+  test("the verifier is told not to modify product code; the coder is told it may edit", async (t) => {
+    const verifier = await bridgeCall(t, { role: "verifier", harness: "claude" });
+    assert.match(verifier.stdin, noProductEdits);
+    assert.doesNotMatch(verifier.stdin, /You may edit files in scope/);
+    const coder = await bridgeCall(t, { role: "coder", harness: "claude" });
+    assert.match(coder.stdin, /You may edit files in scope\./);
+    assert.doesNotMatch(coder.stdin, noProductEdits);
+  });
+});
+
 test("go: a spawn failure is an OrchCommandError result, not a crash (D-S10-7)", { skip }, async (t) => {
   const { sandbox, plugin } = await loadGo(t);
   fs.rmSync(path.join(sandbox.fakebin, "orch"));
