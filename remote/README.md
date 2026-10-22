@@ -240,8 +240,23 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.opencode-orchestrato
 ```
 
 `orch remote launchd` writes nothing itself; it prints the plist on stdout and these install and uninstall commands
-on stderr. The agent runs `orch remote serve` at login and restarts it at most every 30 s. Rerun both commands after
-moving or replacing the `orch` binary, since the plist holds its absolute path.
+on stderr. The agent runs `orch remote serve` at login and restarts it at most every 30 s.
+
+After replacing `orch` at the same path (an update, see the root README's [Updating](../README.md#updating)),
+restart the agent so it runs the new binary:
+
+```sh
+launchctl kickstart -k gui/$(id -u)/org.opencode-orchestrator.work-trains
+```
+
+After moving `orch` to another path, regenerate the plist, since it holds the absolute path, and reload the agent.
+`bootstrap` refuses an agent that is already loaded, so boot the old one out first:
+
+```sh
+launchctl bootout gui/$(id -u)/org.opencode-orchestrator.work-trains
+orch remote launchd > ~/Library/LaunchAgents/org.opencode-orchestrator.work-trains.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.opencode-orchestrator.work-trains.plist
+```
 
 ## 5. First sync
 

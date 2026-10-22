@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- remote: an interrupted Work Trains e2e run cleans up after itself (Sol review R1). SIGINT or SIGTERM ended the
+  test process without its `after` hook, so the detached `wrangler dev` kept listening and the run's temp directory
+  stayed. One idempotent cleanup (`remote/e2e/cleanup.ts`) now serves both the hook and the signals, owns the dev
+  server from the moment it is spawned (also while it is still starting), and then ends the process by the same
+  signal. `remote/e2e/cleanup.test.ts` interrupts a run with a fake wrangler, before and after readiness, and covers a
+  failed start and an abandoned run; it owns its fakes through a socket lifeline, never by signalling a stored pid.
+- docs: the README's update recipe ([Updating](README.md#updating)) rebuilds `orch` beside the installed binary,
+  swaps it in with `mv`, checks `orch version` and restarts the Work Trains LaunchAgent; a Worker-first rollout
+  still deploys the Worker before that (Sol review R2). Before, it said only `git pull`, tests, `opencode reload`
+  and `orch doctor`, which left `orch` and `orch remote serve` on the old build. `orchestrator/README.md`'s update
+  recipe swaps the binary the same way, and `remote/README.md` section 4 restarts the agent with `launchctl
+  kickstart -k` after an in-place replacement and keeps `bootout` + `bootstrap` for a moved binary (rerunning
+  `bootstrap` on a loaded agent fails). The `node .../<name>.mjs` fallback now says `orch remote` is Go-only (R3).
+  Docs only.
+
 - remote: the deploy workflow rolls back a `wrangler deploy` that fails after its version went live. Wrangler
   4.118 makes the new version live before it sets up the custom domain and triggers, so a failure there exited
   nonzero with the new code serving, and neither the smoke check nor the rollback ran. The rollback step

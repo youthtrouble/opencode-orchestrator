@@ -144,7 +144,9 @@ your `PATH`). Run these from inside your project.
 | Health check | `orch doctor` |
 | Work Trains sync status (if set up) | `orch remote status` |
 
-Without `orch`, every command also exists as `node ~/.config/opencode/orchestrator/bin/<name>.mjs`.
+Without `orch`, every command except `orch remote` also exists as
+`node ~/.config/opencode/orchestrator/bin/<name>.mjs`. `orch remote` is Go-only and has no script
+([go/README.md](go/README.md#orch-remote-go-only)).
 
 ## How it works
 
@@ -348,12 +350,43 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
   corrections) recorded locally and redacted. Nothing is uploaded.
 - `/audit-orchestrator` in opencode re-verifies model ids, limits and CLI flags against official
   sources, updates `models.json` and reruns the tests. `/retro` reviews recent runs.
-- Update: `git pull` in the checkout, run the tests, `opencode reload`, `orch doctor`.
+- Update: see [Updating](#updating).
 - `not an orchestrator project: <dir> has no .orchestrator/ directory`: you ran a command that
   reads or stops a project's state (`orch watch`, `orch mailbox inbox|reply`, `orch flip status`,
   `orch supervisor stop`, ...) outside the project. `cd` into it, or pass `--cwd <project dir>`
   (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
   usually means the id belongs to another project.
+
+## Updating
+
+`git pull` updates the symlinked JS, but `orch` is a binary built from the checkout and stays as it was until
+you rebuild it. Do not rerun `install.sh` for this: it refuses when `orch` already exists. In the checkout:
+
+```sh
+git pull
+node --test orchestrator/tests/*.test.mjs
+node --test tests/*.test.mjs
+(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
+mv ~/.local/bin/orch.new ~/.local/bin/orch
+orch version
+opencode reload
+orch doctor
+```
+
+The build writes a new file beside the installed `orch` and `mv` swaps it in at once, so nothing ever runs a
+half-written binary. Use your `ORCH_BIN_DIR` in place of `~/.local/bin` if you installed elsewhere. `orch version`
+should print the checkout's `go/internal/version/VERSION` and the commit you pulled.
+
+If Work Trains is set up, restart its LaunchAgent so `orch remote serve` runs the new binary (the running one goes on
+running the old binary until it exits):
+
+```sh
+launchctl kickstart -k gui/$(id -u)/org.opencode-orchestrator.work-trains
+```
+
+When a `CHANGELOG.md` entry you pulled says **Rollout:** deploy the Worker first, deploy the Worker
+([remote/README.md](remote/README.md#deploy-from-github-actions)) and let it finish before you rebuild `orch` and
+restart the LaunchAgent: an older Worker refuses what a newer `orch` sends. A Worker-only rollout needs no rebuild.
 
 ## Remote status (Work Trains)
 

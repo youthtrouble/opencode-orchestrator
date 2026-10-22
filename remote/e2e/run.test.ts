@@ -19,6 +19,7 @@ import {
   OWNER_EMAIL,
   TEAM_DOMAIN,
 } from "./access-emulator.ts";
+import { RunCleanup } from "./cleanup.ts";
 import { buildOrch, OrchSandbox, type Credentials } from "./orch.ts";
 import { getOnHost, OLD_PAGE_ORIGIN, PAGE_ORIGIN, Phone, type Json } from "./phone.ts";
 import { delay, freePort, startWorkerDev, type WorkerDev } from "./worker-dev.ts";
@@ -50,7 +51,9 @@ interface OnceResult {
 }
 
 describe("Work Trains end to end", { timeout: 300_000 }, () => {
+  const cleanup = new RunCleanup();
   const tmp = mkdtempSync(join(tmpdir(), "work-trains-e2e-"));
+  cleanup.defer(() => rmSync(tmp, { recursive: true, force: true }));
   const credentials: Credentials = {
     machineToken: randomBytes(32).toString("base64url"),
     accessClientId: `${randomBytes(8).toString("hex")}.access`,
@@ -86,12 +89,14 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
   const flipOf = (root: string): Json => JSON.parse(readFileSync(join(root, ".orchestrator", "flip.json"), "utf8"));
 
   before(async () => {
+    cleanup.releaseOnSignals();
     const orchBinary = buildOrch(tmp);
     const workerPort = await freePort();
     emulator = await AccessEmulator.create({
       upstream: `http://127.0.0.1:${workerPort}`,
       serviceToken: { clientId: credentials.accessClientId, clientSecret: credentials.accessClientSecret },
     });
+    cleanup.defer(() => emulator.stop());
     dev = await startWorkerDev(tmp, workerPort, {
       ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
       ACCESS_AUD: AUD,
@@ -100,7 +105,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
       MACHINE_TOKEN_SHA256: createHash("sha256").update(credentials.machineToken).digest("hex"),
       PUBLIC_ORIGIN: PAGE_ORIGIN,
       E2E_JWKS: JSON.stringify(emulator.jwks),
-    });
+    }, cleanup);
     await emulator.start();
     phone = new Phone(emulator.url);
     coOwnerPhone = new Phone(emulator.url, { cookie: CO_OWNER_COOKIE });
@@ -110,15 +115,7 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
   });
 
   after(async () => {
-    try {
-      await emulator?.stop();
-    } finally {
-      try {
-        await dev?.stop();
-      } finally {
-        rmSync(tmp, { recursive: true, force: true });
-      }
-    }
+    await cleanup.run();
     assert.equal(existsSync(tmp), false, "the run's temp directory is gone");
   });
 

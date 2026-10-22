@@ -6,6 +6,7 @@ import { cpSync, mkdirSync, symlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { RunCleanup } from "./cleanup.ts";
 
 const REMOTE_DIR = fileURLToPath(new URL("../", import.meta.url));
 const CONFIG = "wrangler.e2e.jsonc";
@@ -26,6 +27,7 @@ export class WorkerDev {
   readonly #process: ChildProcess;
   readonly #output: string[];
   readonly #exited: Promise<void>;
+  #stopped: Promise<void> | undefined;
 
   constructor(url: string, child: ChildProcess, output: string[]) {
     this.url = url;
@@ -41,9 +43,15 @@ export class WorkerDev {
 
   /**
    * Stops wrangler and the workerd it spawned: they share the process group wrangler leads. Wrangler may
-   * exit before its workerd does, so the group is always killed once wrangler is gone.
+   * exit before its workerd does, so the group is always killed once wrangler is gone. Only the first call
+   * signals the group: once it is gone its id may belong to another.
    */
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    this.#stopped ??= this.#stopGroup();
+    return this.#stopped;
+  }
+
+  async #stopGroup(): Promise<void> {
     const group = -this.#process.pid!;
     if (this.#process.exitCode === null && this.#process.signalCode === null) {
       signalGroup(group, "SIGTERM");
@@ -67,9 +75,15 @@ function signalGroup(group: number, signal: NodeJS.Signals): void {
 /**
  * Copies the Worker into `dir`, applies its migrations to a D1 under `dir`, then starts `wrangler dev` on
  * `port` with `vars` (none of them a secret: the Worker holds only the machine token's hash and the public
- * key set) and resolves once it answers HTTP.
+ * key set) and resolves once it answers HTTP. `cleanup` owns the dev server from the moment it is spawned,
+ * so an interruption while it is still starting stops it too.
  */
-export async function startWorkerDev(dir: string, port: number, vars: Record<string, string>): Promise<WorkerDev> {
+export async function startWorkerDev(
+  dir: string,
+  port: number,
+  vars: Record<string, string>,
+  cleanup: RunCleanup,
+): Promise<WorkerDev> {
   const worker = copyWorker(join(dir, "remote"));
   const persistTo = join(dir, "d1");
   const env = wranglerEnv(dir);
@@ -91,6 +105,7 @@ export async function startWorkerDev(dir: string, port: number, vars: Record<str
   child.stdout!.setEncoding("utf8").on("data", (chunk: string) => output.push(chunk));
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => output.push(chunk));
   const dev = new WorkerDev(`http://127.0.0.1:${port}`, child, output);
+  cleanup.defer(() => dev.stop());
   try {
     await waitUntilAnswering(dev, child);
   } catch (error) {

@@ -480,24 +480,32 @@ Installer state lives in `$XDG_STATE_HOME/opencode-orchestrator` (default
 `~/.local/state/opencode-orchestrator`), private (0700, receipts 0600); state inside the checkout or
 config is rejected. There is one active receipt at a time.
 
-**Update** (symlink install): pull in the checkout, run both test suites, rebuild `orch`, reload,
-check health:
+**Update** (symlink install): pull in the checkout, run both test suites, rebuild `orch` beside the
+installed one and swap it in, reload, check health:
 
 ```sh
 git pull
 node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
-(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch ./cmd/orch)
+(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
+mv ~/.local/bin/orch.new ~/.local/bin/orch
+orch version
 opencode reload
 node ~/.config/opencode/orchestrator/bin/doctor.mjs
 ```
+
+The `mv` replaces the binary in one step, so nothing runs a half-written `orch`; `orch version` should
+show the commit you pulled. Do not rerun `./install.sh` for this: it refuses while `orch` exists. A
+running Work Trains LaunchAgent keeps the old binary until it restarts, and a Worker-first rollout
+deploys the Worker before the rebuild; both are in the root README's
+[Updating](../README.md#updating).
 
 Copy installs do not follow Git: uninstall, update the checkout, reinstall with `--copy` (and
 `--force` if the restored previous config occupies the target).
 
 **Upgrading from 0.4.x.** A 0.4.x receipt has no `orch`, and a reinstall is not migrated. Either
 `./uninstall.sh` then `./install.sh`, so the receipt records the binary, or build `orch` by hand into
-`~/.local/bin` (the `go build` line above). A hand-built `orch` is not tracked: uninstall leaves it,
+`~/.local/bin` (the `go build` and `mv` lines above). A hand-built `orch` is not tracked: uninstall leaves it,
 and a later `./install.sh` refuses while it exists (remove it, set `ORCH_BIN_DIR`, or pass
 `--skip-binary`).
 
