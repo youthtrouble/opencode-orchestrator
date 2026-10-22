@@ -12,7 +12,7 @@ node --test tests/*.test.mjs
 bash -n install.sh uninstall.sh
 node -e 'JSON.parse(require("node:fs").readFileSync("orchestrator/models.json", "utf8"))'
 (cd go && go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...)
-(cd go && ./parity/run.sh)   # slow; builds go/bin/orch and diffs every command against the JS
+(cd go && ./parity/run.sh)   # slow; builds go/bin/orch and diffs every command against the JS at go/parity/js-ref
 ```
 
 The first suite is the doctor's fast runtime check; the second is the isolated installer matrix and

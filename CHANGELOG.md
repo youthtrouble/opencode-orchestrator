@@ -551,6 +551,15 @@
   never followed and concurrent writers cannot mix content (PE-21; Sol S1/R1, S2/R4, S2/R9, S3/R4,
   S3/R5). Run-record names replace `/` in session ids in both runtimes (Sol S1/R4).
 
+## 0.6.0 — unreleased
+
+- go: the parity harness compares against the pre-S12 JS, `orchestrator/` at commit `9e3a456` (named in
+  `go/parity/js-ref`), which `go/parity/run.sh` extracts from git into a temp directory; `ORCH_JS` (a JS tree)
+  or `ORCH_JS_REF` (any commit-ish) override it. The Go unit tests and the `routing`, `usage` and `incident`
+  testdata generators no longer read the checkout's JS (the generators take `ORCH_JS`); the source-derived
+  checks moved to the parity build's `TestJSReference`. CI fetches the pinned commit and gains a `node` job
+  that runs `node --test tests/*.test.mjs` on Linux and macOS.
+
 ## 0.5.0 — 2026-10-19
 
 The Go runtime release. `orch`, one static Go binary, ports every `orchestrator/bin/*.mjs` script,

@@ -3,9 +3,7 @@ package runrecord
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -133,58 +131,6 @@ func wantPerm(t *testing.T, path string, want os.FileMode) {
 	}
 	if got := info.Mode().Perm(); got != want {
 		t.Errorf("%s: mode %v, want %v", path, got, want)
-	}
-}
-
-func TestWriteMatchesNode(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("Node unavailable; fixed expectations still tested")
-	}
-	_, here, _, _ := runtime.Caller(0)
-	lib := filepath.Join(filepath.Dir(here), "..", "..", "..", "orchestrator", "lib", "run-record.mjs")
-	full := `{"started_at":"2026-10-18T10:11:12.345Z","harness":"claude","session_id":"ses_0123456789","prompt":"é\n😀","cost":{"usd":0.5,"tokens":[1,2]},"thread_id":null,"10":"index key"}`
-	cases := []struct{ projectRoot, record string }{
-		{"proj", full},
-		{"proj/../proj/", full},
-		{"proj", `{"started_at":"s","harness":"h","session_id":[]}`},
-		{"proj", `{"started_at":"s","harness":"h","session_id":["s"]}`},
-		{"proj", `{"started_at":"s","harness":"h","session_id":["a","b"]}`},
-		{"proj", `{"started_at":"s","harness":"h","thread_id":[],"session_id":"fallback"}`},
-		{"proj", `{"started_at":"s","harness":"h","thread_id":0,"session_id":["0123456789abcdef",1,2,3,4,5,6,7,8,9]}`},
-		{"proj", `{"started_at":"s","harness":"h","thread_id":[["x","y"],null,{"k":1},1.5,true,"😀😀😀😀😀"]}`},
-		{"proj", `{"started_at":"s","harness":"h","thread_id":"/../../x"}`},
-		{"proj", `{"started_at":"s","harness":"h","thread_id":["a/../../b"]}`},
-	}
-	for _, c := range cases {
-		jsDir, goDir := t.TempDir(), t.TempDir()
-		script := `const { writeRunRecord } = await import(process.argv[1]); console.log(writeRunRecord(process.argv[2], JSON.parse(process.argv[3])))`
-		cmd := exec.Command("node", "--input-type=module", "-e", script, lib, c.projectRoot, c.record)
-		cmd.Dir = jsDir
-		out, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("node %s: %v", c.record, err)
-		}
-		jsFile := strings.TrimSuffix(string(out), "\n")
-
-		t.Chdir(goDir)
-		goFile, err := Write(c.projectRoot, mustObject(t, c.record), testNow)
-		if err != nil {
-			t.Fatalf("Write(%s): %v", c.record, err)
-		}
-		if goFile != jsFile {
-			t.Errorf("%q %s: path %q, Node %q", c.projectRoot, c.record, goFile, jsFile)
-		}
-		jsData, err := os.ReadFile(filepath.Join(jsDir, jsFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		goData, err := os.ReadFile(filepath.Join(goDir, goFile))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(goData) != string(jsData) {
-			t.Errorf("%q %s: content\n%s\nNode\n%s", c.projectRoot, c.record, goData, jsData)
-		}
 	}
 }
 

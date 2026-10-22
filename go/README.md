@@ -393,6 +393,8 @@ Written for version `X.Y.Z`; 0.5.0 was released this way on 2026-10-19.
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
 | `ORCH_REMOTE_CONFIG` | `~/.config/orch/remote.json` | The `orch remote` config file. |
 | `ORCH_NO_POST_RUN_REFRESH` | unset | `1` stops `orch claude-exec` and `orch codex-exec` from starting their detached post-run usage refresh (PE-12). Set only by the parity harness. |
+| `ORCH_JS` | unset | Parity only: the JS `orchestrator/` tree `parity/run.sh` compares against. Set, it wins over `ORCH_JS_REF` and nothing is extracted. |
+| `ORCH_JS_REF` | the commit in `go/parity/js-ref` | Parity only: the commit-ish (e.g. `v0.5.0`) whose `orchestrator/` `parity/run.sh` extracts from git when `ORCH_JS` is unset. |
 | `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
 
 ## Checks
@@ -403,19 +405,37 @@ go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
 # chosen groups; ./parity/run.sh runs them all
 ./parity/run.sh --only \
-  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session
+  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session,jsref
 ```
+
+The unit tests need no JS tree. The parity reference is the pre-S12 JS: `orchestrator/` at the
+commit in `go/parity/js-ref` (`9e3a456`), extracted from git by `parity/run.sh` (see
+[Parity harness](#parity-harness)).
 
 `.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`,
 `incident`, `policy`, `bridges`, `worker`, `flip`, `supervisor`, `doctor`, `watch`, `kickoff` and `session`
-parity groups
-on macOS and Linux with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare
+parity groups and `jsref`
+on macOS and Linux with `CGO_ENABLED=0` and Node 26 installed; it fetches the pinned commit into its
+shallow checkout first. Malformed prompt byte tests also compare
 against Node when it is available; fixed byte expectations run even without Node.
 
 ## Parity harness
 
 Use Node 26 (`referenceNodeMajor`), as CI does: on Node 22 or 24 one case reports SKIP by
 design (PE-5).
+
+The JS side is the reference, not the checkout: `parity/run.sh` extracts `orchestrator/` at the commit
+in `go/parity/js-ref` (`9e3a456`, the last main commit before S12, the JS the port was checked
+against) with `git archive` into a temp directory, sets `ORCH_JS` to it and removes it on exit. It is
+a full SHA, not the `v0.5.0` tag, because the JS changed after the tag (`git diff v0.5.0 9e3a456 --
+orchestrator/` is 34 files) and the Go port follows the later JS. `ORCH_JS` (a JS tree) or
+`ORCH_JS_REF` (any commit-ish) override it. A shallow clone lacks the commit; fetch it with
+`git fetch --no-tags --depth=1 origin "$(cat go/parity/js-ref)"` (on a full clone, drop `--depth=1`).
+Without `--only`, `run.sh` also runs `TestJSReference`, which checks the texts the unit tests pin as
+literals (the flip brief, the exec help headers, kickoff's prompt, usage and watch hint, and
+`runrecord.Write` against `lib/run-record.mjs`) against that JS source. With `--only`, name `jsref`
+to run it: `--only jsref` runs it alone, `--only json,jsref` runs it after the `json` group (two
+`go test` invocations; `run.sh` exits with the first non-zero status).
 
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
@@ -432,7 +452,7 @@ stderr and every file under the project `.orchestrator/`, the HOME state dir and
 
 Groups:
 
-- `json`: JSON.stringify compatibility over `testdata/json/*.json` and the checkout's
+- `json`: JSON.stringify compatibility over `testdata/json/*.json` and the reference's
   `models.json`, compact and indent 2.
 - `usage`: `orch usage` against `bin/usage.mjs` over the cache fixtures in
   `testdata/usage/parity-caches.json` and over channel sources (sqlite, `opencode auth list`,
@@ -1247,7 +1267,8 @@ output, so orch prints an empty `supervisor: ` line (and, headless, an empty ans
 where the JS, whose `spawnSync` result would then hold `null` output, dies of a `TypeError` on
 `.trim()`.
 
-`ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
+`ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree, and
+`ORCH_JS_REF=<commit-ish> ./parity/run.sh` against `orchestrator/` at another commit.
 
 ## JSON compatibility
 
@@ -1291,10 +1312,13 @@ v26.5.1) from the `*.json` inputs beside them: `<name>.compact.golden` is
 `JSON.stringify(JSON.parse(input))` and `<name>.indent2.golden` the same with indent 2, without a
 trailing newline. Regenerate after adding an input and commit inputs and goldens together.
 
-`testdata/usage/*.golden` are generated by `node testdata/usage/gen.mjs` through the JS
+`testdata/usage/*.golden` are generated by `ORCH_JS=<tree> node testdata/usage/gen.mjs` through the JS
 normalizers, from the redacted feed recordings beside them (no tokens, no account identifiers).
+The `routing`, `usage` and `incident` generators load the JS libs from `ORCH_JS`, an `orchestrator/`
+tree such as the reference: `git archive $(cat go/parity/js-ref) orchestrator | tar -x -C <dir>`,
+then `ORCH_JS=<dir>/orchestrator`.
 
-`testdata/incident/corpus.json` is generated by `node testdata/incident/gen.mjs` (last run with
+`testdata/incident/corpus.json` is generated by `ORCH_JS=<tree> node testdata/incident/gen.mjs` (last run with
 Node v26.5.1) through `lib/incident.mjs`, with `HOME` set to a fixture path inside the script:
 redaction and fingerprint cases and seeded, tie-heavy `summarize` inputs with their outputs.
 `testdata/incident/mixed-at-80.jsonl` is the cross-vendor reviewer's fixture: Python's

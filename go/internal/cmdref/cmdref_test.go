@@ -3,7 +3,6 @@ package cmdref
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -53,30 +52,19 @@ func TestFlipGateClearIsTheGateMessageCommand(t *testing.T) {
 	}
 }
 
-// flip.mjs run writes its brief from a template literal (l.74) whose only escapes are \n and
-// whose only substitutions are to, from and the reason. Rendering that literal from the
-// source pins the text byte for byte.
-func TestConductorContinueBriefIsTheFlipTemplate(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "flip.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, after, found := strings.Cut(string(source), "fs.writeFileSync(brief, `")
-	template, _, closed := strings.Cut(after, "`);")
-	if !found || !closed {
-		t.Fatal("flip.mjs no longer writes the brief from one template literal")
-	}
-	rendered := strings.NewReplacer(
-		`${to}`, "claude",
-		`${from}`, "opencode",
-		`${opts.reason || "vendor budget flip"}`, "handback: home door",
-		`\n`, "\n",
-	).Replace(template)
-	if strings.Contains(rendered, "${") || strings.Contains(rendered, `\`) {
-		t.Fatalf("the template has a substitution or escape this test does not render: %q", rendered)
-	}
-	if got := ConductorContinueBrief("claude", "opencode", "handback: home door"); got != rendered {
-		t.Errorf("ConductorContinueBrief differs from flip.mjs\n got: %q\nwant: %q", got, rendered)
+// flip.mjs run writes this brief; TestJSReference (go/parity) renders it from the JS source.
+func TestConductorContinueBriefIsTheFlipBrief(t *testing.T) {
+	const want = "# Continue as conductor (claude door)\n\n" +
+		"You are taking over this project from the opencode conductor (handback: home door).\n" +
+		"Read .orchestrator/STATE.md and the mailbox, verify recorded facts against the tree, then execute the exact next action and keep following the loop.\n" +
+		"At each brief boundary run: node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active claude\n" +
+		"If it says handback or flip: update STATE.md, post a handoff, run flip.mjs run --to <door> --from claude, and stop.\n" +
+		"If it says gate: the project is waiting for the human; update STATE.md and stop, without running flip.mjs pause, run or gate.\n" +
+		"You cannot ask the human interactively: put each question in the mailbox with the answer you recommend and whether it blocks you (mailbox.mjs post --from conductor-claude --to human --kind question --subject \"...\" --body \"...\" --recommended \"<a complete reply>\" --blocking true|false) and continue with independent work, or stop at human gates.\n" +
+		"HEADLESS RULE: ending your turn ends this session and kills background subagents. Run every subagent in the FOREGROUND and wait; any background agents from a previous headless session are gone, re-run them in the foreground. " +
+		"Do not finish until the loop is complete or you have handed off with flip.mjs run/pause, or stopped at a human gate with flip.mjs gate (never pause for a human gate).\n"
+	if got := ConductorContinueBrief("claude", "opencode", "handback: home door"); got != want {
+		t.Errorf("ConductorContinueBrief differs\n got: %q\nwant: %q", got, want)
 	}
 }
 
@@ -87,88 +75,75 @@ func TestScriptFileIsTheScriptBasename(t *testing.T) {
 	}
 }
 
-// claude-exec.mjs --help prints lines 2-12 of its own source joined by "\n".
+// claude-exec.mjs --help prints lines 2-12 of its own source; TestJSReference (go/parity)
+// compares them with the JS source.
 func TestClaudeExecHelpIsTheScriptHeader(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "claude-exec.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := strings.Join(strings.Split(string(source), "\n")[1:12], "\n")
+	const want = `// Delegate a bounded task to Claude Code (print mode) on the Claude subscription, structured result back.
+//
+//   claude-exec.mjs [--model claude-opus-5-5|opus|sonnet|haiku|fable] [--effort low|medium|high|xhigh|max]
+//                   [--permission-mode acceptEdits|auto|plan|dontAsk] [--allowed-tools "Read,Edit,Bash(go *)"]
+//                   [--max-turns N] [--max-budget-usd X] [--cwd DIR] [--resume SESSION_ID] [--agent NAME]
+//                   [--append-system-prompt TEXT] [--json-schema FILE] [--timeout-min 60] [--force] [--quiet]
+//                   [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+//
+// Prints one JSON object on stdout: { ok, session_id, final_message, usage, model_usage, cost_usd,
+// num_turns, permission_denials, duration_ms, record }. Exit codes: 0 ok, 1 error, 75 budget refused.
+import { spawn } from "node:child_process";`
 	if ClaudeExecHelp != want {
-		t.Errorf("ClaudeExecHelp differs from the script header\n got: %q\nwant: %q", ClaudeExecHelp, want)
+		t.Errorf("ClaudeExecHelp differs\n got: %q\nwant: %q", ClaudeExecHelp, want)
 	}
 }
 
-// codex-exec.mjs --help prints lines 2-12 of its own source joined by "\n".
+// codex-exec.mjs --help prints lines 2-12 of its own source; TestJSReference (go/parity)
+// compares them with the JS source.
 func TestCodexExecHelpIsTheScriptHeader(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "codex-exec.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := strings.Join(strings.Split(string(source), "\n")[1:12], "\n")
+	const want = `// Delegate a bounded task to the Codex CLI on the ChatGPT subscription and get a structured result.
+//
+//   codex-exec.mjs [--model gpt-6.1-sol] [--effort low|medium|high|xhigh|max|ultra]
+//                  [--sandbox read-only|workspace-write|danger-full-access] [--cwd DIR]
+//                  [--resume THREAD_ID] [--schema FILE] [--timeout-min 60] [--force] [--quiet]
+//                  [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+//
+// Prints one JSON object on stdout: { ok, thread_id, final_message, usage, files_changed, commands,
+// duration_ms, record } and streams progress lines to stderr. Exit codes: 0 ok, 1 turn failed,
+// 75 budget gate refused, 2 usage error.
+import { spawn } from "node:child_process";`
 	if CodexExecHelp != want {
-		t.Errorf("CodexExecHelp differs from the script header\n got: %q\nwant: %q", CodexExecHelp, want)
+		t.Errorf("CodexExecHelp differs\n got: %q\nwant: %q", CodexExecHelp, want)
 	}
 }
 
-// kickoffSource is bin/kickoff.mjs.
-func kickoffSource(t *testing.T) string {
-	t.Helper()
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "kickoff.mjs"))
-	if err != nil {
-		t.Fatal(err)
+// kickoff.mjs's opening prompt; TestJSReference (go/parity) renders it from the JS source.
+func TestKickoffPromptIsTheKickoffPrompt(t *testing.T) {
+	const head = "Ship a.md. Plan first with the architect (size per the brief), then one slice at a time; flip or hand back per the contract at each brief boundary."
+	const tail = " Record orchestrator defects as incidents."
+	cases := []struct {
+		side []string
+		want string
+	}{
+		{nil, head + tail},
+		{[]string{"b.md"}, head + " When budget allows, also run b.md as side brief(s) with the cheapest adequate role." + tail},
+		{[]string{"b.md", "c.md"}, head + " When budget allows, also run b.md, c.md as side brief(s) with the cheapest adequate role." + tail},
 	}
-	return string(source)
-}
-
-// between returns the text of source between the first start and the end after it.
-func between(t *testing.T, source, start, end string) string {
-	t.Helper()
-	_, after, found := strings.Cut(source, start)
-	text, _, closed := strings.Cut(after, end)
-	if !found || !closed {
-		t.Fatalf("kickoff.mjs no longer contains %q ... %q", start, end)
-	}
-	return text
-}
-
-// kickoff.mjs builds the prompt from one template literal with a nested one for the side
-// briefs; rendering both from the source pins the text byte for byte.
-func TestKickoffPromptIsTheKickoffTemplate(t *testing.T) {
-	source := kickoffSource(t)
-	template := between(t, source, "const prompt = `", "`;\n")
-	head, rest, _ := strings.Cut(template, "${side.length ? `")
-	sideTemplate, tail, _ := strings.Cut(rest, "` : \"\"}")
-	render := func(main string, side []string) string {
-		sideText := ""
-		if len(side) > 0 {
-			sideText = strings.ReplaceAll(sideTemplate, `${side.join(", ")}`, strings.Join(side, ", "))
-		}
-		return strings.ReplaceAll(head, "${main}", main) + sideText + tail
-	}
-	for _, side := range [][]string{nil, {"b.md"}, {"b.md", "c.md"}} {
-		want := render("a.md", side)
-		if strings.Contains(want, "${") || strings.Contains(want, "`") {
-			t.Fatalf("the template has a substitution this test does not render: %q", want)
-		}
-		if got := KickoffPrompt("a.md", side); got != want {
-			t.Errorf("KickoffPrompt(a.md, %q) differs from kickoff.mjs\n got: %q\nwant: %q", side, got, want)
+	for _, c := range cases {
+		if got := KickoffPrompt("a.md", c.side); got != c.want {
+			t.Errorf("KickoffPrompt(a.md, %q)\n got: %q\nwant: %q", c.side, got, c.want)
 		}
 	}
 }
 
-// kickoff.mjs prints its usage line from a string literal.
+// kickoff.mjs's usage line; TestJSReference (go/parity) reads it from the JS source.
 func TestKickoffUsageIsTheKickoffUsageLine(t *testing.T) {
-	want := between(t, kickoffSource(t), `console.log("usage: `, `");`)
-	if got := KickoffUsage(); got != "usage: "+want {
-		t.Errorf("KickoffUsage() = %q, want %q", got, "usage: "+want)
+	const want = "usage: kickoff.mjs --brief FILE [--brief FILE2] [--door auto|claude|opencode] [--headless] [--unattended] [--dry-run]"
+	if got := KickoffUsage(); got != want {
+		t.Errorf("KickoffUsage() = %q, want %q", got, want)
 	}
 }
 
-// kickoff.mjs names the watch command in both its headless and interactive hints.
+// kickoff.mjs's watch hint; TestJSReference (go/parity) finds it twice in the JS source.
 func TestWatchFollowIsTheKickoffHint(t *testing.T) {
-	source := kickoffSource(t)
-	if got := WatchFollow(); strings.Count(source, got) != 2 {
-		t.Errorf("WatchFollow() = %q appears %d times in kickoff.mjs, want 2", got, strings.Count(source, got))
+	const want = "node ~/.config/opencode/orchestrator/bin/watch.mjs --follow"
+	if got := WatchFollow(); got != want {
+		t.Errorf("WatchFollow() = %q, want %q", got, want)
 	}
 }

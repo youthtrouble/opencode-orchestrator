@@ -39,7 +39,7 @@ func TestParity(t *testing.T) {
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
-// every golden input plus the checkout's models.json.
+// every golden input plus the JS reference's models.json.
 func (h *harness) testJSON(t *testing.T) {
 	inputs, err := filepath.Glob("../testdata/json/*.json")
 	if err != nil || len(inputs) == 0 {

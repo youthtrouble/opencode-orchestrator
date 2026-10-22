@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 // Regenerates the routing, flip and supervise goldens by running the JS policies
-// (orchestrator/lib/{routing,flip,supervise}.mjs) on the inputs in cases.json with the real
-// orchestrator/models.json, or the case's own "registry" where a routing case has one, and the credits setting of
+// ($ORCH_JS/lib/{routing,flip,supervise}.mjs) on the inputs in cases.json with the real
+// $ORCH_JS/models.json, or the case's own "registry" where a routing case has one, and the credits setting of
 // the case's "policy" (off without one). Writes, with no trailing newline:
 //   <case>.resolved.golden  JSON.stringify(resolveRoles(...), null, 2)
 //   <case>.prompt.golden    summarizeForPrompt(...)
 //   flip.golden             JSON.stringify([decideFlip(...) per flip case], null, 2)
 //   supervise.golden        JSON.stringify([{observation, event, reminder} per case], null, 2)
-// The Go tests compare the port against these bytes. Run: node go/testdata/routing/gen.mjs
+// The Go tests compare the port against these bytes. Run: ORCH_JS=<tree> node go/testdata/routing/gen.mjs
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+if (!process.env.ORCH_JS) {
+  console.error("ORCH_JS is unset; run ORCH_JS=<tree> node gen.mjs, where <tree> is an orchestrator/ tree (git archive $(cat go/parity/js-ref) orchestrator | tar -x -C <dir> gives one)");
+  process.exit(2);
+}
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const LIB = path.join(HERE, "..", "..", "..", "orchestrator", "lib");
+const LIB = path.resolve(process.env.ORCH_JS, "lib");
 const { creditsPolicyOf, resolveRoles, summarizeForPrompt } = await import(path.join(LIB, "routing.mjs"));
 const { decideFlip } = await import(path.join(LIB, "flip.mjs"));
 const { observe, chooseEvent, reminderText } = await import(path.join(LIB, "supervise.mjs"));
