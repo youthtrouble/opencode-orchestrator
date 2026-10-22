@@ -20,6 +20,9 @@ model, and stalling whenever one window hits its cap. This project turns that in
   review and verify. Effort scales with the size of the task, not a fixed setting.
 - **Independent review.** Code written by one vendor is reviewed by the other, against a sha256
   manifest of exactly the files that were released. Nobody approves their own work.
+- **A global UI taste bar.** [AGENTS.md](AGENTS.md#taste-bar-for-every-ui) and all standalone Claude
+  agent prompts carry the same design requirements: product-specific character, purposeful motion
+  and haptics, accessibility, real rendered evidence and independent review, not generic UI polish.
 - **Budget awareness.** It reads the Claude session and Fable weekly windows and the available Codex
   5-hour and weekly windows. On weekly-only Codex plans, weekly usage alone steers routing.
   Each vendor is green, amber or red; red work moves to the other vendor, and
@@ -547,4 +550,3 @@ The sync loop logs to `~/.local/state/opencode/orchestrator/remote/remote.log`.
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 Licensed under [MIT](LICENSE).
-

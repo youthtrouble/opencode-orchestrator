@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
+  agent prompts, so both front doors carry the same design and evidence requirements.
+
 - Fixed: map Codex windows by duration, including weekly-only plans (`5h n/a`); their weekly usage alone drives routing and flip, while unreadable data stays unknown.
 
 - plugin: `orch_delegate` gives the verifier write access by default, as it does the coder (incident 3ad1e76b).
