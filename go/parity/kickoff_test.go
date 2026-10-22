@@ -224,7 +224,7 @@ type notDeferredCase struct {
 // is checked to be the expected error and then removed: the supervisor's answer, when it
 // failed, becomes "<answer>", and the pause's diagnostic is dropped from stderr. Everything
 // else is compared, as is every file but the temp the JS leaves beside a flip.json it could
-// not replace (PE-21).
+// not replace (PE-32: orch now refuses the unreadable record before a replacement).
 func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, nc notDeferredCase) {
 	t.Helper()
 	js, orch := h.runPair(t, inv)
@@ -235,7 +235,11 @@ func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, nc not
 		if o.exitCode != 1 || !endsWithWant || strings.Contains(o.stdout, "paused") || saved != nc.briefSaved {
 			t.Errorf("%s: exit %d, stdout %q, stderr %q, brief saved %v; want exit 1 ending %q, no pause and brief saved %v", side, o.exitCode, o.stdout, o.stderr, saved, want, nc.briefSaved)
 		}
-		if err := checkChildDiagnostic(side, diagnostic, nc.pauseError); err != "" {
+		expectedPauseError := nc.pauseError
+		if side == "orch" && nc.pauseError != "" {
+			expectedPauseError = "Error: flip state unreadable: $PROJECT/.orchestrator/flip.json: EISDIR"
+		}
+		if err := checkChildDiagnostic(side, diagnostic, expectedPauseError); err != "" {
 			t.Errorf("pause diagnostic: %s", err)
 		}
 		o.stderr = want
@@ -300,7 +304,12 @@ func (h *harness) kickoffInvocation(c kickoffCase) invocation {
 		normalize: func(s string) string {
 			return withSupervisorHolder(normalizeFlip(time.Now().Add(-time.Minute))(normalizeGeneratedAt(s)))
 		},
-		normalizeWrites: func(o outcome, _ map[string]string) outcome { return withLockHolderPids(o) },
+		normalizeWrites: func(o outcome, before map[string]string) outcome {
+			if !slices.Contains(c.args, "--dry-run") {
+				o = flipTransactionSidecar(o, before)
+			}
+			return withLockHolderPids(o)
+		},
 	}
 }
 
@@ -400,7 +409,8 @@ func (h *harness) testKickoffDryRunThenReal(t *testing.T, s seed, dryRun, real [
 		}
 		o := h.run(t, sb, realArgv, nil, then.env)
 		collectExtraFiles(t, sb, then, o.files)
-		return withLockHolderPids(o.withProjectPlaceholder(t, sb)).normalized(then.normalize)
+		o = then.normalizeWrites(o, first.files)
+		return o.withProjectPlaceholder(t, sb).normalized(then.normalize)
 	}
 	js, orch := run("js", dry.js, then.js), run("orch", dry.orch, then.orch)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {

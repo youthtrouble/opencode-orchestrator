@@ -1,10 +1,12 @@
 package supervisor
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
@@ -45,7 +47,17 @@ func (s *Supervisor) evaluateFlip(state *jsjson.Object, t *tick) error {
 	}
 	state.Set("last_flip_check", float64(t.now))
 
-	c := conductorView{lane: lane, flip: readJSON(s.flipPath(), func() any { return nil })}
+	record, err := flipcmd.NewProject(s.Root).Read()
+	if err != nil {
+		var stateErr *flipcmd.StateError
+		if !errors.As(err, &stateErr) {
+			return err
+		}
+		gate := jsjson.NewObject()
+		gate.Set("reason", stateErr.GateReason())
+		return s.noteAwaitingHuman(state, t, gate)
+	}
+	c := conductorView{lane: lane, flip: record.Value}
 	activeDoor, err := s.activeDoor(c, t.config)
 	if err != nil {
 		return err
@@ -146,7 +158,7 @@ func (s *Supervisor) flipTargetNeverStarted(state *jsjson.Object, t *tick, c con
 
 func (s *Supervisor) launchNeverStarted(state *jsjson.Object, t *tick, c conductorView) error {
 	to := jsjson.Path(c.flip, "to")
-	out, err := s.flip(s.Root, "run", "--to", to, "--from", doorOf(c.lane), "--reason", "flip target never started", "--cwd", s.Root)
+	out, err := s.flip(s.Root, "run", "--unless-gated", "--to", to, "--from", doorOf(c.lane), "--reason", "flip target never started", "--cwd", s.Root)
 	if err != nil {
 		return err
 	}
@@ -164,7 +176,7 @@ func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorVie
 	pending := jsjson.Path(c.flip, "pending_launch")
 	// The log shows pl.from as it is (undefined included); the argument is pl.from || activeDoor.
 	from, to := property(pending, "from"), property(pending, "to")
-	args := []any{"run", "--to", to, "--from", or(jsjson.Path(pending, "from"), c.activeDoor),
+	args := []any{"run", "--unless-gated", "--to", to, "--from", or(jsjson.Path(pending, "from"), c.activeDoor),
 		"--reason", or(jsjson.Path(pending, "reason"), "pending launch"), "--cwd", s.Root}
 	if resume := jsjson.Path(pending, "resume"); jsjson.Truthy(resume) {
 		args = append(args, "--resume", resume)
@@ -227,7 +239,7 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	if finishedEarly {
 		reason += " (previous conductor exited without handoff)"
 	}
-	out, err := s.flip("", append([]any{"run", "--to", target, "--from", c.activeDoor, "--reason", reason, "--cwd", s.Root}, resumeArgs...)...)
+	out, err := s.flip("", append([]any{"run", "--unless-gated", "--to", target, "--from", c.activeDoor, "--reason", reason, "--cwd", s.Root}, resumeArgs...)...)
 	if err != nil {
 		return err
 	}

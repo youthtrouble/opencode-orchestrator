@@ -238,9 +238,8 @@ func TestRunWritesTheContinueBriefWithoutASavedBrief(t *testing.T) {
 	}
 }
 
-// Only a trailing key is bare: the run-record parser takes the next argument as a value even
-// when it starts with "--".
-func TestRunWritesBareOptionsAsTrue(t *testing.T) {
+// Internal callers retain JS option types; the CLI rejects bare value options before Run.
+func TestRunInternalOptionValuesRetainJSTypes(t *testing.T) {
 	pendingFlip := func(from, reason, resume string) string {
 		return `{"at":"` + nowISO + `","from":` + from + `,"to":"claude","reason":` + reason + `,"previous":null,` +
 			`"pending_launch":{"to":"claude","from":` + from + `,"reason":` + reason + `,"resume":` + resume + `,"at":"` + nowISO + `"}}`
@@ -293,7 +292,6 @@ func TestRunRecordsThePreviousFlip(t *testing.T) {
 		{"number", `5`, `{}`},
 		{"zero", `0`, `null`},
 		{"json null", `null`, `null`},
-		{"unparsable", `{"at":`, `null`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newGitProject(t)
@@ -383,11 +381,11 @@ func TestRunStopsAtTheFirstFailingStep(t *testing.T) {
 		{"exclude is a directory", func(t *testing.T, p Project) { mkdir(t, filepath.Join(p.Root, ".git", "info", "exclude")) },
 			"EISDIR: illegal operation on a directory, read", nil},
 		{".orchestrator is a file", func(t *testing.T, p Project) { writeFile(t, filepath.Join(p.Root, ".orchestrator"), "") },
-			"ENOTDIR: not a directory, mkdir '$ROOT/.orchestrator/briefs'", []string{"exclude"}},
+			"EEXIST: file already exists, mkdir '$ROOT/.orchestrator'", nil},
 		{"brief is a directory", func(t *testing.T, p Project) { mkdir(t, p.briefPath()) },
 			"EISDIR: illegal operation on a directory, rename '$ROOT/.orchestrator/briefs/conductor-continue.md.tmp-*' -> '$ROOT/.orchestrator/briefs/conductor-continue.md'", []string{"exclude"}},
 		{"flip.json is a directory", func(t *testing.T, p Project) { mkdir(t, p.FlipPath) },
-			"EISDIR: illegal operation on a directory, rename '$ROOT/.orchestrator/flip.json.tmp-*' -> '$ROOT/.orchestrator/flip.json'", []string{"exclude", "brief"}},
+			"flip state unreadable: $ROOT/.orchestrator/flip.json: EISDIR", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newGitProject(t)

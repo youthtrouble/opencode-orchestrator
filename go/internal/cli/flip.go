@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
@@ -14,7 +15,7 @@ import (
 
 var (
 	flipValueKeys = []string{"active", "to", "from", "cwd", "reason", "resume", "question", "brief"}
-	flipFlagKeys  = []string{"force", "clear", "no-relaunch"}
+	flipFlagKeys  = []string{"force", "clear", "no-relaunch", "unless-gated"}
 )
 
 // launcherGrace bounds how long `flip run` waits for the launcher's pipes once it has exited
@@ -26,6 +27,12 @@ const launcherGrace = 10 * time.Second
 // ECMAScript date formats only, PE-15; run launches the conductor as `orch worker`).
 func Flip(args []string, stdio Stdio) int {
 	opts, positional := cliargs.ParseArgs(decodeArgv(args), flipValueKeys, flipFlagKeys)
+	for _, key := range []string{"active", "from", "reason", "question", "resume", "to", "brief"} {
+		if opts.IsFlag(key) {
+			fmt.Fprintln(stdio.Err, "--"+key+" requires a value")
+			return 2
+		}
+	}
 	root, err := projectRoot(opts) // before any command, as the JS resolves it at the top
 	if err != nil {
 		return crash(stdio, err)
@@ -83,7 +90,12 @@ func flipDecide(project flipcmd.Project, opts cliargs.Opts, stdio Stdio) int {
 	case err != nil:
 		return fail(stdio, "flip", err)
 	}
-	return printLine(stdio, decision.JSON())
+	answer := decision.JSON()
+	// PE-32: the unreadable-state gate has only action and the repair instruction.
+	if decision.Action == "gate" && strings.HasPrefix(decision.Reason, "flip state unreadable: ") {
+		answer.Delete("to")
+	}
+	return printLine(stdio, answer)
 }
 
 // flipRun hands the project over and prints the answer.

@@ -108,6 +108,10 @@ func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase,
 	inv.orch = append([]string{h.orchBin, "kickoff"}, args...)
 	inv.seed = seeds(inv.seed, supervisorHeldByThisTest(), kickoffBrief(), kickoffFeedsFail(), orNothing(state))
 	inv.extraFiles = []string{".git/info/exclude"}
+	normalizeWrites := inv.normalizeWrites
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		return normalizeWrites(flipTransactionSidecar(o, before), before)
+	}
 	worker, fresh := inv.normalize, normalizeFlip(time.Now())
 	inv.normalize = func(s string) string { return withSupervisorHolder(fresh(normalizeGeneratedAt(worker(s)))) }
 	launched := workerDetachCase{launchLine: kickoffLauncherLine}
@@ -278,6 +282,8 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, awaitFlipChe
 	since := time.Now()
 	sb := h.newSandbox(t)
 	s(t, sb)
+	before := map[string]string{}
+	collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
 	o := h.run(t, sb, argv, nil, []string{noPostRunRefresh})
 	pid := startedServePid(o.stdout)
 	if pid < 2 {
@@ -294,6 +300,7 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, awaitFlipChe
 		t.Errorf("%s: no tick of the started serve %d in the state %q", argv[0], pid, state)
 	}
 	collectExtraFiles(t, sb, invocation{extraFiles: []string{".git/info/exclude"}}, o.files)
+	o = flipTransactionSidecar(o, before)
 	return o.withProjectPlaceholder(t, sb).normalized(func(s string) string {
 		return normalizeFlip(since)(normalizeGeneratedAt(normalizeServe(since)(s)))
 	})

@@ -256,7 +256,9 @@ or `on`, and an `openai_credits_floor` that is not a number, 0 or more. `orch po
 A headless conductor that reaches a human gate with nothing independent left posts the question and
 runs `orch flip gate --active <door> --reason "..." --question <id>`. The supervisor will not
 relaunch while the gate is set, and `orch flip decide` answers `gate`: a headless conductor updates
-`STATE.md` and stops, while an interactive conductor reports the gate and keeps working with the human. `orch kickoff` and `orch flip run` clear it and start a conductor.
+`STATE.md` and stops, while an interactive conductor reports the gate and keeps working with the human.
+`orch kickoff` and an explicit `orch flip run` without `--unless-gated` clear a readable gate and
+start a conductor.
 `orch flip gate --clear`, and `orch mailbox reply` to the gate's question (its full id or a prefix of
 it, as recorded by `--question`), clear it and record `pending_launch` for the gated door, which the
 supervisor launches once the conductor lane is idle and unlocked (within a minute); `gate --clear`
@@ -291,6 +293,37 @@ driver. If the lane is still locked, usually by the calling conductor, `flip.jso
 `pending_launch` (keeping that brief) and the supervisor launches the target once the lock is released. Flips never
 happen mid-brief, so a hand-back is delayed by at most one brief.
 
+The supervisor uses `orch flip run --to <door> --unless-gated` for every automatic conductor
+relaunch. The command checks `awaiting_human` under the flip-state write lock; if set, it prints
+`{"flipped":false,"reason":"awaiting human"}` and exits 1 without changing the state, continue
+brief, git exclude or mailbox, or launching a worker. A gate installed after the supervisor's
+earlier read therefore survives. Explicit human runs without the flag and real kickoff retain
+their intentional gate-clearing behavior for readable state.
+
+**Unreadable flip state.** Only a missing `.orchestrator/flip.json` means no recorded state.
+Invalid JSON or a read error makes `orch flip decide --active <door>` print
+`{"action":"gate","reason":"flip state unreadable: <code>; fix or remove .orchestrator/flip.json"}`
+and exit 0 without collecting usage. `flip gate`, `gate --clear`, `pause` and `run` refuse with
+exit 1, naming the file and leaving its contents unchanged. `mailbox reply` also exits 1 if
+the gate cannot be read, but its note and acknowledgement may already have been written before
+gate clearing refuses. Check the mailbox before repeating a terminal reply; a remote retry
+finishes its recorded reply without posting a duplicate.
+
+Repair the file's JSON or read permissions, or remove `.orchestrator/flip.json`. Removing it
+drops any gate it held as well as its other flip state. If the gate must remain, stop supervision
+before removal, then set it again with `orch flip gate --active <door> --reason "..."` (and
+`--question <id>` if needed) before restarting supervision. Never remove the separate
+`flip.json.lock`. Repair state before kickoff: its preflight currently discards the gate-clear
+child's status, so a usable-vendor kickoff can
+continue launching despite that refusal. A both-red kickoff exits 1 when its subsequent pause
+cannot be recorded; there is no blanket kickoff exit-1 guarantee for unreadable flip state.
+
+**Required option values.** A trailing bare `--active`, `--from`, `--reason`, `--question`,
+`--resume`, `--to` or `--brief` on `orch flip` prints `--<option> requires a value` on one stderr
+line, exits 2, and writes no state or mailbox message. Supply a value, such as
+`--reason "human approval required"`. Omitting `--reason` (or passing `--reason ""`) still uses
+the default and posts the gate handoff; a bare `--reason` is a usage error, not a defaulted gate.
+
 ## Workers and the supervisor
 
 **Workers.** `orch worker start` runs one brief on one harness. State lives in
@@ -314,7 +347,9 @@ start`. It ticks every 5 seconds: observes every lane, posts events to the mailb
 first and then tries the wake channels, re-dispatches budget-deferred lanes after the reset, and
 once a minute evaluates the conductor:
 
-- `awaiting_human` in `flip.json`: do nothing.
+- `awaiting_human` in `flip.json`, or unreadable/invalid flip state: do not relaunch; log the gate
+  once until it is cleared or the state is repaired. Every automatic conductor launch uses
+  `flip run --unless-gated` to recheck for a gate before writing.
 - `pending_launch`: launch the target once the lane is idle and unlocked.
 - an idle conductor lane that ended `failed`, `deferred` or `interrupted`, or `finished` without a
   handoff, or a paused project: relaunch through `orch flip run`, resuming the previous session when

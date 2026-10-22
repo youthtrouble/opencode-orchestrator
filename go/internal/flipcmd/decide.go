@@ -25,7 +25,15 @@ func (p Project) Decide(opts cliargs.Opts, routing RoutingSource) (flip.Decision
 	if !opts.Truthy("active") {
 		return flip.Decision{}, ErrActiveRequired
 	}
-	prev := p.ReadFlip()
+	record, err := p.Read()
+	if err != nil {
+		var stateErr *StateError
+		if errors.As(err, &stateErr) {
+			return flip.Decision{Action: flip.ActionGate, Reason: stateErr.GateReason()}, nil
+		}
+		return flip.Decision{}, err
+	}
+	prev := record.Value
 	if gate, gated := humanGateDecision(prev); gated {
 		return gate, nil
 	}

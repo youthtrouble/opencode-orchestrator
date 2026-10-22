@@ -38,7 +38,9 @@ func (h *harness) flipRunInvocation(args []string, s seed, crash crashClass, err
 	inv := h.flipInvocation(flipCase{args: append([]string{"run"}, args...), seed: all, crash: crash, errorLine: errorLine})
 	// a case may make .git a file or the exclude a directory
 	inv.extraFilesMayBeBlocked = true
-	inv.normalizeWrites = func(o outcome, _ map[string]string) outcome { return withLockHolderPids(o) }
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		return withLockHolderPids(flipTransactionSidecar(o, before))
+	}
 	return inv
 }
 
@@ -82,7 +84,14 @@ func (h *harness) testFlipRun(t *testing.T) {
 		{"usage/to-bare", []string{"--to"}},
 	}
 	for _, c := range refusals {
-		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.flipRunInvocation(c.args, nil, noCrash, "")) })
+		t.Run(c.name, func(t *testing.T) {
+			inv := h.flipRunInvocation(c.args, nil, noCrash, "")
+			if c.name == "usage/to-bare" {
+				h.compareFlipBareValuePE35(t, inv, "--to")
+				return
+			}
+			h.comparePair(t, inv)
+		})
 	}
 	t.Run("usage/cwd-bare", func(t *testing.T) {
 		h.comparePair(t, h.flipRunInvocation(append(claude, "--cwd"), nil, crashC1, cwdBoolean))
@@ -133,7 +142,18 @@ func (h *harness) testFlipRun(t *testing.T) {
 		{"exclude/git-file-malformed", claude, withGit(text("not a pointer\n"))},
 	}
 	for _, c := range pending {
-		t.Run(c.name, func(t *testing.T) { h.compareFlipPending(t, h.flipRunInvocation(c.args, c.seed, noCrash, "")) })
+		t.Run(c.name, func(t *testing.T) {
+			inv := h.flipRunInvocation(c.args, c.seed, noCrash, "")
+			if strings.HasSuffix(c.name, "-bare") {
+				h.compareFlipBareValuePE35(t, inv, c.args[len(c.args)-1])
+				return
+			}
+			if c.name == "previous/unparsable" {
+				h.compareFlipCorruptRunPE32(t, inv, `{"at":`)
+				return
+			}
+			h.compareFlipPending(t, inv)
+		})
 	}
 	t.Run("pending/paused-brief", h.testFlipRunPausedBrief)
 	t.Run("exclude/worktree-layout", func(t *testing.T) {
@@ -171,7 +191,7 @@ func (h *harness) testFlipRun(t *testing.T) {
 				return
 			}
 			if c.leftover != "" {
-				h.compareFlipPE21FailedRename(t, inv, c.leftover)
+				h.compareFlipUnreadableDirectoryPE32(t, inv, c.leftover)
 				return
 			}
 			h.comparePair(t, inv)
@@ -301,6 +321,10 @@ func (h *harness) flipLaunchInvocation(t *testing.T, c flipLaunchCase) invocatio
 	inv.js = append([]string{h.node, filepath.Join(h.orchJS, "bin", "flip.mjs")}, args...)
 	inv.orch = append([]string{h.orchBin, "flip"}, args...)
 	inv.extraFiles = []string{".git/info/exclude"}
+	normalizeWrites := inv.normalizeWrites
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		return normalizeWrites(flipTransactionSidecar(o, before), before)
+	}
 	worker, fresh := inv.normalize, normalizeFlip(time.Now())
 	inv.normalize = func(s string) string { return fresh(worker(s)) }
 	return inv

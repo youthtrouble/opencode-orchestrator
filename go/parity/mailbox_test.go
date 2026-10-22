@@ -155,6 +155,9 @@ func (h *harness) mailboxInvocation(c mailboxCase) invocation {
 	}
 	if len(c.args) > 0 && (c.args[0] == "post" || c.args[0] == "ack" || c.args[0] == "reply") {
 		inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+			if c.args[0] == "reply" {
+				o = flipTransactionSidecar(o, before)
+			}
 			return normalizeMailboxWrites(o, before, c.args[0])
 		}
 	}
@@ -444,6 +447,22 @@ func (h *harness) testMailboxReplyGate(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			inv := h.mailboxInvocation(c)
 			inv.normalize = normalizeFlip(time.Now())
+			if c.name == "reply/flip-json-unparsable" {
+				inv.projectPaths = true
+				js, orch := h.runPair(t, inv)
+				const jsOut = "replied (<id8>) and acknowledged bbbbbbbb; the conductor reads it on its next turn\n"
+				const jsErr = "could not check for a human gate: .orchestrator/flip.json is not valid JSON\n"
+				const orchErr = "Error: flip state unreadable: $PROJECT/.orchestrator/flip.json: INVALID_JSON\n"
+				if js.exitCode != 0 || js.stdout != jsOut || js.stderr != jsErr {
+					t.Errorf("PE-32 frozen JS: %+v", js)
+				}
+				if orch.exitCode != 1 || orch.stdout != "" || orch.stderr != orchErr || orch.files["project/flip.json"] != `{"to":` {
+					t.Errorf("PE-32 orch: %+v", orch)
+				}
+				orch.exitCode, orch.stdout, orch.stderr = js.exitCode, js.stdout, js.stderr
+				compareOutcomes(t, js, orch)
+				return
+			}
 			h.comparePair(t, inv)
 		})
 	}

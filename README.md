@@ -279,6 +279,30 @@ within a minute (it must be running: `orch supervisor status`); a flip queued be
 and starts instead. `orch flip run --to <door>` and
 `orch kickoff` also clear the gate and start a conductor at once.
 
+Automatic supervisor restarts use `orch flip run --to <door> --unless-gated`: if a human gate is
+set when the command checks it, it exits 1 with `{"flipped":false,"reason":"awaiting human"}`,
+leaves flip state unchanged and launches no worker. An explicit `flip run` without that flag
+and a real kickoff still intentionally clear a readable gate.
+
+**Corrupt or unreadable flip.json.** `orch flip decide --active <door>` answers `gate` with
+`flip state unreadable: <code>; fix or remove .orchestrator/flip.json` (exit 0), and the supervisor
+logs the problem once and does not relaunch. `flip gate`, `gate --clear`, `pause` and `run`
+refuse with exit 1 and leave the file unchanged. `mailbox reply` also exits 1 when it cannot
+check the gate, but its reply note and acknowledgement may already have been recorded; inspect
+the mailbox before sending the same answer again.
+
+Repair the JSON or restore read access to `.orchestrator/flip.json`, or remove that data file.
+Removing it also drops any gate it held: if that gate must remain, stop supervision before
+removal and re-gate with `orch flip gate --active <door> --reason "..."` (and `--question <id>`
+if needed) before restarting supervision.
+Do not remove `flip.json.lock`. Repair state before kickoff: its preflight currently ignores
+the gate-clear child's failure and can continue launching when a vendor is usable. The
+both-red path exits 1 if it cannot record its pause; kickoff is not a repair command.
+
+**Flip option values.** A trailing bare `--active`, `--from`, `--reason`, `--question`, `--resume`,
+`--to` or `--brief` is a one-line usage error (exit 2, no writes or mailbox post). Supply the
+value, for example `orch flip gate --reason "paused by me"`.
+
 **Restarting or moving the conductor.** `orch flip run --to claude` (or `--to opencode`) writes a
 continue brief and starts that door's conductor in the background. If a conductor is still running,
 the launch is queued until it stops; stop it first with `orch worker stop --lane conductor` to move

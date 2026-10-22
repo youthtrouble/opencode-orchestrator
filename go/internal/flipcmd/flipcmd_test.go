@@ -31,7 +31,7 @@ func newTestProject(t *testing.T) Project {
 }
 
 func opts(argv ...string) cliargs.Opts {
-	o, _ := cliargs.ParseArgs(argv, []string{"active", "to", "from", "cwd", "reason", "resume", "question", "brief"}, []string{"force", "clear", "no-relaunch"})
+	o, _ := cliargs.ParseArgs(argv, []string{"active", "to", "from", "cwd", "reason", "resume", "question", "brief"}, []string{"force", "clear", "no-relaunch", "unless-gated"})
 	return o
 }
 
@@ -94,44 +94,25 @@ func (p Project) messages(t *testing.T) string {
 	return string(data)
 }
 
-func TestReadFlipReadsAnyJSONValueAndNilOnFailure(t *testing.T) {
-	for _, c := range []struct {
-		name, content, want string
-	}{
-		{"object", `{"to":"claude"}`, `{"to":"claude"}`},
-		{"null", `null`, `null`},
-		{"zero", `0`, `0`},
-		{"empty string", `""`, `""`},
-		{"string", `"abc"`, `"abc"`},
-		{"array", `[1,2]`, `[1,2]`},
-		{"number", `5`, `5`},
-		{"unparsable", `{"to":`, `null`},
-		{"BOM", "\xef\xbb\xbf{}", `null`},
-		{"invalid UTF-8 in a string", "{\"to\":\"a\xffb\"}", "{\"to\":\"a�b\"}"},
-		{"prototype keys", `{"__proto__":1,"constructor":2}`, `{"__proto__":1,"constructor":2}`},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			p := newTestProject(t)
-			writeFile(t, p.FlipPath, c.content)
-			if got := compact(t, p.ReadFlip()); got != c.want {
-				t.Errorf("ReadFlip() = %s, want %s", got, c.want)
-			}
-		})
-	}
-	t.Run("missing", func(t *testing.T) {
-		if got := newTestProject(t).ReadFlip(); got != nil {
-			t.Errorf("ReadFlip() = %#v, want nil", got)
-		}
-	})
-	t.Run("directory", func(t *testing.T) {
+func TestReadDistinguishesAbsentStateAndJSONValues(t *testing.T) {
+	for _, content := range []string{`{"to":"claude"}`, `null`, `0`, `""`, `"abc"`, `[1,2]`, `5`, `{"__proto__":1,"constructor":2}`} {
 		p := newTestProject(t)
-		if err := os.MkdirAll(p.FlipPath, 0o755); err != nil {
-			t.Fatal(err)
+		writeFile(t, p.FlipPath, content)
+		record, err := p.Read()
+		if err != nil || !record.Present || compact(t, record.Value) != content {
+			t.Errorf("Read over %s = %+v, %v", content, record, err)
 		}
-		if got := p.ReadFlip(); got != nil {
-			t.Errorf("ReadFlip() = %#v, want nil", got)
-		}
-	})
+	}
+	record, err := newTestProject(t).Read()
+	if err != nil || record.Present || record.Value != nil {
+		t.Errorf("missing = %+v, %v", record, err)
+	}
+	p := newTestProject(t)
+	writeFile(t, p.FlipPath, "{\"to\":\"a\xffb\"}")
+	record, err = p.Read()
+	if err != nil || compact(t, record.Value) != `{"to":"a�b"}` {
+		t.Errorf("UTF-8 = %+v, %v", record, err)
+	}
 }
 
 func TestStatusPrintsTheRecordOrNeverFlipped(t *testing.T) {
@@ -173,7 +154,6 @@ func TestPauseSpreadsThePreviousValueAndReplacesPausedInPlace(t *testing.T) {
 		{"string spreads into index keys", `"abc"`, `{"0":"a","1":"b","2":"c","paused":` + paused + `}`},
 		{"array spreads into index keys", `[1,2]`, `{"0":1,"1":2,"paused":` + paused + `}`},
 		{"number spreads into nothing", `5`, `{"paused":` + paused + `}`},
-		{"unparsable is nothing", `{`, `{"paused":` + paused + `}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newTestProject(t)
@@ -199,7 +179,7 @@ func TestPauseSpreadsThePreviousValueAndReplacesPausedInPlace(t *testing.T) {
 }
 
 // A value key without a value (last on the command line) is the JS true.
-func TestPauseWritesBareOptionsAsTrue(t *testing.T) {
+func TestPauseInternalOptionValuesRetainJSTypes(t *testing.T) {
 	p := newTestProject(t)
 	answer, err := p.Pause(opts("pause", "--reason", "r", "--active"))
 	if err != nil {
@@ -253,7 +233,7 @@ func TestPauseIgnoresMailboxFailures(t *testing.T) {
 	}
 }
 
-func TestPauseFailsWithNodesMkdirAndOpenErrors(t *testing.T) {
+func TestPauseRefusesUnreadableStateAndDirectoryCreationFailures(t *testing.T) {
 	p := newTestProject(t)
 	writeFile(t, filepath.Join(p.Root, ".orchestrator"), "")
 	_, err := p.Pause(opts("pause"))
@@ -266,8 +246,8 @@ func TestPauseFailsWithNodesMkdirAndOpenErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = p.Pause(opts("pause"))
-	// PE-21: flip.json is replaced through a private temp, so the rename fails, not the open.
-	if want := "EISDIR: illegal operation on a directory, rename '" + p.FlipPath + ".tmp-*' -> '" + p.FlipPath + "'"; err == nil || tempNamesSpelledOut(err.Error()) != want {
+	// PE-32: unreadable state fails before any replacement.
+	if want := "flip state unreadable: " + p.FlipPath + ": EISDIR"; err == nil || tempNamesSpelledOut(err.Error()) != want {
 		t.Errorf("Pause() = %v, want %s", err, want)
 	}
 	if got := p.messages(t); got != "" {
@@ -324,7 +304,7 @@ func TestGateOptionsAndSubject(t *testing.T) {
 	}
 }
 
-func TestGateWithBareReasonPostsNoMessage(t *testing.T) {
+func TestGateWithBareReasonUsesDefaultAndPostsMessage(t *testing.T) {
 	p := newTestProject(t)
 	answer, err := p.Gate(opts("gate", "--question", "q", "--reason"))
 	if err != nil {
@@ -333,35 +313,27 @@ func TestGateWithBareReasonPostsNoMessage(t *testing.T) {
 	if got := compact(t, answer); got != `{"awaiting_human":true,"door":"opencode"}` {
 		t.Errorf("answer = %s", got)
 	}
-	if got, want := readFile(t, p.FlipPath), indented(t, `{"awaiting_human":{"at":"`+nowISO+`","door":"opencode","reason":true,"question":"q"}}`); got != want {
+	if got, want := readFile(t, p.FlipPath), indented(t, `{"awaiting_human":{"at":"`+nowISO+`","door":"opencode","reason":"human approval required","question":"q"}}`); got != want {
 		t.Errorf("flip.json = %s, want %s", got, want)
 	}
-	if got := p.messages(t); got != "" {
-		t.Errorf("mailbox = %s, want no message", got)
+	if got := p.messages(t); !strings.Contains(got, `"subject":"awaiting human: approval"`) {
+		t.Errorf("mailbox = %s, want default message", got)
 	}
 }
 
-func TestGateOnAPrimitiveIsTheStrictModeTypeError(t *testing.T) {
-	for content, want := range map[string]string{
-		`5`:      "Cannot create property 'awaiting_human' on number '5'",
-		`1.5`:    "Cannot create property 'awaiting_human' on number '1.5'",
-		`1e21`:   "Cannot create property 'awaiting_human' on number '1e+21'",
-		`"abc"`:  "Cannot create property 'awaiting_human' on string 'abc'",
-		`"a\nb"`: "Cannot create property 'awaiting_human' on string 'a\nb'",
-		`true`:   "Cannot create property 'awaiting_human' on boolean 'true'",
-	} {
+func TestGateOnAPrimitiveRecordsTheGate(t *testing.T) {
+	for _, content := range []string{`5`, `1.5`, `1e21`, `"abc"`, `"a\nb"`, `true`} {
 		p := newTestProject(t)
 		writeFile(t, p.FlipPath, content)
-		_, err := p.Gate(opts("gate"))
-		var typeError *jsjson.PropertyError
-		if !errors.As(err, &typeError) || err.Error() != want {
-			t.Errorf("Gate() over %s = %v, want %q", content, err, want)
+		if _, err := p.Gate(opts("gate")); err != nil {
+			t.Fatal(err)
 		}
-		if got := readFile(t, p.FlipPath); got != content {
-			t.Errorf("flip.json over %s rewritten to %s", content, got)
+		record, err := p.Read()
+		if err != nil || jsjson.Path(record.Value, "awaiting_human", "reason") != "human approval required" {
+			t.Errorf("gate over %s = %+v, %v", content, record, err)
 		}
-		if got := p.messages(t); got != "" {
-			t.Errorf("mailbox = %s, want no message", got)
+		if p.messages(t) == "" {
+			t.Error("no gate message")
 		}
 	}
 }
@@ -455,7 +427,7 @@ func TestGateClearNoRelaunchDropsTheGateAQueuedLaunchAndAPause(t *testing.T) {
 func TestClearGateWithRelaunchKeepsAQueuedLaunchAndAPause(t *testing.T) {
 	p := newTestProject(t)
 	writeFile(t, p.FlipPath, `{"awaiting_human":{"door":"claude"},"pending_launch":{"to":"opencode"},"paused":{"door":"claude"}}`)
-	door, queued, err := p.ClearGate(p.ReadFlip(), true)
+	door, queued, err := p.ClearGate(true)
 	if err != nil || door != "opencode" || !queued {
 		t.Fatalf("ClearGate = %v, %v, %v", door, queued, err)
 	}
@@ -464,7 +436,7 @@ func TestClearGateWithRelaunchKeepsAQueuedLaunchAndAPause(t *testing.T) {
 	}
 }
 
-func TestGateReadsBeforeMakingTheStateDir(t *testing.T) {
+func TestGateRefusesANonDirectoryStatePath(t *testing.T) {
 	p := newTestProject(t)
 	writeFile(t, filepath.Join(p.Root, ".orchestrator"), "")
 	_, err := p.Gate(opts("gate"))
@@ -498,7 +470,7 @@ func TestDecideCoolsDownOnlyForAnObjectWithAParsableAt(t *testing.T) {
 	thirtyMinutesAgo := jsjson.ISOString(now.Add(-30 * time.Minute))
 	for prev, want := range map[string]string{
 		"":                          flip.ActionHandback,
-		`{`:                         flip.ActionHandback,
+		`{`:                         flip.ActionGate,
 		`null`:                      flip.ActionHandback,
 		`5`:                         flip.ActionHandback,
 		`"` + twoMinutesAgo + `"`:   flip.ActionHandback, // a string's at is a function

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"os"
@@ -226,7 +228,7 @@ func TestFlipTargetNeverStartedLaunchesIt(t *testing.T) {
 	f := newFixture(t)
 	neverStarted(f)
 	state := f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-120)) + `}`)
-	want := []SyncSpec{{Name: "/bin/orch", Args: []string{"flip", "run", "--to", "claude", "--from", "opencode", "--reason", "flip target never started", "--cwd", f.root}, Dir: f.root}}
+	want := []SyncSpec{{Name: "/bin/orch", Args: []string{"flip", "run", "--unless-gated", "--to", "claude", "--from", "opencode", "--reason", "flip target never started", "--cwd", f.root}, Dir: f.root}}
 	if !reflect.DeepEqual(f.runs, want) {
 		t.Errorf("runs %+v, want %+v", f.runs, want)
 	}
@@ -271,7 +273,7 @@ func TestFlipTargetNeverStartedNeedsEveryCondition(t *testing.T) {
 			c.setup(f)
 			f.mustEvaluate(c.state)
 			for _, spec := range f.launches() {
-				if spec.Args[7] == "flip target never started" {
+				if spec.Args[8] == "flip target never started" {
 					t.Errorf("launched %+v", spec)
 				}
 			}
@@ -300,7 +302,7 @@ func TestFlipPendingLaunch(t *testing.T) {
 			f.write("flip.json", `{"to": "door", "pending_launch": `+c.pending+`}`)
 			f.decides("")
 			state := f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-1)) + `}`)
-			args := append([]string{"flip", "run"}, c.wantArgs[:6]...)
+			args := append([]string{"flip", "run", "--unless-gated"}, c.wantArgs[:6]...)
 			args = append(args, "--cwd", f.root)
 			args = append(args, c.wantArgs[6:]...)
 			want := []SyncSpec{{Name: "/bin/orch", Args: args, Dir: f.root}}
@@ -352,7 +354,7 @@ func TestFlipStaleConductorLockDoesNotBlockARelaunch(t *testing.T) {
 		neverStarted(f)
 		f.write("workers/conductor.lock", "999999999")
 		f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-120)) + `}`)
-		if launches := f.launches(); len(launches) != 1 || launches[0].Args[7] != "flip target never started" {
+		if launches := f.launches(); len(launches) != 1 || launches[0].Args[8] != "flip target never started" {
 			t.Errorf("runs %+v, want the never-started launch", f.runs)
 		}
 	})
@@ -409,7 +411,7 @@ func TestFlipRelaunchOnFlip(t *testing.T) {
 
 	want := []SyncSpec{
 		{Name: "/bin/orch", Args: []string{"flip", "decide", "--active", "opencode", "--cwd", f.root}},
-		{Name: "/bin/orch", Args: []string{"flip", "run", "--to", "claude", "--from", "opencode", "--reason", "flip: anthropic green", "--cwd", f.root}},
+		{Name: "/bin/orch", Args: []string{"flip", "run", "--unless-gated", "--to", "claude", "--from", "opencode", "--reason", "flip: anthropic green", "--cwd", f.root}},
 	}
 	if !reflect.DeepEqual(f.runs, want) {
 		t.Errorf("runs %+v, want %+v", f.runs, want)
@@ -436,7 +438,7 @@ func TestFlipRelaunchOnHandbackWithoutALane(t *testing.T) {
 	f := relaunchFixture(t, ``, `{"to": "claude", "paused": 1}`, `{"action": "handback", "to": "opencode"}`)
 	f.mustEvaluate(`{}`)
 	launches := f.launches()
-	if len(launches) != 1 || !reflect.DeepEqual(launches[0].Args[2:8], []string{"--to", "opencode", "--from", "claude", "--reason", "handback: undefined"}) || len(launches[0].Args) != 10 {
+	if len(launches) != 1 || !reflect.DeepEqual(launches[0].Args[3:9], []string{"--to", "opencode", "--from", "claude", "--reason", "handback: undefined"}) || len(launches[0].Args) != 11 {
 		t.Fatalf("launches %+v", launches)
 	}
 	if f.incidents[0].Detail != "" {
@@ -486,7 +488,7 @@ func TestFlipStayRelaunchesTheActiveDoor(t *testing.T) {
 				}
 				return
 			}
-			if len(launches) != 1 || launches[0].Args[3] != "opencode" || launches[0].Args[7] != c.wantReason {
+			if len(launches) != 1 || launches[0].Args[4] != "opencode" || launches[0].Args[8] != c.wantReason {
 				t.Fatalf("launches %+v, want reason %q", launches, c.wantReason)
 			}
 			if got := f.logText(); got != iso(0)+" relaunch opencode->opencode ("+c.wantLogAction+"): launched\n" {
@@ -540,7 +542,7 @@ func TestFlipRelaunchResumesTheSameDoorsSession(t *testing.T) {
 			if len(launches) != 1 {
 				t.Fatalf("launches %+v", launches)
 			}
-			if got := launches[0].Args[10:]; !reflect.DeepEqual(got, c.wantResume) && (len(got) != 0 || c.wantResume != nil) {
+			if got := launches[0].Args[11:]; !reflect.DeepEqual(got, c.wantResume) && (len(got) != 0 || c.wantResume != nil) {
 				t.Errorf("resume args %q, want %q", got, c.wantResume)
 			}
 		})
@@ -580,5 +582,83 @@ func TestFlipRelaunchRewritesAnArrayConductorAsAnObject(t *testing.T) {
 	wantJSON(t, compact(t, mustParse(t, f.read("workers/conductor.json"))), `{"redispatched_at":"2027-01-15T08:00:00.000Z"}`)
 	if len(f.launches()) != 1 {
 		t.Errorf("launches %+v", f.launches())
+	}
+}
+
+// The fake self-exec is the boundary after evaluateFlip's snapshot and before Run's
+// transaction. Install a human gate there for each of the three automatic launch paths.
+func TestSupervisorRelaunchCannotEraseAGateInstalledAfterItsRead(t *testing.T) {
+	for _, branch := range []string{"never-started", "pending", "decided"} {
+		t.Run(branch, func(t *testing.T) {
+			f := newFixture(t)
+			f.mkdir("logs")
+			switch branch {
+			case "never-started":
+				neverStarted(f)
+			case "pending":
+				f.write("flip.json", `{"pending_launch":{"to":"claude","from":"opencode"}}`)
+			case "decided":
+				f.write("flip.json", `{"paused":{"door":"opencode"}}`)
+			}
+			project := flipcmd.NewProject(f.root)
+			launches := 0
+			f.respond = func(spec SyncSpec) SyncResult {
+				if spec.Args[1] == "decide" {
+					return SyncResult{Status: status(0), Stdout: `{"action":"flip","to":"claude","reason":"headroom"}` + "\n"}
+				}
+				gateOpts := cliargs.Opts{"reason": {Value: "installed after supervisor read"}}
+				if _, err := project.Gate(gateOpts); err != nil {
+					t.Fatal(err)
+				}
+				before, err := os.ReadFile(project.FlipPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				opts, _ := cliargs.ParseArgs(spec.Args[2:], []string{"to", "from", "reason", "cwd", "resume"}, []string{"unless-gated"})
+				answer, code, err := project.Run(opts, func([]string) (*int, string, string) { launches++; return status(0), "", "" })
+				if err != nil || code != 1 || compact(t, answer) != `{"flipped":false,"reason":"awaiting human"}` {
+					t.Fatalf("automatic run = %v, %d, %v", answer, code, err)
+				}
+				after, err := os.ReadFile(project.FlipPath)
+				if err != nil || string(after) != string(before) {
+					t.Fatalf("gate changed: %s, %v", after, err)
+				}
+				return SyncResult{Status: status(code), Stdout: compact(t, answer) + "\n"}
+			}
+			f.mustEvaluate(`{}`)
+			if len(f.launches()) != 1 || launches != 0 {
+				t.Fatalf("flip runs %v, worker launches %d", f.launches(), launches)
+			}
+		})
+	}
+}
+
+func TestUnreadableFlipStateBlocksRelaunchAndLogsOnce(t *testing.T) {
+	for _, kind := range []string{"corrupt", "mode-0000"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.mkdir("logs")
+			text := "{"
+			if kind == "mode-0000" {
+				text = `{}`
+			}
+			f.write("flip.json", text)
+			if kind == "mode-0000" {
+				if err := os.Chmod(f.sup.flipPath(), 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(f.sup.flipPath(), 0600) })
+				if _, err := os.ReadFile(f.sup.flipPath()); err == nil {
+					t.Skip("process can read mode-0000 files")
+				}
+			}
+			state := f.mustEvaluate(`{}`)
+			first := f.logText()
+			state.Delete("last_flip_check")
+			f.mustEvaluate(compact(t, state))
+			if len(f.runs) != 0 || first == "" || f.logText() != first || !strings.Contains(first, "flip state unreadable:") {
+				t.Fatalf("runs %v, first log %q, now %q", f.runs, first, f.logText())
+			}
+		})
 	}
 }

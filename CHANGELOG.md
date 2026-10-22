@@ -21,6 +21,19 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- flip (S13d, sol-5 R4, PE-32): serialize all flip state writers on the separate
+  `flip.json.lock`. Corrupt or unreadable state gates decisions, blocks supervisor relaunch,
+  and refuses writes with the file untouched; reply gate clearing reports failure and remote
+  answers remain retryable after repair. Remote resume starts its supervisor outside the
+  transaction and rechecks the gate before clearing it.
+- flip (S13d, PE-33): supervisor relaunches use `--unless-gated`, refusing a gate installed
+  since their snapshot. Explicit human/kickoff runs still clear gates; launchers run outside
+  the lock and a deferred launch preserves gates installed during launch.
+- flip (S13d, L12/L13, PE-34): gate valid primitive JSON as an empty object; the internal gate
+  operation uses a default reason and posts its handoff for a non-string reason.
+- flip (S13d, L14, PE-35): bare `--active`, `--from`, `--reason`, `--question`, `--resume`,
+  `--to` and `--brief` are one-line usage errors (exit 2) before any writes.
+
 - supervisor (S13f): serialize the complete ack read-modify-write on the separate
   `supervisor-acks.json.lock`, retaining concurrent receipts across processes and goroutines
   (sol-5 R12). Only truthy own event keys can be acknowledged; inherited `constructor`,

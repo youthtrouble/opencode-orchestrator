@@ -124,8 +124,9 @@ func New(projects ProjectResolver, registryFile, stateDir string) Applier {
 // an accept of a question without a recommendation or an answer of an unknown kind. An
 // answer whose project is unknown is rejected, and stays rejected on replay (see resolve). A
 // mailbox that cannot be read, a reply that cannot be posted and an ack that cannot be written
-// are a *RetryableError with no outcome (see RetryableError); a reply whose human gate could not
-// be checked or cleared is applied and the gate's error returned.
+// are a *RetryableError with no outcome (see RetryableError). Unreadable flip state also
+// remains retryable, so the gate can be checked after repair; other gate errors are reported
+// with an applied reply.
 func (a Applier) ApplyAnswer(answer wire.PulledAnswer) (Outcome, error) {
 	root, ok, outcome, err := a.resolve(journalKey{answer.ProjectKey, answerKind, answer.ID})
 	if !ok {
@@ -262,7 +263,8 @@ func (a Applier) ApplyAction(action wire.PulledAction) (Outcome, error) {
 	case found && entry.settled():
 		return entry.outcome(), nil
 	case found:
-		return settle(journal, entry, a.interruptedOutcome(root, action.Kind), nil)
+		outcome, err := a.interruptedOutcome(root, action.Kind)
+		return settle(journal, entry, outcome, err)
 	}
 	entry = journalEntry{journalKey: key}
 	if err := journal.record(entry); err != nil {
@@ -312,12 +314,16 @@ func (a Applier) applyKind(root, kind string) (Outcome, error) {
 // replaced), so the action is not applied again: it is applied when the project is now as it
 // asked, else superseded, and the owner sends it again as a new action. An action interrupted
 // before its write is therefore dropped rather than risk overriding a newer local decision.
-func (a Applier) interruptedOutcome(root, kind string) Outcome {
-	paused := jsjson.Truthy(jsjson.Path(a.flipProject(root).ReadFlip(), "awaiting_human"))
-	if paused == (kind == "pause") {
-		return Outcome{Applied, "already applied"}
+func (a Applier) interruptedOutcome(root, kind string) (Outcome, error) {
+	record, err := a.flipProject(root).Read()
+	if err != nil {
+		return rejected("could not read flip state", "read flip state", err)
 	}
-	return Outcome{Superseded, "interrupted; send it again"}
+	paused := jsjson.Truthy(jsjson.Path(record.Value, "awaiting_human"))
+	if paused == (kind == "pause") {
+		return Outcome{Applied, "already applied"}, nil
+	}
+	return Outcome{Superseded, "interrupted; send it again"}, nil
 }
 
 // settle records entry's outcome in the journal and returns it. An outcome that cannot be
@@ -335,21 +341,34 @@ func settle(journal actionJournal, entry journalEntry, outcome Outcome, applyErr
 // boundary (flip decide answers gate) and the supervisor does not relaunch it.
 func (a Applier) pause(root string) (Outcome, error) {
 	project := a.flipProject(root)
-	record := project.ReadFlip()
-	if jsjson.Truthy(jsjson.Path(record, "awaiting_human")) {
-		return Outcome{Superseded, "already paused"}, nil
-	}
 	door, running := a.runningConductor(root)
-	if !isDoor(door) {
-		var err error
-		if door, err = a.fallbackDoor(record); err != nil {
-			return rejected("pause: could not read the registry", "read the registry", err)
+	alreadyPaused := false
+	err := project.Update(func(prev flipcmd.Record) (any, error) {
+		if jsjson.Truthy(jsjson.Path(prev.Value, "awaiting_human")) {
+			alreadyPaused = true
+			return nil, flipcmd.ErrNoUpdate
 		}
-	}
-	gate := cliargs.Opts{"active": {Value: door}, "reason": {Value: pauseReason}}
-	if _, err := project.Gate(gate); err != nil {
+		if !isDoor(door) {
+			var err error
+			door, err = a.fallbackDoor(prev.Value)
+			if err != nil {
+				return nil, &Error{"read the registry", err}
+			}
+		}
+		gate := cliargs.Opts{"active": {Value: door}, "reason": {Value: pauseReason}}
+		return project.GateRecord(prev.Value, gate), nil
+	})
+	if err != nil {
+		var applyErr *Error
+		if errors.As(err, &applyErr) && applyErr.Step == "read the registry" {
+			return Outcome{Rejected, "pause: could not read the registry"}, err
+		}
 		return rejected("pause: could not write the gate", "pause", err)
 	}
+	if alreadyPaused {
+		return Outcome{Superseded, "already paused"}, nil
+	}
+	project.PostGateHandoff(cliargs.Opts{"active": {Value: door}, "reason": {Value: pauseReason}})
 	if !running {
 		return Outcome{Applied, "pauses at the next brief boundary; no conductor running"}, nil
 	}
@@ -396,16 +415,52 @@ func isDoor(name string) bool {
 // stranding the queued relaunch.
 func (a Applier) resume(root string) (Outcome, error) {
 	project := a.flipProject(root)
-	record := project.ReadFlip()
-	if !jsjson.Truthy(jsjson.Path(record, "awaiting_human")) {
+	// Validate the gate inside a transaction before starting anything. ErrNoUpdate
+	// reads without rewriting state; the supervisor start must happen after Update releases.
+	var gateJSON string
+	err := project.Update(func(prev flipcmd.Record) (any, error) {
+		gate := jsjson.Path(prev.Value, "awaiting_human")
+		if !jsjson.Truthy(gate) {
+			return nil, flipcmd.ErrNoUpdate
+		}
+		data, err := jsjson.Marshal(gate)
+		if err != nil {
+			return nil, err
+		}
+		gateJSON = string(data)
+		return nil, flipcmd.ErrNoUpdate
+	})
+	if err != nil {
+		return rejected("resume: could not clear the gate", "resume", err)
+	}
+	if gateJSON == "" {
 		return Outcome{Superseded, "not paused"}, nil
 	}
 	if err := a.ensureSupervisor(root); err != nil {
 		return rejected("could not start the supervisor", "start the supervisor", err)
 	}
-	door, _, err := project.ClearGate(record, true)
+	var door any
+	gateChanged := false
+	err = project.Update(func(prev flipcmd.Record) (any, error) {
+		gate := jsjson.Path(prev.Value, "awaiting_human")
+		data, err := jsjson.Marshal(gate)
+		if err != nil {
+			return nil, err
+		}
+		// A human decision made while the supervisor started supersedes this resume.
+		if !jsjson.Truthy(gate) || string(data) != gateJSON {
+			gateChanged = true
+			return nil, flipcmd.ErrNoUpdate
+		}
+		next, d, _ := project.ClearGateRecord(prev.Value, true)
+		door = d
+		return next, nil
+	})
 	if err != nil {
 		return rejected("resume: could not clear the gate", "resume", err)
+	}
+	if gateChanged {
+		return Outcome{Superseded, "gate changed; send it again"}, nil
 	}
 	return Outcome{Applied, fmt.Sprintf("resuming: %s conductor relaunches within a minute", jsjson.TemplateString(door))}, nil
 }

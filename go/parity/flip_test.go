@@ -52,7 +52,7 @@ type flipCase struct {
 // outside it. Its fresh values are those written after it is built. A `run` it makes must
 // find the conductor lane locked (see flipRunInvocation); launches go through runFlipLaunch.
 func (h *harness) flipInvocation(c flipCase) invocation {
-	return invocation{
+	inv := invocation{
 		js:           append([]string{h.node, filepath.Join(h.orchJS, "bin", "flip.mjs")}, c.args...),
 		orch:         append([]string{h.orchBin, "flip"}, c.args...),
 		env:          []string{noPostRunRefresh},
@@ -63,6 +63,20 @@ func (h *harness) flipInvocation(c flipCase) invocation {
 		extraFiles:   []string{".git/info/exclude", worktreeExclude},
 		normalize:    normalizeFlip(time.Now()),
 	}
+	if len(c.args) > 0 && slices.Contains([]string{"gate", "pause", "run"}, c.args[0]) {
+		inv.normalizeWrites = flipTransactionSidecar
+	}
+	return inv
+}
+
+// PE-32: only flip writers create this persistent, empty transaction sidecar. This
+// case-scoped normalizer keeps unexpected content and pre-existing sidecars visible.
+func flipTransactionSidecar(o outcome, before map[string]string) outcome {
+	const lock = "project/flip.json.lock"
+	if _, seeded := before[lock]; !seeded && o.files[lock] == "" {
+		delete(o.files, lock)
+	}
+	return o
 }
 
 func seedFlip(content string) seed { return seedProjectFile(".orchestrator/flip.json", content) }
@@ -145,10 +159,19 @@ func (h *harness) testFlip(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if c.leftover != "" {
-				h.compareFlipPE21FailedRename(t, h.flipInvocation(c), c.leftover)
+			if strings.HasSuffix(c.name, "-bare") && !strings.Contains(c.name, "cwd-") {
+				h.compareFlipBareValuePE35(t, h.flipInvocation(c), c.args[len(c.args)-1])
 				return
 			}
+			if c.crash == crashC1 && strings.HasPrefix(c.errorLine, "TypeError: Cannot create property 'awaiting_human'") {
+				h.compareFlipPrimitivePE34(t, h.flipInvocation(c))
+				return
+			}
+			if c.leftover != "" {
+				h.compareFlipUnreadableDirectoryPE32(t, h.flipInvocation(c), c.leftover)
+				return
+			}
+
 			h.comparePair(t, h.flipInvocation(c))
 		})
 	}
@@ -163,6 +186,7 @@ func (h *harness) testFlip(t *testing.T) {
 	t.Run("decide", h.testFlipDecide)
 	t.Run("cross-runtime", h.testFlipCrossRuntime)
 	t.Run("run", h.testFlipRun)
+	t.Run("PE-33-unless-gated", h.testFlipUnlessGatedPE33)
 }
 
 // testFlipGateArray asserts that gate over an array flip.json records the gate in both
@@ -173,24 +197,6 @@ func (h *harness) testFlipGateArray(t *testing.T) {
 	if !strings.HasPrefix(js.files[flipJSON], "{\n  \"awaiting_human\": {") {
 		t.Errorf("js flip.json = %q, want the gate", js.files[flipJSON])
 	}
-	compareOutcomes(t, js, orch)
-}
-
-// compareFlipPE21FailedRename asserts PE-21 for a write of flip.json onto a directory: both
-// runtimes die of the EISDIR of the rename onto it (C1, inv.errorLine), but orch's line names
-// its own `flip.json.tmp-<random>`, which it removes, where the JS names and leaves
-// `flip.json.tmp` holding written. The rest is compared.
-func (h *harness) compareFlipPE21FailedRename(t *testing.T, inv invocation, written string) {
-	t.Helper()
-	js, orch := h.runPair(t, inv)
-	if !privateTempSuffix.MatchString(orch.stderr) {
-		t.Errorf("orch stderr = %q, want orch's temp name", orch.stderr)
-	}
-	assertPE21FailedRename(t, &js, &orch, "project/flip.json", written)
-	if err := crashError(crashC1, inv.errorLine, js, orch); err != nil {
-		t.Error(err)
-	}
-	js.stderr, orch.stderr = "", ""
 	compareOutcomes(t, js, orch)
 }
 
@@ -351,6 +357,19 @@ func (h *harness) testFlipDecide(t *testing.T) {
 				if js.stdout != dc.want {
 					t.Errorf("js decided %q, want %q", js.stdout, dc.want)
 				}
+				switch dc.name {
+				case "claude/flip-unparsable":
+					const want = `{"action":"gate","reason":"flip state unreadable: INVALID_JSON; fix or remove .orchestrator/flip.json"}` + "\n"
+					if orch.exitCode != 0 || orch.stdout != want || orch.stderr != "" {
+						t.Errorf("PE-32: orch %+v", orch)
+					}
+					orch.stdout = js.stdout
+				case "active/bare":
+					if orch.exitCode != 2 || orch.stdout != "" || orch.stderr != "--active requires a value\n" {
+						t.Errorf("PE-35: orch %+v", orch)
+					}
+					orch.exitCode, orch.stdout, orch.stderr = js.exitCode, js.stdout, js.stderr
+				}
 			})
 		})
 	}
@@ -416,5 +435,120 @@ func (h *harness) testFlipCrossRuntime(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// PE-35: pin the frozen JS's bare-option behaviour and assert orch refuses before writing.
+func (h *harness) compareFlipBareValuePE35(t *testing.T, inv invocation, key string) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	command := inv.orch[2]
+	var jsWant string
+	jsCode := 0
+	switch command {
+	case "pause":
+		door := `"opencode"`
+		if key == "--active" {
+			door = `true`
+		}
+		jsWant = `{"paused":true,"door":` + door + `}` + "\n"
+	case "gate":
+		door := `"opencode"`
+		if key == "--active" {
+			door = `true`
+		}
+		jsWant = `{"awaiting_human":true,"door":` + door + `}` + "\n"
+	case "run":
+		if key == "--to" {
+			jsCode = 2
+		} else {
+			from := `"opencode"`
+			if key == "--from" {
+				from = `true`
+			}
+			jsWant = `{"flipped":false,"pending":true,"to":"claude","from":` + from + `,"note":"lane locked by the current conductor; supervisor will launch after release"}` + "\n"
+		}
+	default:
+		t.Fatalf("no PE-35 old behaviour pinned for %s", command)
+	}
+	if js.exitCode != jsCode || js.stdout != jsWant {
+		t.Errorf("PE-35 frozen JS: %d, %q, %q; want %d, %q", js.exitCode, js.stdout, js.stderr, jsCode, jsWant)
+	}
+	if key == "--to" && js.stderr != "--to opencode|claude required\n" {
+		t.Errorf("PE-35 JS --to: %q", js.stderr)
+	}
+	if orch.exitCode != 2 || orch.stdout != "" || orch.stderr != key+" requires a value\n" {
+		t.Errorf("PE-35 orch: %d, %q, %q", orch.exitCode, orch.stdout, orch.stderr)
+	}
+	for _, name := range []string{"project/flip.json", "project/mailbox/messages.jsonl", "project/briefs/conductor-continue.md", "extra/.git/info/exclude"} {
+		if content, ok := orch.files[name]; ok {
+			t.Errorf("PE-35 orch wrote %s: %s", name, content)
+		}
+	}
+}
+
+// PE-34: JS throws assigning a gate to a primitive; orch persists and announces the gate.
+func (h *harness) compareFlipPrimitivePE34(t *testing.T, inv invocation) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	if js.exitCode != 1 || !slices.Contains(strings.Split(js.stderr, "\n"), inv.errorLine) {
+		t.Errorf("PE-34 frozen JS: %d, %q", js.exitCode, js.stderr)
+	}
+	if orch.exitCode != 0 || orch.stdout != `{"awaiting_human":true,"door":"opencode"}`+"\n" || orch.stderr != "" {
+		t.Errorf("PE-34 orch: %+v", orch)
+	}
+	want := "{\n  \"awaiting_human\": {\n    \"at\": \"<iso>\",\n    \"door\": \"opencode\",\n    \"reason\": \"human approval required\",\n    \"question\": null\n  }\n}\n"
+	if orch.files["project/flip.json"] != want || !strings.Contains(orch.files["project/mailbox/messages.jsonl"], `"subject":"awaiting human: approval"`) {
+		t.Errorf("PE-34 orch state: %+v", orch.files)
+	}
+}
+
+// PE-32: a directory is unreadable state. JS reaches its failed rename; orch refuses
+// before writing a brief, exclude, handoff or replacement temp.
+func (h *harness) compareFlipUnreadableDirectoryPE32(t *testing.T, inv invocation, written string) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	if js.exitCode != 1 || !slices.Contains(strings.Split(js.stderr, "\n"), inv.errorLine) || !strings.Contains(js.files["project/flip.json.tmp"], written) {
+		t.Errorf("PE-32 frozen JS: %+v", js)
+	}
+	const want = "Error: flip state unreadable: $PROJECT/.orchestrator/flip.json: EISDIR\n"
+	if orch.exitCode != 1 || orch.stdout != "" || orch.stderr != want {
+		t.Errorf("PE-32 orch: %d, %q, %q", orch.exitCode, orch.stdout, orch.stderr)
+	}
+	if _, ok := orch.files["project/flip.json.tmp"]; ok {
+		t.Error("PE-32 orch left a temp")
+	}
+	if inv.orch[2] == "run" {
+		if _, ok := orch.files["project/briefs/conductor-continue.md"]; ok {
+			t.Error("PE-32 orch wrote a brief")
+		}
+		if _, ok := orch.files["extra/.git/info/exclude"]; ok {
+			t.Error("PE-32 orch wrote an exclude")
+		}
+	}
+}
+
+func (h *harness) compareFlipCorruptRunPE32(t *testing.T, inv invocation, seeded string) {
+	t.Helper()
+	js, orch := h.runPair(t, inv)
+	if js.exitCode != 0 || !strings.Contains(js.stdout, `"pending":true`) || !strings.Contains(js.files["project/flip.json"], `"previous": null`) {
+		t.Errorf("PE-32 frozen JS: %+v", js)
+	}
+	const want = "Error: flip state unreadable: $PROJECT/.orchestrator/flip.json: INVALID_JSON\n"
+	if orch.exitCode != 1 || orch.stdout != "" || orch.stderr != want || orch.files["project/flip.json"] != seeded {
+		t.Errorf("PE-32 orch: %+v", orch)
+	}
+}
+
+// PE-33: --unless-gated is opt-in; the oracle ignores it and clears the gate.
+func (h *harness) testFlipUnlessGatedPE33(t *testing.T) {
+	const gated = `{"awaiting_human":{"door":"opencode","reason":"wait"}}`
+	inv := h.flipRunInvocation([]string{"--to", "claude", "--unless-gated"}, seedFlip(gated), noCrash, "")
+	js, orch := h.runPair(t, inv)
+	if js.exitCode != 0 || !strings.Contains(js.stdout, `"pending":true`) || strings.Contains(js.files["project/flip.json"], `awaiting_human`) {
+		t.Errorf("PE-33 frozen JS: %+v", js)
+	}
+	if orch.exitCode != 1 || orch.stdout != `{"flipped":false,"reason":"awaiting human"}`+"\n" || orch.stderr != "" || orch.files["project/flip.json"] != gated {
+		t.Errorf("PE-33 orch: %+v", orch)
 	}
 }
