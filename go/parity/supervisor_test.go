@@ -22,7 +22,7 @@ type supervisorCase struct {
 // never with a --cwd outside it. The only fresh value is the `at` of an ack written by the
 // run (normalised as flip's are: seeded ones are compared verbatim).
 func (h *harness) supervisorInvocation(c supervisorCase) invocation {
-	return invocation{
+	inv := invocation{
 		js:           append([]string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, c.args...),
 		orch:         append([]string{h.orchBin, "supervisor"}, c.args...),
 		env:          []string{noPostRunRefresh},
@@ -32,6 +32,18 @@ func (h *harness) supervisorInvocation(c supervisorCase) invocation {
 		projectPaths: true,
 		normalize:    normalizeFlip(time.Now()),
 	}
+	if len(c.args) > 0 && c.args[0] == "ack" {
+		// PE-39: only ack creates this persistent, empty transaction sidecar.
+		// Keep any unexpected content visible to the comparison.
+		inv.normalizeWrites = func(o outcome, _ map[string]string) outcome {
+			const lock = "project/supervisor-acks.json.lock"
+			if content, exists := o.files[lock]; exists && content == "" {
+				delete(o.files, lock)
+			}
+			return o
+		}
+	}
+	return inv
 }
 
 func seedSupervisorState(content string) seed {
@@ -103,9 +115,9 @@ func (h *harness) testSupervisor(t *testing.T) {
 		{name: "ack/by-bare", args: ack("--event", "e1", "--by"), seed: events},
 		{name: "ack/existing-same-id", args: ack("--event", "e1"), seed: seeds(events, seedAcks(`{"e0":{"by":"a","at":"2026-01-01T00:00:00.000Z"},"e1":{"by":"old","at":"2026-01-02T00:00:00.000Z"},"e9":1}`))},
 		{name: "ack/existing-other-id", args: ack("--event", "e2"), seed: seeds(events, seedAcks(`{"e1":{"by":"a","at":"2026-01-01T00:00:00.000Z"}}`))},
-		{name: "ack/constructor", args: ack("--event", "constructor"), seed: seedSupervisorState(`{"events":{}}`)},
-		{name: "ack/proto", args: ack("--event", "__proto__"), seed: seeds(seedSupervisorState(`{"events":{}}`), seedAcks(`{"a":1}`))},
-		{name: "ack/proto-own-key", args: ack("--event", "__proto__"), seed: seeds(seedSupervisorState(`{"events":{}}`), seedAcks(`{"__proto__":{"x":1},"a":1}`))},
+		{name: "ack/constructor-own-event", args: ack("--event", "constructor"), seed: seedSupervisorState(`{"events":{"constructor":1}}`)},
+		{name: "ack/proto", args: ack("--event", "__proto__"), seed: seeds(seedSupervisorState(`{"events":{"__proto__":1}}`), seedAcks(`{"a":1}`))},
+		{name: "ack/proto-own-key", args: ack("--event", "__proto__"), seed: seeds(seedSupervisorState(`{"events":{"__proto__":1}}`), seedAcks(`{"__proto__":{"x":1},"a":1}`))},
 		{name: "ack/falsy-event", args: ack("--event", "zero"), seed: events},
 		{name: "ack/state-null", args: ack("--event", "e1"), seed: seedSupervisorState(`null`), crash: crashC1, errorLine: "TypeError: Cannot read properties of null (reading 'events')"},
 		{name: "ack/state-null-no-event", args: ack(), seed: seedSupervisorState(`null`)},
@@ -127,9 +139,39 @@ func (h *harness) testSupervisor(t *testing.T) {
 	t.Run("ack/PE-21-acks-directory", h.testSupervisorAckAcksDirectory)
 	t.Run("ack/PE-16-string-events", h.testSupervisorAckStringEvents)
 	t.Run("ack/PE-16-array-acks", h.testSupervisorAckArrayAcks)
+	t.Run("ack/PE-39-own-events-only", h.testSupervisorAckOwnEvents)
 	t.Run("cross-runtime", h.testSupervisorCrossRuntime)
 	t.Run("serve", h.testSupervisorServe)
 	t.Run("start", h.testSupervisorStart)
+}
+
+// PE-39: the frozen JS accepts inherited Object.prototype names as event ids.
+// Orch requires a truthy own event key and leaves existing receipts untouched.
+func (h *harness) testSupervisorAckOwnEvents(t *testing.T) {
+	for _, id := range []string{"constructor", "toString", "__proto__"} {
+		t.Run(id, func(t *testing.T) {
+			const acks = "project/supervisor-acks.json"
+			js, orch := h.runPair(t, h.supervisorInvocation(supervisorCase{
+				args: []string{"ack", "--event", id},
+				seed: seeds(seedSupervisorState(`{"events":{}}`), seedAcks(`{"a":1}`)),
+			}))
+			if js.exitCode != 0 || js.stdout != "acknowledged (receipt, not acceptance)\n" || js.stderr != "" {
+				t.Errorf("JS inherited %s: exit=%d stdout=%q stderr=%q", id, js.exitCode, js.stdout, js.stderr)
+			}
+			if id != "__proto__" && !strings.Contains(js.files[acks], `"`+id+`": {`) {
+				t.Errorf("JS receipt missing %s: %s", id, js.files[acks])
+			}
+			if id == "__proto__" && js.files[acks] != "{\n  \"a\": 1\n}\n" {
+				t.Errorf("JS __proto__ unexpectedly changed receipts: %q", js.files[acks])
+			}
+			if orch.exitCode != 1 || orch.stdout != "" || orch.stderr != "unknown event id\n" || orch.files[acks] != `{"a":1}` {
+				t.Errorf("orch inherited %s: exit=%d stdout=%q stderr=%q acks=%q", id, orch.exitCode, orch.stdout, orch.stderr, orch.files[acks])
+			}
+			js.files[acks] = orch.files[acks]
+			js.exitCode, js.stdout, js.stderr = orch.exitCode, orch.stdout, orch.stderr
+			compareOutcomes(t, js, orch)
+		})
+	}
 }
 
 // acksIsDir is the JS crash line of an ack whose acks file is a directory: the rename of the

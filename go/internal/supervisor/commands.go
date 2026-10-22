@@ -5,6 +5,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
 
 // Lines the commands print.
@@ -46,8 +47,8 @@ type AckResult struct {
 // Ack is `ack --event ID [--by NAME]`: record that the coordinator received the event, as
 // {by, at} under the event id in the acks file. event is the JS option value (nil when
 // absent, true when bare) and by is `opts.by || "coordinator"`. The event must be truthy in
-// the state's events, read as a JS property: Object.prototype names count as present
-// (mirrored). The error is what the JS dies of.
+// the state's own events (PE-39). The acks read-modify-write is serialized across
+// processes and goroutines on a separate, persistent lock file.
 func (p Project) Ack(event, by any, now time.Time) (AckResult, error) {
 	if !jsjson.Truthy(event) {
 		return AckResult{unknownEvent, true}, nil
@@ -60,34 +61,33 @@ func (p Project) Ack(event, by any, now time.Time) (AckResult, error) {
 	if !hasTruthyProperty(jsjson.Path(state, "events"), id) {
 		return AckResult{unknownEvent, true}, nil
 	}
-	acks := asObject(readJSON(p.AcksPath, emptyObject))
-	record, isObject := acks.(*jsjson.Object)
-	if !isObject {
-		return AckResult{}, jsjson.CannotAssign(acks, id)
-	}
-	ack := jsjson.NewObject()
-	ack.Set("by", by)
-	ack.Set("at", jsjson.ISOString(now))
-	setProperty(record, id, ack)
-	if err := writeJSON(p.AcksPath, record); err != nil {
+	err := ownlock.Transaction(p.AcksPath+".lock", func() error {
+		acks := asObject(readJSON(p.AcksPath, emptyObject))
+		record, isObject := acks.(*jsjson.Object)
+		if !isObject {
+			return jsjson.CannotAssign(acks, id)
+		}
+		ack := jsjson.NewObject()
+		ack.Set("by", by)
+		ack.Set("at", jsjson.ISOString(now))
+		setProperty(record, id, ack)
+		return writeJSON(p.AcksPath, record)
+	})
+	if err != nil {
 		return AckResult{}, err
 	}
 	return AckResult{Line: acknowledged}, nil
 }
 
-// hasTruthyProperty is `!!events?.[key]` on a parsed events value: an own key by its value,
-// else a name every plain object inherits from Object.prototype (always truthy). A value
-// that is not an object reads as {} (PE-16).
+// hasTruthyProperty accepts only truthy own event keys (PE-39). A value that is
+// not an object reads as {} (PE-16).
 func hasTruthyProperty(events any, key string) bool {
 	if object, isObject := events.(*jsjson.Object); isObject {
 		if value, own := object.Get(key); own {
 			return jsjson.Truthy(value)
 		}
-	} else if events == nil {
-		return false // undefined or null: `?.` gives undefined
 	}
-	_, inherited := jsjson.InheritedText(key)
-	return inherited
+	return false
 }
 
 // setProperty is `object[key] = value` for an object value. Assigning __proto__ without an

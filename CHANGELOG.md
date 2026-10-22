@@ -21,6 +21,10 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- supervisor (S13f): serialize the complete ack read-modify-write on the separate
+  `supervisor-acks.json.lock`, retaining concurrent receipts across processes and goroutines
+  (sol-5 R12). Only truthy own event keys can be acknowledged; inherited `constructor`,
+  `toString` and other Object.prototype names are refused with exit 1 (L16, PE-39).
 - internal (S13a): add a POSIX record-lock ownership and transaction primitive with
   inode-alias tracking and cross-process regression tests, including failed pending
   reservations and release after a working-directory change. No callers migrate in this
