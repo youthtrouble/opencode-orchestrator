@@ -8,7 +8,8 @@
   budget), so nothing more synced and no notification was sent. The Worker now takes the projects that fit,
   keeping the queries the first-push stamp and the notifier need, and answers `deferred` with
   `retry_after_seconds: 1` for the rest, which the Mac sends at its next cycle (one `{"push":"query_budget"}` log
-  line per such push). A first push's backlog stays suppressed until every project of it has landed. Notifications
+  line per such push). A first push's backlog stays suppressed until every project the Worker will retry has landed (a key another machine
+  owns is refused, not retried, and does not hold it open). Notifications
   for projects that landed in a failed push were never lost: the notifier claims whatever D1 says is owed at the
   next push that accepts a project. **Rollout:** Worker only, v1-compatible; every `orch remote` already retries a
   deferred project. See `remote/README.md`, "First sync".

@@ -236,7 +236,8 @@ not an error. D1 allows 50 queries per Worker invocation there; a push costs abo
 one) plus 1 per question it writes, and keeps 5 for the notification email. So the Worker takes the projects that
 fit (21 question-less ones on a first push) and defers the rest to the Mac's next cycle, 30 s later. A backlog of 50
 projects with 20 open questions each lands one project a cycle, about 25 minutes. A first sync's backlog sends no
-notification emails, however many cycles it takes.
+notification emails, however many cycles it takes; a project another machine owns is refused rather than retried,
+so it does not hold the first sync open.
 
 ## Moving to another hostname
 
