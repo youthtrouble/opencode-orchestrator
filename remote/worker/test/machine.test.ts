@@ -40,7 +40,7 @@ function machineApp() {
   let now = START;
   const worker = createWorker({
     keysFor: () => keys,
-    routes: appRoutes({ onPushAccepted: async (_ctx, projects) => void accepted.push(...projects) }),
+    routes: appRoutes({ onPushAccepted: { maxQueries: 0, run: async (_ctx, projects) => void accepted.push(...projects) } }),
     now: () => now,
   });
   const env = testEnv({}, db);

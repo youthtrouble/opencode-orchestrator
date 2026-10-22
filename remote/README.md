@@ -231,6 +231,13 @@ moving or replacing the `orch` binary, since the plist holds its absolute path.
 `serve` holds the lock, and then `serve` syncs on its own. `orch remote status` should show a recent `last push` and
 `last pull` and `last error: none`, and the page lists your projects.
 
+A first sync of many projects takes several cycles, each reporting some `deferred`: that is the Workers Free plan,
+not an error. D1 allows 50 queries per Worker invocation there; a push costs about 2 per new project (3 per changed
+one) plus 1 per question it writes, and keeps 5 for the notification email. So the Worker takes the projects that
+fit (21 question-less ones on a first push) and defers the rest to the Mac's next cycle, 30 s later. A backlog of 50
+projects with 20 open questions each lands one project a cycle, about 25 minutes. A first sync's backlog sends no
+notification emails, however many cycles it takes.
+
 ## Moving to another hostname
 
 The Worker serves the page on one origin, `PUBLIC_ORIGIN`: a browser write (Accept, a typed answer, Undo, pause,

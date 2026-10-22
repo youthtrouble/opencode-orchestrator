@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- remote: a Work Trains push now fits the Workers Free plan's 50 D1 queries per invocation (SI-3). Before, a push
+  that needed more failed with 500 part-way: a machine's first push of 24 question-less projects needed 51, and with 50
+  projects the Mac's retries never got through at all (re-reading the projects that had landed used the whole
+  budget), so nothing more synced and no notification was sent. The Worker now takes the projects that fit,
+  keeping the queries the first-push stamp and the notifier need, and answers `deferred` with
+  `retry_after_seconds: 1` for the rest, which the Mac sends at its next cycle (one `{"push":"query_budget"}` log
+  line per such push). A first push's backlog stays suppressed until every project of it has landed. Notifications
+  for projects that landed in a failed push were never lost: the notifier claims whatever D1 says is owed at the
+  next push that accepts a project. **Rollout:** Worker only, v1-compatible; every `orch remote` already retries a
+  deferred project. See `remote/README.md`, "First sync".
+
 - remote: the Work Trains budget chips show when each vendor resets (WT22-C). A chip reads the window that sets its
   colour, the 5-hour one unless the weekly one is red: `Anthropic 28% · resets in 2 h 10 min`, `OpenAI weekly 100% ·
   resets Mon 08:04 · credits 195.62`. Times are the viewer's time zone, 24-hour, relative within a day, then weekday

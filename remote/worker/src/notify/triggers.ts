@@ -8,8 +8,9 @@
 // It therefore works on sets, never per notification: one batch of 4 statements claims what is owed and
 // reserves its daily slots, and at most 1 statement afterwards records what was not sent, so a push costs
 // at most NOTIFY_QUERIES_PER_PUSH more. A claim marks questions `sent` before the send, so the final write
-// must not be cut off by the limit: the notifier claims only when the invocation still has all
-// NOTIFY_QUERIES_PER_PUSH queries left (see queries.ts), and otherwise leaves everything owed. Whatever
+// must not be cut off by the limit: a push keeps NOTIFY_QUERIES_PER_PUSH in hand for the notifier (its
+// maxQueries), and the notifier still claims only when the invocation has all of them left (see
+// queries.ts), and otherwise leaves everything owed. Whatever
 // is still owed is claimed by the next accepted push, not only what that push saw first. The claim
 // batch is one transaction, so if it fails nonetheless nothing is claimed.
 import type { OnPushAccepted } from "../machine/push.ts";
@@ -60,15 +61,18 @@ type UnsentState = "suppressed" | "failed";
 
 /** The push hook: notifications run after the response, inside waitUntil, so a slow send never delays a push. */
 export function notifyOnAccepted(notifierFor: (ctx: HandlerContext) => Notifier): OnPushAccepted {
-  return async (ctx) => {
-    const notifier = notifierFor(ctx);
-    ctx.waitUntil(
-      notifyOwed(ctx, notifier).catch((error: unknown) => {
-        // Only D1 can fail here (sendAlert handles a failed send), and its messages quote no address.
-        const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        console.log(JSON.stringify({ notify: "error", detail }));
-      }),
-    );
+  return {
+    maxQueries: NOTIFY_QUERIES_PER_PUSH,
+    run: async (ctx) => {
+      const notifier = notifierFor(ctx);
+      ctx.waitUntil(
+        notifyOwed(ctx, notifier).catch((error: unknown) => {
+          // Only D1 can fail here (sendAlert handles a failed send), and its messages quote no address.
+          const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+          console.log(JSON.stringify({ notify: "error", detail }));
+        }),
+      );
+    },
   };
 }
 

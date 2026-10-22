@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { DisabledNotifier, EmailNotifier, notifierFor } from "../src/notify/notifier.ts";
-import { DAILY_EMAIL_CAP } from "../src/notify/triggers.ts";
-import { QUERIES_PER_INVOCATION } from "../src/queries.ts";
+import { DAILY_EMAIL_CAP, NOTIFY_QUERIES_PER_PUSH, notifyOnAccepted } from "../src/notify/triggers.ts";
+import { countingDb, QUERIES_PER_INVOCATION, QueryCounter } from "../src/queries.ts";
 import { ORIGIN } from "./support/access.ts";
-import { KEY, question, RecordingNotifier, snapshot, trainsApp, type Json, type TrainsApp } from "./support/trains.ts";
+import { budgeted, QueryBudget } from "./support/budget.ts";
+import { iso, KEY, question, RecordingNotifier, snapshot, START, trainsApp, type Json, type TrainsApp } from "./support/trains.ts";
 
 const email = (line: string) => ({ subject: line, text: `${line}\n${ORIGIN}\n` });
 const NEEDS_YOU = email("Work Trains: example-app needs you");
@@ -166,71 +167,92 @@ test("the notifier's D1 queries do not grow with the number of notifications a p
   assert.equal((await pushCost(DAILY_EMAIL_CAP)) - (await pushCost(1)), DAILY_EMAIL_CAP - 1);
 });
 
-test("what a push leaves owed under the query limit is claimed by later pushes, until none is pending", async (t) => {
+test("a push too big for one invocation still leaves the notifier its queries, so what lands is claimed at once", async (t) => {
   const logged: string[] = [];
   t.mock.method(console, "log", (line: string) => logged.push(line));
   const { app, notifier, pushLater } = await primedApp(undefined, QUERIES_PER_INVOCATION);
-  const big = [
+  const reply = await pushLater([
     snapshot({ key: "a".repeat(32), questions: questions("a", 20) }),
     snapshot({ key: "b".repeat(32), questions: questions("b", 20) }),
     snapshot({ key: "c".repeat(32), questions: questions("c", 1) }),
-  ];
-  // The push's own writes leave the notifier no room in this invocation, so it claims nothing.
-  assert.equal((await pushLater(big)).status, 200);
-  assert.deepEqual(countByNotifyState(app), { pending: 41 });
-  assert.deepEqual(JSON.parse(logged[0]), { notify: "deferred", queries_left: 1 });
-
-  const nudge = (reason: string) =>
-    pushLater([snapshot({ key: "c".repeat(32), state_reason: reason, questions: questions("c", 1) })]);
-  for (let push = 1; countByNotifyState(app).pending !== undefined; push++) {
-    assert.ok(push <= 3, "every owed question reaches a terminal state within three more pushes");
-    assert.equal((await nudge(`push ${push}`)).status, 200);
-  }
-  assert.equal(notifier.sent.length, DAILY_EMAIL_CAP);
-  assert.deepEqual(countByNotifyState(app), { sent: DAILY_EMAIL_CAP, suppressed: 41 - DAILY_EMAIL_CAP });
+  ]);
+  assert.deepEqual(reply.body!.projects.map((project: Json) => project.result), ["accepted", "deferred", "accepted"]);
+  assert.equal(notifier.sent.length, DAILY_EMAIL_CAP, "a-* and c-0 landed, and the notifier ran in the same push");
+  assert.deepEqual(countByNotifyState(app), { pending: 1, sent: DAILY_EMAIL_CAP });
+  assert.ok(!logged.some((line) => JSON.parse(line).notify === "deferred"));
   assert.ok(app.budget.peak <= QUERIES_PER_INVOCATION);
 });
 
-// After priming, three new projects holding 38 questions cost the push 46 queries: room for the claim
-// batch (4) but not for the write after it, which records what was not sent.
-const pushLeavingFourQueries = (pushLater: (projects: Json[]) => Promise<unknown>) =>
-  pushLater([
-    snapshot({ key: "a".repeat(32), questions: questions("a", 20) }),
-    snapshot({ key: "b".repeat(32), questions: questions("b", 17) }),
-    snapshot({ key: "c".repeat(32), questions: questions("c", 1) }),
-  ]);
-const nudgeUntilNonePending = async (app: TrainsApp, pushLater: (projects: Json[]) => Promise<unknown>) => {
-  for (let push = 1; countByNotifyState(app).pending !== undefined; push++) {
-    assert.ok(push <= 3, "every owed question reaches a terminal state within three more pushes");
-    await pushLater([snapshot({ key: "c".repeat(32), state_reason: `push ${push}`, questions: questions("c", 1) })]);
+// A push keeps NOTIFY_QUERIES_PER_PUSH in hand for the notifier, so the notifier's own guard is reached
+// only past that reserve; these tests run the hook directly in an invocation that has spent the rest.
+const PRIMED_KEY = "f".repeat(32);
+
+/** Stores `count` open blocking questions owed a notification, as earlier pushes would have left them. */
+function owe(app: TrainsApp, prefix: string, count: number) {
+  const insert = app.db.sqlite.prepare(
+    `INSERT INTO questions (id, project_key, asked_at, asked_by, subject, body, recommended, blocking, first_seen_at)
+     VALUES (?, ?, ?, 'conductor', 'Question?', 'Context.', NULL, 1, ?)`,
+  );
+  for (let i = 0; i < count; i++) insert.run(`${prefix}-${i}`, PRIMED_KEY, iso(i), iso(i));
+}
+
+/** Runs the notifier as the push hook would, in an invocation with only `queriesLeft` of its queries left. */
+async function notifyWithQueriesLeft(app: TrainsApp, queriesLeft: number): Promise<void> {
+  const spent = QUERIES_PER_INVOCATION - queriesLeft;
+  const queries = new QueryCounter();
+  queries.count(spent);
+  const budget = new QueryBudget(QUERIES_PER_INVOCATION);
+  budget.take(spent);
+  const tasks: Promise<unknown>[] = [];
+  const ctx = {
+    db: countingDb(budgeted(app.db, budget) as never, queries),
+    queries,
+    now: START,
+    cfg: { publicOrigin: ORIGIN },
+    waitUntil: (task: Promise<unknown>) => void tasks.push(task),
+  };
+  await notifyOnAccepted(() => app.notifier).run(ctx as never, []);
+  await Promise.all(tasks);
+}
+
+const notifyUntilNonePending = async (app: TrainsApp) => {
+  for (let run = 1; countByNotifyState(app).pending !== undefined; run++) {
+    assert.ok(run <= 2, "a run claims up to a day's cap, so 38 owed questions take two");
+    await notifyWithQueriesLeft(app, NOTIFY_QUERIES_PER_PUSH);
   }
 };
 
 const CLAIMS_ONLY_WITH_ROOM = "the notifier claims nothing unless its final write fits too";
 
 test(`${CLAIMS_ONLY_WITH_ROOM}, so failed sends never stay marked sent`, async (t) => {
-  t.mock.method(console, "log", () => {});
-  const { app, notifier, pushLater } = await primedApp(undefined, QUERIES_PER_INVOCATION);
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: string) => logged.push(line));
+  const { app, notifier } = await primedApp(undefined, QUERIES_PER_INVOCATION);
+  owe(app, "q", 38);
   notifier.failing = true;
-  await pushLeavingFourQueries(pushLater);
-  assert.equal(app.budget.used, QUERIES_PER_INVOCATION - 4, "the push left exactly the claim batch's 4 queries");
-  assert.deepEqual(countByNotifyState(app), { pending: 38 }, "deferred: a claim here would strand its final write");
 
-  await nudgeUntilNonePending(app, pushLater);
+  await notifyWithQueriesLeft(app, NOTIFY_QUERIES_PER_PUSH - 1);
+  assert.deepEqual(countByNotifyState(app), { pending: 38 }, "deferred: a claim here would strand its final write");
+  assert.deepEqual(JSON.parse(logged[0]), { notify: "deferred", queries_left: NOTIFY_QUERIES_PER_PUSH - 1 });
+
+  await notifyUntilNonePending(app);
   assert.deepEqual(countByNotifyState(app), { failed: DAILY_EMAIL_CAP, suppressed: 38 - DAILY_EMAIL_CAP });
-  assert.ok(app.budget.peak <= QUERIES_PER_INVOCATION);
+  assert.ok(!logged.some((line) => JSON.parse(line).notify === "error"), "no final write was cut off");
 });
 
 test(`${CLAIMS_ONLY_WITH_ROOM}, so capped questions end suppressed`, async (t) => {
-  t.mock.method(console, "log", () => {});
-  const { app, notifier, pushLater } = await primedApp(undefined, QUERIES_PER_INVOCATION);
-  await pushLater([snapshot({ key: "e".repeat(32), questions: questions("e", DAILY_EMAIL_CAP) })]);
+  const logged: string[] = [];
+  t.mock.method(console, "log", (line: string) => logged.push(line));
+  const { app, notifier } = await primedApp(undefined, QUERIES_PER_INVOCATION);
+  owe(app, "e", DAILY_EMAIL_CAP);
+  await notifyWithQueriesLeft(app, NOTIFY_QUERIES_PER_PUSH);
   assert.equal(notifier.sent.length, DAILY_EMAIL_CAP, "today's cap is spent");
-  await pushLeavingFourQueries(pushLater);
-  assert.equal(countByNotifyState(app).pending, 38);
+  owe(app, "q", 38);
 
-  await nudgeUntilNonePending(app, pushLater);
+  await notifyWithQueriesLeft(app, NOTIFY_QUERIES_PER_PUSH - 1);
+  assert.equal(countByNotifyState(app).pending, 38);
+  await notifyUntilNonePending(app);
   assert.equal(notifier.sent.length, DAILY_EMAIL_CAP);
   assert.deepEqual(countByNotifyState(app), { sent: DAILY_EMAIL_CAP, suppressed: 38 }, "only e-* was sent");
-  assert.ok(app.budget.peak <= QUERIES_PER_INVOCATION);
+  assert.ok(!logged.some((line) => JSON.parse(line).notify === "error"), "no final write was cut off");
 });

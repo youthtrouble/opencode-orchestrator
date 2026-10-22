@@ -3,10 +3,11 @@
 //
 // D1 cost: every statement counts against the per-invocation query limit, batched or not. A push costs
 // 2 queries (3 on a machine's first push), plus 1 per project (its read), plus, per accepted project,
-// 2 more (1 when new) and one statement per question written. The Workers Free plan allows 50
-// queries per invocation, so a push near the schema's 50-project cap needs the Workers Paid plan (1000).
-// A push that accepts anything then runs its OnPushAccepted hook in the same invocation (the notifier
-// adds at most NOTIFY_QUERIES_PER_PUSH, and only when that many are left; see notify/triggers.ts).
+// 2 more (1 when new) and one statement per question written. The Worker assumes the Free plan's 50
+// queries per invocation (queries.ts), well short of a 50-project push with questions, so a push takes
+// the projects that fit and answers `deferred` (retry in 1 s) for the rest, which the Mac sends again
+// at its next poll. It keeps in hand the queries that must run after its projects: the first-push
+// stamp's and the OnPushAccepted hook's (the notifier's NOTIFY_QUERIES_PER_PUSH; see reservedQueries).
 import { readJsonBody } from "../body.ts";
 import { jsonResponse } from "../http.ts";
 import { parseBody } from "../protocol.ts";
@@ -32,7 +33,11 @@ export interface AcceptedProject {
  * Once per push rather than per project, so its D1 cost does not grow with the push. WT9's notifier
  * implements it.
  */
-export type OnPushAccepted = (ctx: HandlerContext, accepted: AcceptedProject[]) => Promise<void>;
+export interface OnPushAccepted {
+  /** The most D1 queries `run` issues; a push keeps that many for it (see reservedQueries). */
+  maxQueries: number;
+  run: (ctx: HandlerContext, accepted: AcceptedProject[]) => Promise<void>;
+}
 
 interface PushRun {
   ctx: HandlerContext;
@@ -40,6 +45,11 @@ interface PushRun {
   isFirstPush: boolean;
   /** Unique to this request; the project rows it writes carry it (see THIS_PUSH_WROTE_PROJECT). */
   id: string;
+  /** The most queries the OnPushAccepted hook issues. */
+  hookQueries: number;
+  accepted: AcceptedProject[];
+  /** How many projects this push deferred because their queries did not fit. */
+  deferredForBudget: number;
 }
 
 interface StoredProject {
@@ -73,19 +83,32 @@ const ACCEPTED: Decision = { result: "accepted", retryAfterSeconds: null };
 // Another push for the same key committed between this push's read and its write. The winner was
 // just received, so the debounce window is the right wait.
 const LOST_RACE: Decision = { result: "deferred", retryAfterSeconds: DEBOUNCE_SECONDS, logReason: "concurrent_push" };
+// The query limit is per invocation, so the next push has a whole budget: the Mac's next poll is soon enough.
+const OVER_QUERY_BUDGET: Decision = { result: "deferred", retryAfterSeconds: 1 };
+
+const FIRST_PUSH_STAMP_QUERIES = 1;
 
 export function pushHandler(onPushAccepted: OnPushAccepted) {
   return async (ctx: HandlerContext): Promise<Response> => {
     const push = parseBody<PushRequest>("PushRequest", await readJsonBody(ctx.request));
     const isFirstPush = await recordMachinePush(ctx, push);
-    const run: PushRun = { ctx, push, isFirstPush, id: crypto.randomUUID() };
+    const run: PushRun = {
+      ctx,
+      push,
+      isFirstPush,
+      id: crypto.randomUUID(),
+      hookQueries: onPushAccepted.maxQueries,
+      accepted: [],
+      deferredForBudget: 0,
+    };
     const projects: ProjectPushResult[] = [];
-    const accepted: AcceptedProject[] = [];
-    for (const project of push.projects) projects.push(await pushProject(run, project, accepted));
-    // Stamped only once every project has landed: a push that fails part-way is retried as a first
-    // push, so the rest of its backlog is still suppressed (plan D8).
-    if (isFirstPush) await stampFirstPush(ctx, push.machine.id);
-    if (accepted.length > 0) await onPushAccepted(ctx, accepted);
+    for (const project of push.projects) projects.push(await pushProject(run, project));
+    if (run.deferredForBudget > 0) console.log(JSON.stringify({ push: "query_budget", deferred: run.deferredForBudget }));
+    // Stamped only once every project has landed: a push that fails part-way, or defers projects for
+    // the query budget, is followed by another first push, so the rest of its backlog is still
+    // suppressed (plan D8).
+    if (isFirstPush && run.deferredForBudget === 0) await stampFirstPush(ctx, push.machine.id);
+    if (run.accepted.length > 0) await onPushAccepted.run(ctx, run.accepted);
     return jsonResponse(200, { v: 1, server_time: ctx.now.toISOString(), projects });
   };
 }
@@ -115,31 +138,35 @@ async function stampFirstPush({ db, now }: HandlerContext, machineId: string): P
     .run();
 }
 
-async function pushProject(
-  run: PushRun,
-  project: ProjectSnapshot,
-  accepted: AcceptedProject[],
-): Promise<ProjectPushResult> {
+async function pushProject(run: PushRun, project: ProjectSnapshot): Promise<ProjectPushResult> {
+  const outcome = await landProject(run, project);
+  if (outcome === OVER_QUERY_BUDGET) run.deferredForBudget++;
+  if (outcome.logReason) console.log(JSON.stringify({ push: outcome.logReason, key: project.key }));
+  return { key: project.key, result: outcome.result, retry_after_seconds: outcome.retryAfterSeconds };
+}
+
+async function landProject(run: PushRun, project: ProjectSnapshot): Promise<Decision> {
+  if (!canSpend(run, 1)) return OVER_QUERY_BUDGET;
   const stored = await run.ctx.db
     .prepare("SELECT machine_id, state, state_since, snapshot_hash, received_at FROM projects WHERE key = ?")
     .bind(project.key)
     .first<StoredProject>();
   const decision = decide(stored, run.push.machine.id, project.snapshot_hash, run.ctx.now);
-  const outcome = decision.result === "accepted" ? await acceptProject(run, project, stored, accepted) : decision;
-  if (outcome.logReason) console.log(JSON.stringify({ push: outcome.logReason, key: project.key }));
-  return { key: project.key, result: outcome.result, retry_after_seconds: outcome.retryAfterSeconds };
+  return decision.result === "accepted" ? acceptProject(run, project, stored) : decision;
 }
 
-async function acceptProject(
-  run: PushRun,
-  project: ProjectSnapshot,
-  stored: StoredProject | null,
-  accepted: AcceptedProject[],
-): Promise<Decision> {
-  const newQuestions = await writeProject(run, project, stored);
-  if (newQuestions === null) return LOST_RACE;
-  accepted.push({ project, newQuestions, previousState: stored?.state ?? null });
-  return ACCEPTED;
+/** Whether `queries` more fit in this invocation and still leave the queries that run after the projects. */
+function canSpend(run: PushRun, queries: number): boolean {
+  return run.ctx.queries.remaining() - reservedQueries(run) >= queries;
+}
+
+/**
+ * The first-push stamp's queries, and the hook's once a project is accepted. The first project to land
+ * may use the hook's: any one project fits a push that way, so none is deferred for good, and the
+ * notifier, finding too few left, leaves what is owed to the next push.
+ */
+function reservedQueries(run: PushRun): number {
+  return (run.isFirstPush ? FIRST_PUSH_STAMP_QUERIES : 0) + (run.accepted.length > 0 ? run.hookQueries : 0);
 }
 
 function decide(stored: StoredProject | null, machineId: string, snapshotHash: string, now: Date): Decision {
@@ -158,26 +185,30 @@ function decide(stored: StoredProject | null, machineId: string, snapshotHash: s
 }
 
 /**
- * Writes the project and its questions in one batch (a D1 transaction), project first. The project
- * write applies only if the row is as this push read it, and each question write only if the project
- * row carries this push's id, so when a concurrent push for the key commits first this batch
- * changes nothing. Returns the questions new to the project, or null when that race was lost.
+ * Writes the project and its questions in one batch (a D1 transaction), project first, when the
+ * batch fits the query budget. The project write applies only if the row is as this push read it,
+ * and each question write only if the project row carries this push's id, so when a concurrent push
+ * for the key commits first this batch changes nothing.
  */
-async function writeProject(
+async function acceptProject(
   run: PushRun,
   project: ProjectSnapshot,
   stored: StoredProject | null,
-): Promise<Question[] | null> {
-  const { db } = run.ctx;
-  const storedQuestions = stored === null ? [] : await loadQuestions(db, project.key);
+): Promise<Decision> {
+  if (stored !== null && !canSpend(run, 1)) return OVER_QUERY_BUDGET;
+  const storedQuestions = stored === null ? [] : await loadQuestions(run.ctx.db, project.key);
   const changes = diffQuestions(storedQuestions, project.questions);
-  const [projectWrite] = await db.batch([
+  const writes = [
     stored === null ? insertProject(run, project) : updateProject(run, project, stored),
     ...changes.added.map((question) => insertQuestion(run, project, question)),
     ...changes.revised.map((question) => reviseQuestion(run, project, question)),
     ...changes.closedIds.map((id) => closeQuestion(run, project, id)),
-  ]);
-  return projectWrite.meta.changes === 1 ? changes.added : null;
+  ];
+  if (!canSpend(run, writes.length)) return OVER_QUERY_BUDGET;
+  const [projectWrite] = await run.ctx.db.batch(writes);
+  if (projectWrite.meta.changes !== 1) return LOST_RACE;
+  run.accepted.push({ project, newQuestions: changes.added, previousState: stored?.state ?? null });
+  return ACCEPTED;
 }
 
 // True inside the batch once this push's own project write has applied. Keyed on the push's own id,
