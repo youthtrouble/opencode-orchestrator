@@ -417,12 +417,14 @@ reads are under 0.1% for 10 projects. Notification emails are capped at 20 a day
 
 **Set it up.** You need a Cloudflare account with your domain on it, Node 26 (`npm ci` in `remote/worker` installs
 the pinned `wrangler`), and an `orch` that has `orch remote`
-(a release after v0.5.0, or built from `main`). Then, in order, following [remote/README.md](remote/README.md):
+(a release after v0.5.0, or built from `main`). One deployment serves one Mac: a second Mac on it can take the
+first Mac's answers, reject them as an unknown project, and so lose them
+([Before you start](remote/README.md#before-you-start)). Then, in order, following [remote/README.md](remote/README.md):
 
 1. Create the Access application, one-time PIN login and a service token; store the token with
    `orch remote service-token set`.
 2. Create the D1 database, deploy the Worker, run `orch remote token rotate`, and set the Worker secrets with
-   `wrangler secret put`.
+   one `wrangler secret bulk`.
 3. `orch remote init --url https://trains.example.com` (projects are found under `~/Developer` unless you pass
    `--root`).
 4. Install the LaunchAgent that `orch remote launchd` prints.

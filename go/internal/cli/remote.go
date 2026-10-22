@@ -472,7 +472,7 @@ func remoteTokenRotate(args []string, stdio Stdio) error {
 		return err
 	}
 	fmt.Fprintf(stdio.Out, "%x\n", sha256.Sum256([]byte(token)))
-	fmt.Fprintf(stdio.Out, "%s   # paste the hash above\n", workerSecretCommand)
+	fmt.Fprintf(stdio.Out, "%s   # paste the hash above; this deploys the Worker at once\n", workerSecretCommand)
 	fmt.Fprintln(stdio.Out, "This Mac sends the new token from now on; the Worker accepts it only once MACHINE_TOKEN_SHA256 holds the hash above, so replace it before the next push or pushes get 403.")
 	return nil
 }

@@ -204,3 +204,5 @@ Report commands and results truthfully. Never fabricate output, benchmarks, or A
 external claims against official docs or a live response. No deployments, paid resources, pushes to
 shared branches, credential changes, or destructive commands without explicit human approval.
 Secrets never enter prompts, logs, reports, or the mailbox.
+Owner scripts never chain `wrangler secret put` on a live Worker (each put deploys at once); several
+secrets go in one `wrangler secret bulk`.

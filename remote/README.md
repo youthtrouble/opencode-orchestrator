@@ -22,6 +22,9 @@ your domain, team name, AUD tag, account or database id, email address or any to
   `package-lock.json`); run it as `npx wrangler` there, or put `remote/worker/node_modules/.bin` on your PATH.
 - An `orch` that has `orch remote` (`orch remote --help` prints its usage): a release after v0.5.0, or one built from
   `main`.
+- One deployment serves one Mac. A second Mac on the same deployment can pull the first Mac's answers and actions
+  (a pull has no machine filter), reject each as an unknown project, and settle that rejection with its ack, so the
+  first Mac never receives it: the answer is lost. Use one deployment per Mac.
 - Setup order: Access (1) -> D1 and deploy (2) -> machine token and Worker secrets (2) -> `orch remote init` (3) ->
   LaunchAgent (4) -> first sync (5).
 
@@ -76,14 +79,21 @@ git status --porcelain              # must NOT list wrangler.deploy.jsonc
 wrangler d1 migrations apply work-trains --remote -c wrangler.deploy.jsonc
 orch remote token rotate            # stores the machine token in your Keychain; prints only its SHA-256
 wrangler deploy -c wrangler.deploy.jsonc   # 503 on every route until the secrets below exist
-# Each command prompts for its value; paste it at the prompt, never as an argument:
-wrangler secret put ACCESS_TEAM_DOMAIN       -c wrangler.deploy.jsonc   # https://<team>.cloudflareaccess.com
-wrangler secret put ACCESS_AUD               -c wrangler.deploy.jsonc   # the AUD tag
-wrangler secret put OWNER_EMAIL              -c wrangler.deploy.jsonc   # the policy's emails, comma-separated
-wrangler secret put ACCESS_SERVICE_CLIENT_ID -c wrangler.deploy.jsonc   # the service token's Client ID
-wrangler secret put PUBLIC_ORIGIN            -c wrangler.deploy.jsonc   # https://trains.example.com, no trailing slash
-wrangler secret put MACHINE_TOKEN_SHA256     -c wrangler.deploy.jsonc   # the hash token rotate printed
+(umask 077 && touch ~/work-trains-secrets.env)   # private to you, and outside the repository
+# In an editor, fill ~/work-trains-secrets.env with one KEY=value line per secret (PUBLIC_ORIGIN has no
+# trailing slash):
+#   ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com
+#   ACCESS_AUD=<the AUD tag>
+#   OWNER_EMAIL=<the policy's emails, comma-separated>
+#   ACCESS_SERVICE_CLIENT_ID=<the service token's Client ID>
+#   PUBLIC_ORIGIN=https://trains.example.com
+#   MACHINE_TOKEN_SHA256=<the hash token rotate printed>
+wrangler secret bulk ~/work-trains-secrets.env -c wrangler.deploy.jsonc   # all six in one request
+rm ~/work-trains-secrets.env                     # never commit it or keep it
 ```
+
+`wrangler secret bulk` sets every secret in the file in one request, so the Worker goes from 503 to fully configured
+in one step. It also reads the same lines from stdin when you give it no file.
 
 The deploy config keeps `workers_dev: false` and `preview_urls: false`, so the Worker is reachable only on your
 hostname, behind Access. `UNDO_SECONDS` (default 10) is how long the page offers Undo before the Mac may pull an
@@ -94,11 +104,16 @@ text; at most 20 a day). If your domain already receives mail elsewhere, enable 
 (**your domain > Email > Email Routing > Settings > Subdomains**, for example `notify.example.com`); if the dashboard
 wants to change your apex MX records, stop and skip notifications. Add your address under **Destination addresses**
 and click the verification link
-(<https://developers.cloudflare.com/email-routing/setup/email-routing-addresses/>). Then:
+(<https://developers.cloudflare.com/email-routing/setup/email-routing-addresses/>). Then set both secrets in one
+`wrangler secret bulk`, the same way:
 
 ```sh
-wrangler secret put NOTIFY_FROM -c wrangler.deploy.jsonc   # a sender address on the Email Routing subdomain
-wrangler secret put NOTIFY_TO   -c wrangler.deploy.jsonc   # your verified address
+(umask 077 && touch ~/work-trains-secrets.env)
+# In an editor:
+#   NOTIFY_FROM=<a sender address on the Email Routing subdomain>
+#   NOTIFY_TO=<your verified address>
+wrangler secret bulk ~/work-trains-secrets.env -c wrangler.deploy.jsonc
+rm ~/work-trains-secrets.env
 ```
 
 When GitHub Actions deploys (below), also set the environment variable `WORK_TRAINS_SEND_EMAIL` to `true`, or the
@@ -143,7 +158,7 @@ D1 records applied migrations by name, so an edit would never run. Add a new num
 does not undo migrations, so each one must keep the previous Worker version working (add tables and columns;
 do not rename or drop them in the same release).
 
-**What CI does not manage.** Worker secrets (`wrangler secret put`), the Access application and policies, the
+**What CI does not manage.** Worker secrets (`wrangler secret bulk`, section 2), the Access application and policies, the
 service token, DNS, and Email Routing. They stay as you set them in Cloudflare, and changing them is still done by
 hand as in steps 1 and 2. The custom domain is the exception: the deploy keeps it the way the hostname variable
 says (see [Moving to another hostname](#moving-to-another-hostname)).
@@ -258,13 +273,17 @@ resume, hide) from any other origin is refused, and notification emails link to 
    old URL should keep answering. If [GitHub Actions deploys](#deploy-from-github-actions) for you, set the
    environment's `WORK_TRAINS_HOSTNAME` (and `WORK_TRAINS_WORKERS_DEV`) instead, and in step 4 set the secret,
    then run the workflow rather than `wrangler deploy`.
-4. **Worker**: point it at the new origin and deploy:
+4. **Worker**: point it at the new origin, then apply step 3's config:
 
    ```sh
    cd remote/worker
-   wrangler secret put PUBLIC_ORIGIN -c wrangler.deploy.jsonc   # https://trains.example.com
+   wrangler secret put PUBLIC_ORIGIN -c wrangler.deploy.jsonc   # https://trains.example.com; deploys at once
    wrangler deploy -c wrangler.deploy.jsonc
    ```
+
+   The `secret put` is the cut-over: it deploys the Worker with the new origin by itself. The `wrangler deploy` sets
+   no secret; it is needed only because `routes` and `workers_dev` in the config take effect at a deploy, and it is
+   the one other change. Never add a second `secret put` here.
 
 5. **Mac**: point `orch remote` at it and restart the LaunchAgent, which reads the config only at start:
 
@@ -286,8 +305,9 @@ created under another Cloudflare account. The Worker answers 403 `wrong_issuer` 
 (`expected_issuer`; a team domain is public, the AUD tag and emails are never shown), and `orch remote status` shows
 `HTTP 403 wrong_issuer (the Worker expects Access team https://<team>.cloudflareaccess.com)` once the Mac hits it.
 Fix it on one side: protect the hostname with the application of the team the Worker expects, or set
-`ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` to the team and AUD tag of the application that does protect it (and use a
-service token of that same team for the Mac). Then `wrangler deploy` is not needed: secrets apply at once.
+`ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` to the team and AUD tag of the application that does protect it, both in one
+`wrangler secret bulk` (as in [section 2](#2-d1-deploy-and-worker-secrets)), and use a service token of that same team
+for the Mac. Then `wrangler deploy` is not needed: secrets apply at once.
 In the Worker's logs these refusals are lines with `"auth":"jwt_wrong_issuer"`. They mean this misconfiguration,
 not an attack: Access in front of the hostname issues the token, so a token from another team means that team's
 application protects the hostname. Only an `iss` shaped like a team domain gets `wrong_issuer`; any other bad
@@ -323,6 +343,9 @@ resumes applied from the page. Field-level detail is in [go/README.md](../go/REA
 **Protocol**: [protocol/README.md](protocol/README.md).
 
 **Worker secrets**: listed at the top of [`worker/wrangler.deploy.example.jsonc`](worker/wrangler.deploy.example.jsonc).
+Each `wrangler secret put` deploys at once; never chain them on a live Worker. Use `wrangler secret bulk` for several
+(wrangler 4.118.0: one request for up to 100 secrets, from a JSON or `KEY=VALUE` file or stdin;
+<https://developers.cloudflare.com/workers/wrangler/commands/workers/>).
 
 ## Tests
 

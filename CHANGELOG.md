@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- remote: the setup docs say one Work Trains deployment serves one Mac (SI-1). A pull has no machine filter, so a
+  second Mac on the same deployment can pull the first Mac's answers and actions, reject them as an unknown project
+  and settle that rejection with its ack, and the answer is lost. Use one deployment per Mac. See `remote/README.md`,
+  "Before you start". Docs only.
+- remote: Worker secrets are set with one `wrangler secret bulk` instead of chained `wrangler secret put`s (SI-2).
+  Each `secret put` deploys the Worker at once, so six of them made six deployments, each live with a partial set.
+  Section 2 now fills a private file (`umask 077`, outside the repository, deleted after) and sends it in one
+  request; the notification and `wrong_issuer` fixes set their two secrets the same way. Moving to another hostname
+  stays one `secret put PUBLIC_ORIGIN` plus the `wrangler deploy` its routes need. `orch remote token rotate` notes
+  that its `secret put` line deploys at once. See `remote/README.md`, "Reference".
+
 - remote: a Work Trains push now fits the Workers Free plan's 50 D1 queries per invocation (SI-3). Before, a push
   that needed more failed with 500 part-way: a machine's first push of 24 question-less projects needed 51, and with 50
   projects the Mac's retries never got through at all (re-reading the projects that had landed used the whole

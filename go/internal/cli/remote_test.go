@@ -112,7 +112,7 @@ func TestRemoteTokenRotateStoresTheTokenAndPrintsOnlyItsHash(t *testing.T) {
 	if lines[0] != hex.EncodeToString(sum[:]) {
 		t.Errorf("first line %q, want sha256 of the stored token", lines[0])
 	}
-	if lines[1] != "cd remote/worker && wrangler secret put MACHINE_TOKEN_SHA256 -c wrangler.deploy.jsonc   # paste the hash above" {
+	if lines[1] != "cd remote/worker && wrangler secret put MACHINE_TOKEN_SHA256 -c wrangler.deploy.jsonc   # paste the hash above; this deploys the Worker at once" {
 		t.Errorf("second line %q", lines[1])
 	}
 	if !strings.Contains(lines[2], "pushes get 403") {
