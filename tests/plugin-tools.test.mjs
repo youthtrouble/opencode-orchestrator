@@ -26,6 +26,24 @@ async function loadGoInto(t, sandbox, answers, env = {}) {
 /** The calls made to `orch <first>...` since the log was `from` entries long. */
 const orchCalls = (sandbox, first, from = 0) => calls(sandbox).slice(from).filter((c) => c.self === "path" && c.argv[0] === first);
 
+// Virtualize plugin scheduling, not child-process I/O. Unload before restoring the clock,
+// including on assertion failure, so no trailing callback can run on restored wall time.
+function usePluginClock(t, plugin) {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  t.after(async () => {
+    try { await plugin.dispose(); } finally { t.mock.timers.reset(); }
+  });
+  return t.mock.timers;
+}
+
+test("plugin warm-up waits for the fake process to exit", { skip }, async (t) => {
+  const json = JSON.stringify(routingFixture("green"));
+  const { sandbox } = await loadGo(t, { "routing --json": { stdoutHex: [Buffer.from(json.slice(0, 10)).toString("hex"), Buffer.from(json.slice(10)).toString("hex")] } });
+  const warmUp = orchCalls(sandbox, "routing").find((c) => c.argv.join(" ") === "routing --json");
+  assert.ok(warmUp);
+  assert.throws(() => process.kill(warmUp.pid, 0), { code: "ESRCH" });
+});
+
 describe("mailbox_post", { skip }, () => {
   test("orch mailbox post with the body on stdin and --json last", async (t) => {
     const message = { id: "m-1", at: "2026-10-19T00:00:00.000Z", from: "coder", to: "human", kind: "question", subject: "hi", body: "line 1\n--not-a-flag", refs: ["a.md", "b.md"], thread: "t-1", recommended: "yes", blocking: false };
@@ -576,7 +594,8 @@ describe("process runner", { skip }, () => {
     assert.equal(stderr, "fake orch: hang ceiling reached\n");
   });
 
-  // The deadlines are scaled down 20 times; the messages carry the configured values.
+  // Start the deadline clock only after warm-up and wait for fixture readiness before
+  // advancing it. Scaled wall-time deadlines could kill warm-up before the fake even logged.
   const deadlines = [
     ["orch routing", "routing --json --refresh", (p) => p.callTool("usage_status", { refresh: true }), 90],
     ["orch budget gate", "budget gate --vendor openai", (p) => p.callTool("codex_review", {}), 90],
@@ -584,9 +603,13 @@ describe("process runner", { skip }, () => {
   ];
   for (const [name, key, drive, seconds] of deadlines) {
     test(`${name} times out after ${seconds}s`, async (t) => {
-      const { sandbox, plugin } = await loadGoWith(t, { [key]: { hang: true } }, { ORCH_PLUGIN_ORCH_TIMEOUT_SCALE: "0.05" });
+      const { sandbox, plugin } = await loadGoWith(t, { [key]: { hang: true } });
+      const clock = usePluginClock(t, plugin);
       const subcommand = key.split(" --")[0];
-      await assert.rejects(drive(plugin), { name: "OrchCommandError", message: `orch ${subcommand} timed out after ${seconds}s` });
+      const result = assert.rejects(drive(plugin), { name: "OrchCommandError", message: `orch ${subcommand} timed out after ${seconds}s` });
+      assert.ok(await waitFor(() => calls(sandbox).some((c) => c.argv.join(" ").startsWith(key))));
+      clock.tick(seconds * 1000);
+      await result;
       const hung = calls(sandbox).find((c) => c.argv.join(" ").startsWith(key));
       assert.equal(isAlive(hung.pid), false);
     });
@@ -601,18 +624,29 @@ describe("conductor session heartbeat", { skip }, () => {
   const beats = (sandbox) => orchCalls(sandbox, "session").map((c) => `${c.argv[5]} ${c.argv[7]}`);
   const interval = (ms) => ({ ORCH_PLUGIN_BEAT_INTERVAL_MS: String(ms) });
   const idle = (sessionID) => ({ type: "session.idle", data: { sessionID } });
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const OK = { "session beat": { stdout: "" } };
+  const deliverIdle = async (plugin, sessionID) => {
+    plugin.emit(idle(sessionID));
+    await new Promise(setImmediate);
+  };
+  const assertBeatsRemain = async (sandbox, expected, message) => {
+    // The plugin clock stays frozen throughout this real I/O observation window.
+    // Without it, a wrongly spawned child could log only after a negative assertion.
+    assert.equal(await waitFor(() => beats(sandbox).length > expected.length, 2000), false, message);
+    assert.deepEqual(beats(sandbox), expected, message);
+  };
 
   // R1: opencode 2.0.32's event.subscribe returns an async iterable; a callback is never called.
   test("idle arrives through the event.subscribe async iterable, which unloading ends", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     assert.equal(plugin.subscriptions.length, 1);
     assert.ok(plugin.subscriptions[0].options.signal instanceof AbortSignal);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
+    await deliverIdle(plugin, "ses_1");
+    clock.tick(50);
     assert.ok(await waitFor(() => beats(sandbox).length === 2));
     assert.deepEqual(orchCalls(sandbox, "session").map((c) => c.argv), [beatKey(sandbox, "ses_1", "working").split(" "), beatKey(sandbox, "ses_1", "waiting").split(" ")]);
     await plugin.dispose();
@@ -629,45 +663,54 @@ describe("conductor session heartbeat", { skip }, () => {
   // R2: state changes used to bypass the limiter, one spawn per transition.
   test("rapid working/waiting transitions write once per interval, the latest state last", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(1000));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
+    await deliverIdle(plugin, "ses_1");
     await plugin.context("conductor", "ses_1");
-    plugin.emit(idle("ses_1"));
-    await sleep(400);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"]);
-    assert.ok(await waitFor(() => beats(sandbox).length === 2, 3000));
-    await sleep(1200);
-    assert.deepEqual(beats(sandbox), ["ses_1 working", "ses_1 waiting"]);
+    await deliverIdle(plugin, "ses_1");
+    clock.tick(999);
+    await assertBeatsRemain(sandbox, ["ses_1 working"]);
+    clock.tick(1);
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
+    clock.tick(1200);
+    await assertBeatsRemain(sandbox, ["ses_1 working", "ses_1 waiting"]);
   });
 
   // R3: a slow working write used to race the idle write and could land last.
   test("a slow write finishes before the next beat starts", async (t) => {
     const { sandbox, plugin } = await loadGo(t, {}, interval(50));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
-    setAnswers(sandbox, { ...sandbox.answers, [beatKey(sandbox, "ses_1", "working")]: { stdoutHex: Array(6).fill("20") }, [beatKey(sandbox, "ses_1", "waiting")]: { stdout: "" } });
-    await plugin.context("conductor", "ses_1");
-    assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
-    await sleep(300);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"], "waiting waits for the working write in flight");
-    assert.ok(await waitFor(() => beats(sandbox).length === 2, 3000));
+    const release = path.join(sandbox.root, "release-working");
+    setAnswers(sandbox, { ...sandbox.answers, [beatKey(sandbox, "ses_1", "working")]: { waitForFile: release, stdout: "" }, [beatKey(sandbox, "ses_1", "waiting")]: { stdout: "" } });
+    try {
+      await plugin.context("conductor", "ses_1");
+      assert.ok(await waitFor(() => beats(sandbox).length === 1));
+      await deliverIdle(plugin, "ses_1");
+      clock.tick(1000);
+      await assertBeatsRemain(sandbox, ["ses_1 working"], "waiting waits for the working write in flight");
+    } finally {
+      fs.writeFileSync(release, "");
+    }
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
     assert.deepEqual(beats(sandbox), ["ses_1 working", "ses_1 waiting"]);
   });
 
   // R4: an idle from a session that no longer owns the door used to overwrite the active one.
   test("an idle from a superseded conductor session is ignored", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_a");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
     await plugin.context("conductor", "ses_b");
     assert.ok(await waitFor(() => beats(sandbox).length === 2));
-    plugin.emit(idle("ses_a"));
-    await sleep(300);
-    assert.deepEqual(beats(sandbox), ["ses_a working", "ses_b working"]);
-    plugin.emit(idle("ses_b"));
+    await deliverIdle(plugin, "ses_a");
+    clock.tick(300);
+    await assertBeatsRemain(sandbox, ["ses_a working", "ses_b working"]);
+    await deliverIdle(plugin, "ses_b");
     assert.ok(await waitFor(() => beats(sandbox).length === 3));
     assert.equal(beats(sandbox)[2], "ses_b waiting");
   });
@@ -686,21 +729,54 @@ describe("conductor session heartbeat", { skip }, () => {
     const replacement = await loadGoInto(t, sandbox, {}, interval(50));
     await replacement.plugin.context("conductor", "ses_new");
     assert.ok(await waitFor(() => readBeat(sandbox)?.session_id === "ses_new"));
-    await sleep(800);
+    await replacement.plugin.dispose();
     assert.equal(readBeat(sandbox).session_id, "ses_new");
   });
 
   test("a trailing beat pending at unload never starts", async (t) => {
-    const { sandbox, plugin } = await loadGo(t, OK, interval(300));
+    const beatInterval = 300;
+    const { sandbox, plugin } = await loadGo(t, OK, interval(beatInterval));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
-    await sleep(50);
-    await plugin.dispose();
-    await plugin.context("conductor", "ses_1");
-    await sleep(600);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"]);
+    const firstBeat = orchCalls(sandbox, "session")[0];
+    assert.ok(await waitFor(() => {
+      try { process.kill(firstBeat.pid, 0); return false; } catch (error) {
+        if (error.code === "ESRCH") return true;
+        throw error;
+      }
+    }));
+    await new Promise(setImmediate);
+
+    // Process exit alone need not mean its promise's finally has run. Observe the real
+    // scheduling boundary too: unload must cancel an armed timer, not just an in-flight write.
+    const scheduleTimeout = globalThis.setTimeout;
+    let trailingScheduled = false;
+    let trailingCallbackRan = false;
+    const timeoutSpy = t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+      if (delay !== beatInterval) return scheduleTimeout(callback, delay, ...args);
+      trailingScheduled = true;
+      return scheduleTimeout((...callbackArgs) => {
+        trailingCallbackRan = true;
+        callback(...callbackArgs);
+      }, delay, ...args);
+    });
+    try {
+      await deliverIdle(plugin, "ses_1");
+      assert.ok(await waitFor(() => trailingScheduled), "idle armed a trailing timer");
+      clock.tick(beatInterval - 1);
+      assert.equal(trailingCallbackRan, false, "the trailing timer is still pending at unload");
+      await plugin.dispose();
+      clock.tick(beatInterval * 2);
+      // Observe cancellation before a new context request can overwrite the pending idle state.
+      await assertBeatsRemain(sandbox, ["ses_1 working"], "no post-unload trailing beat");
+      await plugin.context("conductor", "ses_1");
+      clock.tick(beatInterval);
+      await assertBeatsRemain(sandbox, ["ses_1 working"]);
+    } finally {
+      timeoutSpy.mock.restore();
+    }
   });
 
   test("unloading during a failing beat settles after its incident is recorded", async (t) => {
@@ -714,12 +790,13 @@ describe("conductor session heartbeat", { skip }, () => {
 
   test("no beat for another agent, an unseen idle session, or a directory without .orchestrator/", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    const clock = usePluginClock(t, plugin);
     await plugin.context("conductor", "ses_1");
     makeProject(sandbox);
     await plugin.context("build", "ses_2");
-    plugin.emit(idle("ses_3"));
-    await sleep(300);
-    assert.deepEqual(orchCalls(sandbox, "session"), []);
+    await deliverIdle(plugin, "ses_3");
+    clock.tick(300);
+    await assertBeatsRemain(sandbox, []);
   });
 
   test("a failed beat is recorded as an incident and the turn still gets its budget block", async (t) => {
@@ -733,18 +810,19 @@ describe("conductor session heartbeat", { skip }, () => {
     assert.deepEqual(incident.context, { session: "ses_1" });
   });
 
-  test("a failed beat is retried by the next request after the interval, not before", async (t) => {
+  test("an inside-interval request retries a failed beat at the interval boundary", async (t) => {
     const failing = { "session beat": { code: 1, stderr: "session beat: EACCES\n" }, "incident record": { stdout: { recorded: "fp" } } };
     const { sandbox, plugin } = await loadGo(t, failing, interval(400));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => orchCalls(sandbox, "incident").length === 1));
     setAnswers(sandbox, { ...sandbox.answers, ...OK });
+    clock.tick(399);
     await plugin.context("conductor", "ses_1");
-    await sleep(150);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"], "no immediate retry inside the interval");
-    await sleep(400);
-    await plugin.context("conductor", "ses_1");
+    await assertBeatsRemain(sandbox, ["ses_1 working"], "no immediate retry inside the interval");
+    // No third request: the second request's trailing timer is the retry trigger (F1).
+    clock.tick(1);
     assert.ok(await waitFor(() => beats(sandbox).length === 2));
   });
 });

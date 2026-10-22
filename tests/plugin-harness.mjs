@@ -7,6 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// Poll real process I/O even when a test virtualizes the plugin's timers and wall clock.
+const realSetTimeout = globalThis.setTimeout;
+
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const PLUGIN_URL = pathToFileURL(path.join(REPO, "plugins", "orchestrator.ts")).href;
 const PARITY_FAKES = path.join(REPO, "go", "parity", "fakes");
@@ -45,7 +48,8 @@ export function checkoutRegistry() {
  * replaces the lookup (the fake `codex`). It uses getBuiltinModule, so it runs whatever module
  * type Node picks for it.
  * Besides {stdout, stderr, code}, an answer can misbehave for the process-runner tests:
- * `ignoreTerm` traps SIGTERM, `hang` never answers, `holdStdout` leaves a logged `sleep 30` holding
+ * `waitForFile` gates the response on a test-owned file; `ignoreTerm` traps SIGTERM,
+ * `hang` never answers, `holdStdout` leaves a logged `sleep 30` holding
  * stdout after the exit, and `stdoutHex` writes its hex chunks 100 ms apart instead of `stdout`.
  * Every fake process ends by itself, so a test never has to signal a pid from the log: the holder
  * after 30 s, and a hung call after $PLUGIN_TEST_HANG_CEILING_MS (default 60 s), with exit code 98.
@@ -69,16 +73,25 @@ const answer = ${lookup};
 if (answer?.ignoreTerm) process.on("SIGTERM", () => {});
 log({ self: ${JSON.stringify(self)}, argv, cwd: process.cwd(), stdin, pid: process.pid, orchHome: process.env.ORCH_HOME, orchRegistry: process.env.ORCH_REGISTRY });
 if (!answer) { process.stderr.write("fake orch: unscripted " + full + "\\n"); process.exit(97); }
-if (answer.hang) setTimeout(() => { process.stderr.write("fake orch: hang ceiling reached\\n"); process.exit(98); }, Number(process.env.PLUGIN_TEST_HANG_CEILING_MS) || 60000);
-else if (answer.stdoutHex) writeSlowly(answer.stdoutHex.map((hex) => Buffer.from(hex, "hex")));
-else {
-  if (answer.holdStdout) {
-    const holder = process.getBuiltinModule("node:child_process").spawn("/bin/sleep", ["30"], { stdio: ["ignore", "inherit", "ignore"] });
-    log({ self: "holder", argv: ["sleep", "30"], cwd: process.cwd(), stdin: "", pid: holder.pid });
+if (answer.waitForFile) {
+  const ceiling = setTimeout(() => process.exit(98), Number(process.env.PLUGIN_TEST_HANG_CEILING_MS) || 60000);
+  const gate = setInterval(() => {
+    if (!fs.existsSync(answer.waitForFile)) return;
+    clearTimeout(ceiling); clearInterval(gate); respond();
+  }, 10);
+} else respond();
+function respond() {
+  if (answer.hang) setTimeout(() => { process.stderr.write("fake orch: hang ceiling reached\\n"); process.exit(98); }, Number(process.env.PLUGIN_TEST_HANG_CEILING_MS) || 60000);
+  else if (answer.stdoutHex) writeSlowly(answer.stdoutHex.map((hex) => Buffer.from(hex, "hex")));
+  else {
+    if (answer.holdStdout) {
+      const holder = process.getBuiltinModule("node:child_process").spawn("/bin/sleep", ["30"], { stdio: ["ignore", "inherit", "ignore"] });
+      log({ self: "holder", argv: ["sleep", "30"], cwd: process.cwd(), stdin: "", pid: holder.pid });
+    }
+    process.stdout.write(answer.stdout ?? "");
+    process.stderr.write(answer.stderr ?? "");
+    process.exit(answer.code ?? 0);
   }
-  process.stdout.write(answer.stdout ?? "");
-  process.stderr.write(answer.stderr ?? "");
-  process.exit(answer.code ?? 0);
 }
 function writeSlowly(chunks) {
   if (!chunks.length) process.exit(answer.code ?? 0);
@@ -245,24 +258,29 @@ function subscribeEvents(options, subscriptions) {
   };
 }
 
-// The fake orch is a Node process; under a loaded full-suite run its start-up has taken over
-// 2 s, so the bound is generous and running out of it fails the case instead of letting a late
-// warm-up call land among the calls the case counts.
-const WARM_UP_BOUND_MS = 15000;
+// The fake orch is a Node process; under host contention even startup has exceeded 5 s.
+// This bounds fixture I/O, not plugin scheduling (which tests can advance virtually).
+const PROCESS_IO_BOUND_MS = 15000;
 
-// setup starts an un-awaited warm-up routing(false). Let it settle so it cannot race a case:
-// whichever fake orch the plugin resolved logs the call.
+// A log entry means the fake started, not that its response completed. Wait for its exit
+// before tests replace answers or install virtual timers; no guessed settling sleep.
 async function settleWarmUp(sandbox) {
-  const warmedUp = () => calls(sandbox).some((c) => c.self !== "codex" && c.argv.join(" ") === "routing --json");
-  if (!(await waitFor(warmedUp, WARM_UP_BOUND_MS))) throw new Error(`the plugin's warm-up \`orch routing --json\` was not logged within ${WARM_UP_BOUND_MS} ms (pass brokenRuntime if setup cannot resolve a runtime)`);
-  await new Promise((r) => setTimeout(r, 50));
+  const warmedUp = () => {
+    const call = calls(sandbox).find((c) => c.self !== "codex" && c.argv.join(" ") === "routing --json");
+    if (!call) return false;
+    try { process.kill(call.pid, 0); return false; } catch (error) {
+      if (error.code === "ESRCH") return true;
+      throw error;
+    }
+  };
+  if (!(await waitFor(warmedUp))) throw new Error(`the plugin's warm-up \`orch routing --json\` did not finish within ${PROCESS_IO_BOUND_MS} ms (pass brokenRuntime if setup cannot resolve a runtime)`);
 }
 
-export async function waitFor(predicate, ms = 2000) {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
+export async function waitFor(predicate, ms = PROCESS_IO_BOUND_MS) {
+  const deadline = performance.now() + ms;
+  while (performance.now() < deadline) {
     if (predicate()) return true;
-    await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => realSetTimeout(r, 20));
   }
   return predicate();
 }
