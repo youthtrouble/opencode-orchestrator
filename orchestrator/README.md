@@ -295,7 +295,10 @@ happen mid-brief, so a hand-back is delayed by at most one brief.
 
 **Workers.** `orch worker start` runs one brief on one harness. State lives in
 `.orchestrator/workers/<lane>.json`, the lock in `<lane>.lock`, the log in
-`.orchestrator/logs/<lane>-<run>.log`. `--detach` launches a kept-awake runner. The bridge timeout
+`.orchestrator/logs/<lane>-<run>.log`. The runner holds a kernel record lock on `<lane>.lock`
+for its whole run, so a lane has one runner; `orch worker stop` signals only that holder. A lock
+file left by a runner that died is reclaimed by the next start, `--detach` included: never delete
+one by hand, since deleting a held lock lets a second runner in. `--detach` launches a kept-awake runner. The bridge timeout
 for a worker is 120 minutes unless `--timeout-min` says otherwise. A failed run posts `blocked`
 and a budget refusal (exit 75 / budget red) posts `deferred` to the mailbox; a finished run posts
 nothing itself (the agent posts its own `release`). `stop --lane L` sends SIGINT to the lane's

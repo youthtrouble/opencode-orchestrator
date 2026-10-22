@@ -98,7 +98,7 @@ func (h *harness) workerStartInvocation(t *testing.T, c workerStartCase) invocat
 	inv.crash, inv.errorLine, inv.progress = c.crash, c.errorLine, ""
 	runFileNames := inv.normalizeWrites
 	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
-		return withWorkerLockPid(runFileNames(o, before), before)
+		return withLockHolderPids(withWorkerLockPid(runFileNames(o, before), before))
 	}
 	return inv
 }
@@ -117,6 +117,33 @@ func withWorkerLockPid(o outcome, before map[string]string) outcome {
 }
 
 func text(s string) *string { return &s }
+
+// PE-28: the lane-locked hint. The JS tells people to remove the lock; orch never does (C8).
+const (
+	jsLaneLockedHint   = `"hint":"inspect worker state; remove the lock only after confirming the process is gone"`
+	orchLaneLockedHint = `"hint":"inspect worker status; the lane frees itself when its runner exits"`
+)
+
+// withJSLaneLockedHint rewrites orch's lane-locked hint to the JS's (PE-28).
+func withJSLaneLockedHint(s string) string {
+	return strings.ReplaceAll(s, orchLaneLockedHint, jsLaneLockedHint)
+}
+
+// testWorkerStartReclaimsAStaleLock asserts PE-28 (L8): a lock file that no process holds, as a
+// runner killed with SIGKILL leaves it, does not block a foreground start. The JS, pinned here,
+// refuses the lane until a person removes the file; orch claims it, runs and removes it.
+func (h *harness) testWorkerStartReclaimsAStaleLock(t *testing.T) {
+	stale := seeds(seedWorkerLockHolding("b", strconv.Itoa(reapedPid(t))), seedWorkerState("b", `{"lane":"b","status":"running","pid":1}`))
+	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: []string{"--brief", "b.md", "--harness", "claude"}, run: bridgeCase{fixture: "ok", seed: stale}}))
+	// The state's pid reads <pid> once normalized.
+	jsRefusal := `{"error":"lane locked","lane":"b","previous":{"status":"running","pid":<pid>,"alive":true},` + jsLaneLockedHint + "}\n"
+	if js.exitCode != 3 || js.stdout != "" || js.stderr != jsRefusal {
+		t.Errorf("js: exit %d, stdout %q, stderr %q; want the pinned lane-locked refusal", js.exitCode, js.stdout, js.stderr)
+	}
+	if _, locked := orch.files["project/workers/b.lock"]; orch.exitCode != 0 || !strings.Contains(orch.stdout, `"status":"finished"`) || locked {
+		t.Errorf("orch: exit %d, stdout %q, stderr %q, lock left %v; want a finished run that removed the lock", orch.exitCode, orch.stdout, orch.stderr, locked)
+	}
+}
 
 // opencodeRunOK scripts the fake opencode run to finish a session that used a tool.
 var opencodeRunOK = map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n" + `{"part":{"type":"tool","tool":"bash"}}` + "\n", "exit": "0\n"}
@@ -140,11 +167,11 @@ func (h *harness) testWorkerStart(t *testing.T) {
 	live := strconv.Itoa(os.Getpid())
 	dead := strconv.Itoa(reapedPid(t))
 	locked := func(state string) bridgeCase {
-		s := seedWorkerLock("b")
+		s := seedHeldLock(workerLockPath("b"))
 		if state != "" {
 			s = seeds(s, seedWorkerState("b", state))
 		}
-		return bridgeCase{seed: s}
+		return bridgeCase{seed: s, normalize: withJSLaneLockedHint}
 	}
 
 	directoryBrief := []string{"--brief", "d.md/", "--harness", "claude"}
@@ -200,7 +227,7 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		// state, and the read error wins over a held lane (exit 1, not 3).
 		{name: "crash/brief-is-a-directory", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seedProjectDir("d.md")},
 			crash: crashC1, errorLine: eisdir},
-		{name: "crash/brief-is-a-directory-lane-locked", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seeds(seedProjectDir("d.md"), seedWorkerLock("d"))},
+		{name: "crash/brief-is-a-directory-lane-locked", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seeds(seedProjectDir("d.md"), seedHeldLock(workerLockPath("d")))},
 			crash: crashC1, errorLine: eisdir},
 
 		// lane locked
@@ -234,6 +261,7 @@ func (h *harness) testWorkerStart(t *testing.T) {
 			}
 		}
 	})
+	t.Run("PE-28/stale-lock-is-reclaimed", h.testWorkerStartReclaimsAStaleLock)
 	t.Run("PE-24/failed-run-scrubs-tokens", h.testWorkerFailedRunScrubsTokens)
 	t.Run("cross-runtime", h.testWorkerCrossRuntime)
 	t.Run("PE-13/unread-prompt", h.testWorkerUnreadPrompt)

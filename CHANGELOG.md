@@ -25,6 +25,13 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   inode-alias tracking and cross-process regression tests, including failed pending
   reservations and release after a working-directory change. No callers migrate in this
   slice; worker, supervisor, flip and ack concurrency fixes are still pending.
+- worker (S13b): a lane is owned by its runner through a kernel record lock held for the whole
+  run, so a lane has exactly one runner (sol-5 R2, worker side). A lock file left by a runner that
+  died is reclaimed by the next start, foreground included (L8, PE-28); `start --detach` only
+  probes the lock and never removes it (PE-29); `orch worker stop` signals only the kernel's
+  holder when it is the state's pid, so a killed runner's reused pid is never signalled (R3,
+  PE-23). The lane-locked hint no longer says to remove the lock: never delete a lock file by
+  hand.
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.

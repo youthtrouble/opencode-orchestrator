@@ -177,15 +177,15 @@ func TestDetachCrashesOnAStartFailureNodeThrows(t *testing.T) {
 
 // flip.mjs relies on a live holder being refused synchronously: the lane-locked JSON without a
 // hint on stderr (alive is the holder's, true), nothing on stdout, exit 3, no log, lock kept.
+// The holder is a helper process holding the lane's kernel lock.
 func TestDetachRefusesALockHeldByALiveProcess(t *testing.T) {
-	live := strconv.Itoa(os.Getpid())
 	for _, c := range []struct{ state, previous string }{
 		{"", `null`},
 		{`{"status":"running","pid":0,"extra":1}`, `{"status":"running","pid":0,"alive":true}`},
 		{`0`, `0`},
 	} {
 		p := testProject(t, "brief")
-		writeFile(t, p.LockPath("b"), " "+live+"\n")
+		holder := strconv.Itoa(holdLock(t, p.LockPath("b"), false).pid())
 		if c.state != "" {
 			writeFile(t, p.StatePath("b"), c.state)
 		}
@@ -198,7 +198,7 @@ func TestDetachRefusesALockHeldByALiveProcess(t *testing.T) {
 		if d.stderr.String() != want || d.stdout.String() != "" {
 			t.Errorf("state %s: stderr %q, stdout %q; want stderr %q", c.state, d.stderr.String(), d.stdout.String(), want)
 		}
-		if got := readText(t, p.LockPath("b")); got != " "+live+"\n" {
+		if got := readText(t, p.LockPath("b")); got != holder {
 			t.Errorf("the lock was changed to %q", got)
 		}
 		if _, err := os.Stat(p.LogsDir); err == nil {
@@ -207,10 +207,11 @@ func TestDetachRefusesALockHeldByALiveProcess(t *testing.T) {
 	}
 }
 
-// A lock whose holder is gone, or whose text is no live pid, is removed and the launch goes on.
-func TestDetachRemovesAStaleLock(t *testing.T) {
+// PE-29: a lock no process holds, whatever its text, does not refuse the launch, and the
+// launcher leaves it for the runner's claim (C9).
+func TestDetachLeavesAStaleLockToItsRunner(t *testing.T) {
 	dead := strconv.Itoa(int(deadPid(t)))
-	for _, holder := range []string{dead, "abc", "", "0", "-0", "1.5"} {
+	for _, holder := range []string{dead, "abc", "", "0", "-0", "1.5", strconv.Itoa(os.Getpid())} {
 		p := testProject(t, "brief")
 		writeFile(t, p.LockPath("b"), holder)
 		d := newDetachRun(t)
@@ -219,20 +220,52 @@ func TestDetachRemovesAStaleLock(t *testing.T) {
 		if code, err := detach(t, p, rt); err != nil || code != 0 {
 			t.Fatalf("holder %q: Detach = %d, %v", holder, code, err)
 		}
-		if _, err := os.Stat(p.LockPath("b")); !os.IsNotExist(err) {
-			t.Errorf("holder %q: the stale lock is still there (%v)", holder, err)
+		if got := readText(t, p.LockPath("b")); got != holder {
+			t.Errorf("holder %q: the launcher changed the lock to %q", holder, got)
 		}
 	}
 }
 
-func TestDetachLockErrorsAreTheJSExceptions(t *testing.T) {
+// L8, R2: after a runner is killed with SIGKILL, a detached launch starts a runner (a helper
+// process) that reclaims the lane, runs and removes the lock.
+func TestDetachedRunnerReclaimsAKilledRunnersLock(t *testing.T) {
+	p := testProject(t, "brief")
+	killed := holdLock(t, p.LockPath("b"), false)
+	killed.killHard(t)
+	newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult}) // the runner's bridge and HOME
+	t.Setenv("WORKER_BRIDGE", bridgeScript(t))
+	d := newDetachRun(t)
+	writeFile(t, d.runner, "#!/bin/sh\nWORKER_HELPER=run exec '"+os.Args[0]+"' -test.run='^TestHelperProcess$' -- \"$@\"\n")
+	code, err := detach(t, p, d.runtime("start", "--brief", "b.md", "--harness", "claude", "--detach"))
+	if err != nil || code != 0 {
+		t.Fatalf("Detach = %d, %v; stderr %q", code, err, d.stderr.String())
+	}
+	match := launchedPid.FindStringSubmatch(d.stdout.String())
+	if match == nil {
+		t.Fatalf("launch %q has no runner_pid", d.stdout.String())
+	}
+	runner, _ := strconv.Atoi(match[1])
+	reapRunner(t, runner)
+	state := stateFile(t, p, "b")
+	if !strings.Contains(state, `"status": "finished"`) || !strings.Contains(state, `"pid": `+match[1]+`,`) {
+		t.Errorf("state of runner %d:\n%s\nlog:\n%s", runner, state, readText(t, filepath.Join(p.LogsDir, "b-0123abcd.log")))
+	}
+	requireNoLock(t, p, "b")
+}
+
+// PE-29: a lock path that is no file fails the launch with exit 1, as the JS's EISDIR does,
+// but with the probe's error.
+func TestDetachLockErrorsFailTheLaunch(t *testing.T) {
 	p := testProject(t, "brief")
 	if err := os.MkdirAll(p.LockPath("b"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	d := newDetachRun(t)
-	if code, err := detach(t, p, d.runtime("start")); code != 1 || err == nil || err.Error() != "EISDIR: illegal operation on a directory, read" {
-		t.Errorf("Detach = %d, %v; want EISDIR", code, err)
+	if code, err := detach(t, p, d.runtime("start")); code != 1 || err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+		t.Errorf("Detach = %d, %v; want the probe's error", code, err)
+	}
+	if d.stdout.String() != "" {
+		t.Errorf("stdout %q", d.stdout.String())
 	}
 }
 

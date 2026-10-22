@@ -69,12 +69,11 @@ func keepAwakeWrapper() string {
 func (h *harness) testWorkerDetach(t *testing.T) {
 	claude := []string{"--brief", "b.md", "--harness", "claude", "--detach"}
 	ok := bridgeCase{fixture: "ok"}
-	live := strconv.Itoa(os.Getpid()) // only ever sent signal 0
 	dead := strconv.Itoa(reapedPid(t))
-	lockedBy := func(holder string) bridgeCase {
-		return bridgeCase{fixture: "ok", seed: seeds(
-			seedProjectFile(".orchestrator/workers/b.lock", holder),
-			seedWorkerState("b", `{"lane":"b","status":"running","pid":`+dead+`,"extra":1}`))}
+	// lockedBy seeds the lane's lock (a helper holding it, or a stale file) and a state whose
+	// pid is dead.
+	lockedBy := func(lock seed) bridgeCase {
+		return bridgeCase{fixture: "ok", seed: seeds(lock, seedWorkerState("b", `{"lane":"b","status":"running","pid":`+dead+`,"extra":1}`))}
 	}
 	cases := []workerDetachCase{
 		{name: "finished", args: claude, run: ok},
@@ -93,10 +92,12 @@ func (h *harness) testWorkerDetach(t *testing.T) {
 			run: bridgeCase{fixture: "ok", seed: seedProjectFile("sub/b.md", "brief body\n")}},
 		{name: "relative-cwd-keep-awake", args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
 			run: bridgeCase{fixture: "ok", seed: seedProjectFile("sub/b.md", "brief body\n")}, keepAwake: true},
-		{name: "locked/live-holder", args: claude, run: lockedBy(live)},
-		{name: "locked/live-holder-no-state", args: claude, run: bridgeCase{seed: seedProjectFile(".orchestrator/workers/b.lock", live+"\n")}},
-		{name: "locked/stale-holder", args: claude, run: lockedBy(dead)},
-		{name: "locked/not-a-pid", args: claude, run: lockedBy("abc")},
+		{name: "locked/live-holder", args: claude, run: lockedBy(seedHeldLock(workerLockPath("b")))},
+		{name: "locked/live-holder-no-state", args: claude, run: bridgeCase{seed: seedHeldLock(workerLockPath("b"))}},
+		// PE-29: the JS launcher unlinks a stale lock, orch leaves it to its runner's claim;
+		// once the runner has released the lane, neither file is left.
+		{name: "locked/stale-holder", args: claude, run: lockedBy(seedWorkerLockHolding("b", dead))},
+		{name: "locked/not-a-pid", args: claude, run: lockedBy(seedWorkerLockHolding("b", "abc"))},
 		{name: "stop-running", args: claude, steps: h.stopRunningWorker, run: bridgeCase{script: map[string]string{
 			"jsonl": `{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-0000000000aa","model":"m"}` + "\n",
 			"sleep": "30\n", "pid": ""}}},

@@ -198,7 +198,10 @@ relaunches it at the first reset.
 
 **Background runs.** A headless conductor runs as the worker lane `conductor`. Each lane has a
 two-hour limit by default; when one ends early or fails, the supervisor relaunches the conductor,
-which resumes from `STATE.md`. Background processes are kept awake with `caffeinate` (macOS) or
+which resumes from `STATE.md`. A lane has one runner at a time: the runner holds a kernel lock on
+`.orchestrator/workers/<lane>.lock` while it runs, and `orch worker stop` signals only that holder.
+A lock file left by a runner that crashed is reclaimed by the next start; never delete one by
+hand. Background processes are kept awake with `caffeinate` (macOS) or
 `systemd-inhibit` (Linux); a closed laptop lid still sleeps unless you run in clamshell mode with
 power and an external display.
 

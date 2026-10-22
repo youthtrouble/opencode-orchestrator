@@ -6,11 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/registry"
@@ -32,16 +32,26 @@ type DetachRuntime struct {
 	KeepAwake func(cmd string, args []string) (string, []string)
 }
 
-// Detach is `worker.mjs start --detach` (l.65-84). It refuses a lane whose lock is held by a
-// live process, synchronously, as flip.mjs relies on: the lane-locked JSON without a hint on
-// stderr, nothing on stdout, exit ExitLaneLocked. A lock whose holder is gone is removed. It
-// then creates the run's log, starts the runner (this command without --detach, in the
-// foreground, writing to the log) in a session of its own in the project root, and prints
-// {lane, runner_pid, log_path, run_id, keep_awake}, exit 0. A runner that cannot be found or
-// executed is not waited for in the JS (its error event never runs): runner_pid is left out
-// and the exit is still 0. A returned error is the exception the JS dies of (exit 1).
+// Detach is `worker.mjs start --detach` (l.65-84). It refuses a lane whose lock is held,
+// synchronously, as flip.mjs relies on: the lane-locked JSON without a hint on stderr, nothing
+// on stdout, exit ExitLaneLocked. It then creates the run's log, starts the runner (this
+// command without --detach, in the foreground, writing to the log) in a session of its own in
+// the project root, and prints {lane, runner_pid, log_path, run_id, keep_awake}, exit 0. A
+// runner that cannot be found or executed is not waited for in the JS (its error event never
+// runs): runner_pid is left out and the exit is still 0. A returned error is the exception the
+// JS dies of (exit 1).
+//
+// PE-29: the lane is held only while the kernel says a runner holds its lock (ownlock.Probe).
+// The JS reads the pid in the lock and unlinks the file when that pid is dead, so two
+// launchers could each remove the other's fresh lock and leave two runners on the lane. Here
+// the launcher never touches the lock: a dead runner's file is left for the new runner's
+// Acquire to reclaim. The Probe is advisory (C9); the runner's Acquire decides. When two
+// launchers both find the lane free, both print their launch and exit 0, and the runner that
+// loses refuses the lane into its log with exit 3. The loser's run_id is still sound for a
+// caller that waits for the lane to be served: the winner started after the loser's Probe, so
+// the lane has a runner.
 func (l *Launch) Detach(rt DetachRuntime) (int, error) {
-	held, err := l.reclaimLock()
+	held, _, err := ownlock.Probe(l.project.LockPath(l.lane))
 	if err != nil {
 		return 1, err
 	}
@@ -80,31 +90,6 @@ func (l *Launch) Detach(rt DetachRuntime) (int, error) {
 	}
 	fmt.Fprintf(rt.Stdout, "%s\n", data)
 	return 0, nil
-}
-
-// reclaimLock reports whether the lane's lock is held by a live process: the lock holds the
-// holder's pid as text, read as Number(text.trim()) and checked with Alive. A lock whose
-// holder is gone (or whose text is no pid) is removed, so the runner can claim it.
-//
-// The read and the unlink are not atomic: a lock claimed by another launcher's runner in
-// between is removed too, leaving two runners on the lane. The JS has the same race; it is
-// mirrored on purpose and fixed in both after S12 (Q-S6-6).
-func (l *Launch) reclaimLock() (held bool, err error) {
-	lock := l.project.LockPath(l.lane)
-	if !nodefs.Exists(lock) {
-		return false, nil
-	}
-	data, err := nodefs.ReadFile(lock)
-	if err != nil {
-		return false, err
-	}
-	if Alive(jsjson.ToNumber(jsstr.DecodeUTF8(data))) { // ToNumber trims as .trim() does
-		return true, nil
-	}
-	if err := syscall.Unlink(lock); err != nil {
-		return false, nodefs.FileError(err, "unlink", lock)
-	}
-	return false, nil
 }
 
 // createLog creates the run's log for writing only, failing if it exists (openSync(path, "wx",

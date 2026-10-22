@@ -369,43 +369,66 @@ func recordingKiller(sent *[]signal, fail ...int) func(int, syscall.Signal) erro
 	}
 }
 
+// The lane's runner is a helper holding the lane's kernel lock; the recorded signals never
+// reach it.
 func TestStopSignalsTheGroupThenThePid(t *testing.T) {
-	live := os.Getpid()
 	for _, tc := range []struct {
-		name string
-		fail []int
-		want []signal
+		name      string
+		failGroup bool
 	}{
-		{"group leader", nil, []signal{{-live, syscall.SIGINT}}},
-		{"not a group leader", []int{-live}, []signal{{-live, syscall.SIGINT}, {live, syscall.SIGINT}}},
+		{"group leader", false},
+		{"not a group leader", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var sent []signal
 			p := NewProject(t.TempDir())
-			p.kill = recordingKiller(&sent, tc.fail...)
-			writeFile(t, p.StatePath("w"), `{"pid":"`+strconv.Itoa(live)+`"}`)
-			writeFile(t, p.LockPath("w"), " "+strconv.Itoa(live)+"\n") // read as Number(text.trim())
+			holder := holdLock(t, p.LockPath("w"), false).pid()
+			var sent []signal
+			var fail []int
+			want := []signal{{-holder, syscall.SIGINT}}
+			if tc.failGroup {
+				fail = []int{-holder}
+				want = append(want, signal{holder, syscall.SIGINT})
+			}
+			p.kill = recordingKiller(&sent, fail...)
+			writeFile(t, p.StatePath("w"), `{"pid":"`+strconv.Itoa(holder)+`"}`)
 			out, err := p.Stop("w")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := marshal(t, out); got != `{"lane":"w","stopped":true,"pid":"`+strconv.Itoa(live)+`"}` {
+			if got := marshal(t, out); got != `{"lane":"w","stopped":true,"pid":"`+strconv.Itoa(holder)+`"}` {
 				t.Errorf("stop: %s", got)
 			}
-			if !equalSignals(sent, tc.want) {
-				t.Errorf("signals %v, want %v", sent, tc.want)
+			if !equalSignals(sent, want) {
+				t.Errorf("signals %v, want %v", sent, want)
 			}
 		})
 	}
 }
 
+// R3: stop interrupts the process group of the kernel's holder, here a test-owned helper that
+// leads its own session.
+func TestStopInterruptsTheLaneHolder(t *testing.T) {
+	p := NewProject(t.TempDir())
+	holder := holdLock(t, p.LockPath("w"), true)
+	writeFile(t, p.StatePath("w"), `{"lane":"w","status":"running","pid":`+strconv.Itoa(holder.pid())+`}`)
+	out, err := p.Stop("w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := marshal(t, out); got != `{"lane":"w","stopped":true,"pid":`+strconv.Itoa(holder.pid())+`}` {
+		t.Errorf("stop: %s", got)
+	}
+	if status := holder.waitExit(t); !status.Signaled() || status.Signal() != syscall.SIGINT {
+		t.Errorf("holder ended with %v, want SIGINT", status)
+	}
+}
+
 func TestStopFailingSignalIsTheKillError(t *testing.T) {
 	var sent []signal
-	live := os.Getpid()
 	p := NewProject(t.TempDir())
-	p.kill = recordingKiller(&sent, -live, live)
-	writeFile(t, p.StatePath("w"), `{"pid":`+strconv.Itoa(live)+`}`)
-	writeFile(t, p.LockPath("w"), strconv.Itoa(live))
+	holder := holdLock(t, p.LockPath("w"), false).pid()
+	p.kill = recordingKiller(&sent, -holder, holder)
+	writeFile(t, p.StatePath("w"), `{"pid":`+strconv.Itoa(holder)+`}`)
 	_, err := p.Stop("w")
 	if err == nil || err.Error() != "kill ESRCH" {
 		t.Errorf("err = %v, want kill ESRCH", err)
@@ -449,8 +472,8 @@ func TestStopWithoutALiveWorker(t *testing.T) {
 }
 
 // PE-14: pids that are alive to the JS yet would make it signal every process of the user
-// (kill(-1)), its own group (kill(0)) or an unrelated process (a negative pid) are refused, even
-// when the lock holds the same pid.
+// (kill(-1)), its own group (kill(0)) or an unrelated process (a negative pid) are refused
+// before the lock is looked at.
 func TestStopRefusesPidsBelowTwo(t *testing.T) {
 	for _, tc := range []struct{ pid, lock string }{
 		{`1`, "1"}, {`true`, "1"}, {`"1"`, "1"}, {`[1]`, "1"}, {`-1`, "-1"}, {`-12345`, "-12345"}, {`"0"`, "0"}, {`[]`, "0"},
@@ -475,27 +498,47 @@ func TestStopRefusesPidsBelowTwo(t *testing.T) {
 	}
 }
 
-// PE-23: a live pid is signalled only while the lane's lock holds it. A finished worker removed
-// its lock, and its pid may since belong to an unrelated process.
-func TestStopRequiresTheLockToHoldThePid(t *testing.T) {
-	live := strconv.Itoa(os.Getpid())
+// PE-23, R3: a live pid is signalled only while the kernel says it holds the lane's lock. A
+// finished worker released its lock, a killed one lost it, and its pid may since belong to an
+// unrelated process, whatever the lock file's text says.
+func TestStopRequiresTheKernelHolderToBeTheStatePid(t *testing.T) {
+	// standIn is a live process the test created, holding a lock elsewhere.
+	standIn := func(t *testing.T) int { return holdLock(t, filepath.Join(t.TempDir(), "x.lock"), false).pid() }
 	for _, tc := range []struct {
 		name string
-		lock *string
+		// lock prepares the lane's lock and returns the state's pid.
+		lock func(t *testing.T, p Project) int
 	}{
-		{name: "no lock"},
-		{name: "another pid", lock: ptr(strconv.Itoa(os.Getpid() + 1))},
-		{name: "not a pid", lock: ptr("abc")},
-		{name: "empty", lock: ptr("")},
+		{name: "no lock", lock: func(t *testing.T, p Project) int { return standIn(t) }},
+		{name: "held by another pid", lock: func(t *testing.T, p Project) int {
+			holdLock(t, p.LockPath("w"), false)
+			return standIn(t)
+		}},
+		{name: "the state pid's file, its holder killed", lock: func(t *testing.T, p Project) int {
+			holder := holdLock(t, p.LockPath("w"), false)
+			holder.killHard(t)
+			if got := readText(t, p.LockPath("w")); got != strconv.Itoa(holder.pid()) {
+				t.Fatalf("lock text %q, want the killed holder's pid", got)
+			}
+			// The pid stands for one the system gave to an unrelated process since.
+			return holder.pid()
+		}},
+		{name: "the state pid as text only", lock: func(t *testing.T, p Project) int {
+			live := standIn(t)
+			writeFile(t, p.LockPath("w"), strconv.Itoa(live))
+			return live
+		}},
+		{name: "not a pid", lock: func(t *testing.T, p Project) int {
+			writeFile(t, p.LockPath("w"), "abc")
+			return standIn(t)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var sent []signal
 			p := NewProject(t.TempDir())
 			p.kill = recordingKiller(&sent)
-			writeFile(t, p.StatePath("w"), `{"lane":"w","status":"finished","pid":`+live+`}`)
-			if tc.lock != nil {
-				writeFile(t, p.LockPath("w"), *tc.lock)
-			}
+			pid := tc.lock(t, p)
+			writeFile(t, p.StatePath("w"), `{"lane":"w","status":"running","pid":`+strconv.Itoa(pid)+`}`)
 			out, err := p.Stop("w")
 			if err != nil {
 				t.Fatal(err)
@@ -509,8 +552,6 @@ func TestStopRequiresTheLockToHoldThePid(t *testing.T) {
 		})
 	}
 }
-
-func ptr(s string) *string { return &s }
 
 func equalSignals(a, b []signal) bool {
 	if len(a) != len(b) {

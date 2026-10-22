@@ -22,22 +22,23 @@ const (
 	conductorState = ".orchestrator/workers/conductor.json"
 )
 
-// heldByThisTest locks the conductor lane with this test process's pid, which is only ever
-// sent signal 0: both launchers refuse with "lane locked", so the run records a pending launch
-// and nothing is launched.
-func heldByThisTest() seed {
-	return seedProjectFile(conductorLock, strconv.Itoa(os.Getpid()))
+// heldByAHelper has a helper process hold the conductor lane's kernel lock with its own pid
+// (CA2), which the JS only ever sends signal 0: both launchers refuse with "lane locked", so
+// the run records a pending launch and nothing is launched.
+func heldByAHelper() seed {
+	return seedHeldLock(conductorLock)
 }
 
 // flipRunInvocation is a `run` whose launch the lane lock refuses (plus the case's seed).
 func (h *harness) flipRunInvocation(args []string, s seed, crash crashClass, errorLine string) invocation {
-	all := heldByThisTest()
+	all := heldByAHelper()
 	if s != nil {
 		all = seeds(all, s)
 	}
 	inv := h.flipInvocation(flipCase{args: append([]string{"run"}, args...), seed: all, crash: crash, errorLine: errorLine})
 	// a case may make .git a file or the exclude a directory
 	inv.extraFilesMayBeBlocked = true
+	inv.normalizeWrites = func(o outcome, _ map[string]string) outcome { return withLockHolderPids(o) }
 	return inv
 }
 
@@ -375,7 +376,7 @@ func (h *harness) testFlipRunCrossRuntime(t *testing.T) {
 	for writer, argv := range writers {
 		t.Run("written-by-"+writer, func(t *testing.T) {
 			sb := h.newSandbox(t)
-			heldByThisTest()(t, sb)
+			heldByAHelper()(t, sb)
 			run := []string{"run", "--to", "opencode", "--from", "claude", "--reason", "R", "--resume", "S"}
 			written := h.run(t, sb, append(append([]string{}, argv...), run...), nil, []string{noPostRunRefresh})
 			content := written.files["project/flip.json"]
