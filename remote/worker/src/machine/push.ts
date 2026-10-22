@@ -104,13 +104,18 @@ export function pushHandler(onPushAccepted: OnPushAccepted) {
     const projects: ProjectPushResult[] = [];
     for (const project of push.projects) projects.push(await pushProject(run, project));
     if (run.deferredForBudget > 0) console.log(JSON.stringify({ push: "query_budget", deferred: run.deferredForBudget }));
-    // Any deferral keeps the first-push window open, so a retry's backlog is still suppressed (plan D8).
-    if (isFirstPush && projects.every((project) => project.result !== "deferred")) {
+    // A deferral the Mac will retry keeps the first-push window open, so the retry's backlog is still
+    // suppressed (plan D8). One with no retry (a key another machine owns) never lands, so it must not.
+    if (isFirstPush && !projects.some(awaitsRetry)) {
       await stampFirstPush(ctx, push.machine.id);
     }
     if (run.accepted.length > 0) await onPushAccepted.run(ctx, run.accepted);
     return jsonResponse(200, { v: 1, server_time: ctx.now.toISOString(), projects });
   };
+}
+
+function awaitsRetry(project: ProjectPushResult): boolean {
+  return project.result === "deferred" && project.retry_after_seconds !== null;
 }
 
 /** Upserts the machine row and returns whether no earlier push of this machine has fully landed. */

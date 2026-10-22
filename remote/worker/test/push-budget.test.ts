@@ -4,9 +4,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { POLL_AFTER_SECONDS } from "../src/machine/pull.ts";
+import { DEBOUNCE_SECONDS } from "../src/machine/push.ts";
 import { DAILY_EMAIL_CAP } from "../src/notify/triggers.ts";
 import { QUERIES_PER_INVOCATION } from "../src/queries.ts";
-import { question, snapshot, trainsApp, type Json, type Reply, type TrainsApp } from "./support/trains.ts";
+import { MACHINE_ID, question, snapshot, trainsApp, type Json, type Reply, type TrainsApp } from "./support/trains.ts";
 
 
 interface Backlog {
@@ -67,9 +68,11 @@ function wasTaken(reply: Reply, key: string): boolean {
   return result.result !== "deferred";
 }
 
+const OTHER_MACHINE_ID = "00000000-0000-4000-8000-000000000002";
+
 const countRows = (app: TrainsApp, sql: string) => (app.db.sqlite.prepare(sql).get() as { n: number }).n;
-const firstPushAt = (app: TrainsApp) =>
-  (app.db.sqlite.prepare("SELECT first_push_at FROM machines").get() as Json).first_push_at;
+const firstPushAt = (app: TrainsApp, machineId = MACHINE_ID) =>
+  (app.db.sqlite.prepare("SELECT first_push_at FROM machines WHERE id = ?").get(machineId) as Json).first_push_at;
 
 const backlogs: Backlog[] = [10, 24, 50].flatMap((projects) =>
   [0, 3, 20].map((questions) => ({ projects, questions })),
@@ -171,6 +174,26 @@ test("a debounced first-sync continuation keeps its retry's blocking question su
   assert.equal(countRows(app, "SELECT count(*) AS n FROM questions WHERE notify_state = 'suppressed'"), 1);
   assert.deepEqual(app.notifier.sent, []);
   assert.ok(app.budget.peak <= QUERIES_PER_INVOCATION);
+});
+
+test("a key owned by another machine does not hold a first sync open", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const app = trainsApp({ queryLimit: QUERIES_PER_INVOCATION });
+  const [shared, own] = backlog({ projects: 2, questions: 0 }, 1);
+  await app.push([shared], OTHER_MACHINE_ID);
+
+  app.at(60);
+  const first = await app.push([shared, own]);
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body!.projects.map((project: Json) => [project.result, project.retry_after_seconds]),
+    [["deferred", null], ["accepted", null]]);
+  assert.notEqual(firstPushAt(app), null, "a deferral with no retry never lands, so it cannot end the first sync");
+
+  app.at(60 + DEBOUNCE_SECONDS);
+  const later = { ...own, snapshot_hash: snapshotHash(2, 1), questions: [question("after-first-sync")] };
+  assert.equal((await app.push([shared, later])).status, 200);
+  assert.equal(countRows(app, "SELECT count(*) AS n FROM questions WHERE notify_state = 'suppressed'"), 0);
+  assert.equal(app.notifier.sent.length, 1, "a question after the first sync notifies");
 });
 
 // The notifier works from what D1 says is owed, not from what the push that landed it accepted, so a
