@@ -301,7 +301,7 @@ func TestGateAppendsKeepsPositionAndDeletesPaused(t *testing.T) {
 			if got := readFile(t, p.FlipPath); got != indented(t, c.want) {
 				t.Errorf("flip.json = %s, want %s", got, indented(t, c.want))
 			}
-			want := `{"id":"id-1","at":"` + nowISO + `","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: approval","body":"Supervisor will not relaunch until cleared: node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear (or a reply to the gate's question, or kickoff/flip run).","refs":[".orchestrator/STATE.md"],"thread":null}` + "\n"
+			want := `{"id":"id-1","at":"` + nowISO + `","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: approval","body":"Supervisor will not relaunch until cleared: orch flip gate --clear (or a reply to the gate's question, or kickoff/flip run).","refs":[".orchestrator/STATE.md"],"thread":null}` + "\n"
 			if got := p.messages(t); got != want {
 				t.Errorf("mailbox = %s, want %s", got, want)
 			}

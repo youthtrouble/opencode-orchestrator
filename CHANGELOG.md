@@ -559,6 +559,13 @@
   testdata generators no longer read the checkout's JS (the generators take `ORCH_JS`); the source-derived
   checks moved to the parity build's `TestJSReference`. CI fetches the pinned commit and gains a `node` job
   that runs `node --test tests/*.test.mjs` on Linux and macOS.
+- go: every command line `orch` writes for agents and humans reads `orch <cmd> ...` instead of
+  `node ~/.config/opencode/orchestrator/bin/<cmd>.mjs` (supervisor reminders, the worker preamble, `flip run`'s
+  `conductor-continue.md`, the `flip gate` message, kickoff's usage line and watch hint, the reply hints of
+  `mailbox inbox` and `watch`, now unconditional, and the `manifest`, `mailbox reply` and `worker` usage lines);
+  `orch claude-exec --help` and `orch codex-exec --help` print orch help instead of the JS source header. The
+  bridge budget-red incident's summary becomes `orch <bridge> refused: budget red`, so its fingerprint changes
+  and `/retro` lists old and new apart. The parity harness maps the JS side's command strings (PE-19, `go/README.md`).
 
 ## 0.5.0 — 2026-10-19
 

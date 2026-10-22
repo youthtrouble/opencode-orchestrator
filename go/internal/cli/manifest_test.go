@@ -64,7 +64,7 @@ func TestManifestCreateReplacesSymlinkAtOut(t *testing.T) {
 
 func TestManifestUsageErrors(t *testing.T) {
 	t.Chdir(t.TempDir())
-	const createUsage = "usage: manifest.mjs create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>\n"
+	const createUsage = "usage: orch manifest create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>\n"
 	for _, args := range [][]string{
 		{"create", "--task", "t", "--author", "a", "--out", "o.json"},
 		{"create", "--task", "", "--author", "a", "--out", "o.json", "x"},

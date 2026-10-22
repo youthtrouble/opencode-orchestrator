@@ -211,6 +211,7 @@ func (h *harness) runDetached(t *testing.T, inv invocation, worker, argv []strin
 	collectExtraFiles(t, sb, inv, o.files)
 	o = o.withLaunch(l, runners)
 	o = o.withProjectPlaceholder(t, sb)
+	o = h.withPE19(t, argv, o, inv.jsHelp)
 	o = inv.normalizeWrites(o, before)
 	return o.normalized(inv.normalize)
 }

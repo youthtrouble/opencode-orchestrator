@@ -87,7 +87,7 @@ func timeoutDelay(timeoutMin any, defaultMinutes float64) time.Duration {
 func refuse(stdout, stderr io.Writer, decision *budget.Decision, cwd, script string) int {
 	context := jsjson.NewObject()
 	context.Set("resets_at", or(decision.ResetsAt, nil))
-	recordIncident(incident.Draft{Component: "bridge", Kind: "limit", Summary: cmdref.ScriptFile(script) + " refused: budget red", Context: context, Project: cwd})
+	recordIncident(incident.Draft{Component: "bridge", Kind: "limit", Summary: cmdref.Command(script) + " refused: budget red", Context: context, Project: cwd})
 	refusal := jsjson.NewObject()
 	refusal.Set("ok", false)
 	refusal.Set("reason", "budget_red")

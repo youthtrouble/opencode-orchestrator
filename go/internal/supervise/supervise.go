@@ -277,8 +277,8 @@ func PruneEvents(events *jsjson.Object, now int64) *jsjson.Object {
 func ReminderText(id, reason string, obs Observation, projectRoot string) string {
 	return strings.Join([]string{
 		`Orchestrator supervisor event ` + id + `: worker lane "` + obs.LaneText() + `" is ` + obs.Phase + ` (` + reason + `; ` + obs.Breadth + ` cadence).`,
-		`Read ` + projectRoot + `/.orchestrator/workers/` + obs.LaneText() + `.json, the mailbox (` + cmdref.Script("mailbox") + ` list --unacked-by coordinator) and any released report.`,
-		`Acknowledge receipt with: ` + cmdref.Script("supervisor") + ` ack --event ` + id + `. Receipt is not acceptance.`,
+		`Read ` + projectRoot + `/.orchestrator/workers/` + obs.LaneText() + `.json, the mailbox (` + cmdref.Command("mailbox") + ` list --unacked-by coordinator) and any released report.`,
+		`Acknowledge receipt with: ` + cmdref.Command("supervisor") + ` ack --event ` + id + `. Receipt is not acceptance.`,
 		`Then act: review released work independently and send findings back to the author via the mailbox, or dispatch the next bounded brief. Never duplicate a running worker, approve your own code, or bypass permissions. A quiet worker may be thinking; inspect evidence before calling it stuck.`,
 	}, " ")
 }

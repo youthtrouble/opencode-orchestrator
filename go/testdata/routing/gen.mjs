@@ -6,7 +6,8 @@
 //   <case>.resolved.golden  JSON.stringify(resolveRoles(...), null, 2)
 //   <case>.prompt.golden    summarizeForPrompt(...)
 //   flip.golden             JSON.stringify([decideFlip(...) per flip case], null, 2)
-//   supervise.golden        JSON.stringify([{observation, event, reminder} per case], null, 2)
+//   supervise.golden        JSON.stringify([{observation, event, reminder} per case], null, 2),
+//                           each reminder with orch's command lines (PE-19, below)
 // The Go tests compare the port against these bytes. Run: ORCH_JS=<tree> node go/testdata/routing/gen.mjs
 import fs from "node:fs";
 import path from "node:path";
@@ -44,10 +45,16 @@ const decisions = cases.flip.map((c) => decideFlip({
 }));
 write("flip.golden", JSON.stringify(decisions, null, 2));
 
+// PE-19 (go/README.md): orch's reminders name `orch <cmd>` where the JS names its installed
+// script (mailbox and supervisor), so the golden holds orch's form, as the parity harness maps it.
+const asOrchCommands = (text) =>
+  text.replace(/node ~\/\.config\/opencode\/orchestrator\/bin\/([a-z-]+)\.mjs/g, "orch $1");
+
 const supervised = cases.supervise.map((c) => {
   const observation = observe(c.worker, c.now_sec, { alive: c.alive, lockPresent: c.lock_present });
   const event = chooseEvent(observation, c.state, c.acks, c.now_sec);
-  return { observation, event, reminder: event ? reminderText(event.id, event.reason, observation, c.project_root) : null };
+  const reminder = event ? asOrchCommands(reminderText(event.id, event.reason, observation, c.project_root)) : null;
+  return { observation, event, reminder };
 });
 write("supervise.golden", JSON.stringify(supervised, null, 2));
 

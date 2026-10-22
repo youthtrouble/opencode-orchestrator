@@ -249,7 +249,7 @@ func mailboxReply(box *mailbox.Mailbox, project flipcmd.Project, rest []string, 
 		}
 	}
 	if idArg == "" || body == "" {
-		fmt.Fprintln(stdio.Err, `usage: mailbox.mjs reply <id-or-prefix> "your answer"`)
+		fmt.Fprintln(stdio.Err, `usage: orch mailbox reply <id-or-prefix> "your answer"`)
 		return 2
 	}
 	result, err := reply.Post(box, project, reply.Request{ID: idArg, Body: body})
@@ -295,7 +295,7 @@ func mailboxInbox(box *mailbox.Mailbox, stdio Stdio) int {
 		fmt.Fprintln(stdio.Out, "No open questions for you.")
 		return 0
 	}
-	reply := cmdref.MailboxReply(cmdref.OrchOnPath())
+	reply := cmdref.MailboxReply()
 	for _, m := range questions {
 		id8, err := sliceText(m, "id", 8)
 		if err != nil {

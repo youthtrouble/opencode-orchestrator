@@ -249,10 +249,10 @@ func (l *Launch) preamble() string {
 	return strings.Join([]string{
 		"You are a worker in an orchestrated multi-agent project at " + l.project.Root + ".",
 		"First read " + l.briefPath() + " (your bounded brief) and .orchestrator/STATE.md if it exists.",
-		"Check the mailbox for messages addressed to you: " + cmdref.Script("mailbox") + " list --to " + lane + " --unacked-by " + lane,
+		"Check the mailbox for messages addressed to you: " + cmdref.Command("mailbox") + " list --to " + lane + " --unacked-by " + lane,
 		"Do only the brief. When done, write your report where the brief says (default .orchestrator/reports/" + lane + ".md) including: outcome, files changed, exact checks run with results, what is NOT done, open questions.",
-		"Create a source manifest for the files you touched: " + cmdref.Script("manifest") + " create --task " + lane + " --author " + l.harness + " --out .orchestrator/manifests/" + lane + ".json <paths>",
-		"Finally post a release message: " + cmdref.Script("mailbox") + " post --from " + lane + " --to coordinator --kind release --subject \"" + lane + " released\" --ref .orchestrator/reports/" + lane + ".md --ref .orchestrator/manifests/" + lane + ".json --body \"<3-line summary>\"",
+		"Create a source manifest for the files you touched: " + cmdref.Command("manifest") + " create --task " + lane + " --author " + l.harness + " --out .orchestrator/manifests/" + lane + ".json <paths>",
+		"Finally post a release message: " + cmdref.Command("mailbox") + " post --from " + lane + " --to coordinator --kind release --subject \"" + lane + " released\" --ref .orchestrator/reports/" + lane + ".md --ref .orchestrator/manifests/" + lane + ".json --body \"<3-line summary>\"",
 		`If blocked, post kind blocked instead and stop. Be honest: unrun checks are "not run", unmet criteria mean "partial". Never approve your own work, never bypass permissions, never touch another lane's files.`,
 	}, "\n")
 }

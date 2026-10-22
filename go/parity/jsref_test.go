@@ -16,8 +16,8 @@ import (
 )
 
 // TestJSReference derives orch's texts from the JS reference's own source (ORCH_JS, which
-// run.sh extracts from the commit in go/parity/js-ref), so the literal expectations in the
-// unit tests cannot drift from the JS they were copied from.
+// run.sh extracts from the commit in go/parity/js-ref) through PE-19, so the literal
+// expectations in the unit tests cannot drift from the JS they were copied from.
 func TestJSReference(t *testing.T) {
 	orchJS := os.Getenv("ORCH_JS")
 	if orchJS == "" {
@@ -41,8 +41,8 @@ func TestJSReference(t *testing.T) {
 }
 
 // flip.mjs run writes its brief from a template literal whose only escapes are \n and whose
-// only substitutions are to, from and the reason. Rendering that literal pins the text byte
-// for byte.
+// only substitutions are to, from and the reason. Rendering that literal and mapping its
+// commands (PE-19) pins the text byte for byte.
 func testFlipTemplate(t *testing.T, source string) {
 	template := between(t, source, "fs.writeFileSync(brief, `", "`);")
 	rendered := strings.NewReplacer(
@@ -54,14 +54,20 @@ func testFlipTemplate(t *testing.T, source string) {
 	if strings.Contains(rendered, "${") || strings.Contains(rendered, `\`) {
 		t.Fatalf("the template has a substitution or escape this test does not render: %q", rendered)
 	}
-	if got := cmdref.ConductorContinueBrief("claude", "opencode", "handback: home door"); got != rendered {
-		t.Errorf("ConductorContinueBrief differs from flip.mjs\n got: %q\nwant: %q", got, rendered)
+	want := jsCommandsAsOrch(rendered)
+	if got := cmdref.ConductorContinueBrief("claude", "opencode", "handback: home door"); got != want {
+		t.Errorf("ConductorContinueBrief differs from flip.mjs\n got: %q\nwant: %q", got, want)
 	}
 }
 
-// The exec scripts' --help prints lines 2-12 of their own source joined by "\n".
+// The exec scripts' --help prints lines 2-12 of their own source joined by "\n"; orch prints
+// them as orch help (PE-19).
 func testHelpHeader(t *testing.T, source, help string) {
-	if want := strings.Join(strings.Split(source, "\n")[1:12], "\n"); help != want {
+	want, err := jsHelpAsOrch(strings.Join(strings.Split(source, "\n")[1:12], "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if help != want {
 		t.Errorf("help differs from the script header\n got: %q\nwant: %q", help, want)
 	}
 }
@@ -92,7 +98,7 @@ func testKickoffPrompt(t *testing.T, source string) {
 
 // kickoff.mjs prints its usage line from a string literal.
 func testKickoffUsage(t *testing.T, source string) {
-	want := "usage: " + between(t, source, `console.log("usage: `, `");`)
+	want := jsCommandsAsOrch("usage: " + between(t, source, `console.log("usage: `, `");`))
 	if got := cmdref.KickoffUsage(); got != want {
 		t.Errorf("KickoffUsage() = %q, want %q", got, want)
 	}
@@ -100,8 +106,9 @@ func testKickoffUsage(t *testing.T, source string) {
 
 // kickoff.mjs names the watch command in both its headless and interactive hints.
 func testKickoffWatchHint(t *testing.T, source string) {
+	source = jsCommandsAsOrch(source)
 	if got := cmdref.WatchFollow(); strings.Count(source, got) != 2 {
-		t.Errorf("WatchFollow() = %q appears %d times in kickoff.mjs, want 2", got, strings.Count(source, got))
+		t.Errorf("WatchFollow() = %q appears %d times in kickoff.mjs (PE-19), want 2", got, strings.Count(source, got))
 	}
 }
 

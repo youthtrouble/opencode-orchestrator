@@ -86,6 +86,8 @@ type bridgeCase struct {
 	// dropFakeLogs drops the fake's logs from the comparison, for a case whose CLI may be
 	// signalled before it has written them.
 	dropFakeLogs bool
+	// help marks the --help case, whose JS header is compared as orch help (PE-19).
+	help bool
 }
 
 // Fresh values, rewritten only in their exact place and format.
@@ -177,6 +179,7 @@ func (h *harness) bridgeInvocation(t *testing.T, b bridge, c bridgeCase) invocat
 		progress:        b.progress(),
 		projectPaths:    true,
 		normalizeWrites: b.normalizeRunFileNames(c.dropFakeLogs),
+		jsHelp:          c.help,
 	}
 }
 
@@ -320,7 +323,7 @@ func (h *harness) testClaudeExec(t *testing.T) {
 		{name: "flags/cwd", args: []string{"--cwd", "sub/../sub/", "--prompt", "p"}, fixture: "max-turns", seed: seedProjectFile("sub/.keep", "")},
 		{name: "flags/unknown-keys-are-flags", args: []string{"--frobnicate", "x", "--prompt", "p"}, fixture: "ok"},
 		{name: "quiet", args: append([]string{"--quiet"}, ok...), fixture: "max-turns"},
-		{name: "help", args: []string{"--prompt", "p", "--help"}},
+		{name: "help", args: []string{"--prompt", "p", "--help"}, help: true},
 
 		// Prompt sources.
 		{name: "prompt/positional", args: []string{"fix", "the", "bug"}, fixture: "ok"},

@@ -748,6 +748,7 @@ func (h *harness) runServeLaunch(t *testing.T, inv invocation, argv []string, la
 	collectExtraFiles(t, sb, inv, o.files)
 	o = o.withLaunch(l, runners)
 	o = o.withProjectPlaceholder(t, sb)
+	o = h.withPE19(t, argv, o, inv.jsHelp)
 	o = inv.normalizeWrites(o, before)
 	return o.normalized(inv.normalize), quoted
 }
@@ -794,6 +795,7 @@ func (h *harness) testServeClaudeResume(t *testing.T) {
 		reapClaudeExec(t, argv[0], sb)
 		withWakePromptDigest(t, argv[0], o.files)
 		o = o.withProjectPlaceholder(t, sb)
+		o = h.withPE19(t, argv, o, inv.jsHelp)
 		o = inv.normalizeWrites(o, before)
 		return o.normalized(inv.normalize)
 	}
