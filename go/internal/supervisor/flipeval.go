@@ -9,6 +9,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
 
 // Cadences of the flip evaluation, in seconds.
@@ -51,7 +52,13 @@ func (s *Supervisor) evaluateFlip(state *jsjson.Object, t *tick) error {
 	}
 	c.activeDoor = activeDoor
 	c.idle = !jsjson.Truthy(lane) || !s.Alive(jsjson.Path(lane, "pid"))
-	c.lockFree = !nodefs.Exists(filepath.Join(s.workers.WorkersDir, "conductor.lock"))
+	// PE-30: the conductor lane is locked only while the kernel says a runner holds its lock,
+	// so a lock file a killed runner left no longer blocks a relaunch.
+	lockHeld, _, err := ownlock.Probe(filepath.Join(s.workers.WorkersDir, "conductor.lock"))
+	if err != nil {
+		return err
+	}
+	c.lockFree = !lockHeld
 
 	awaitingHuman := jsjson.Path(c.flip, "awaiting_human")
 	if err := s.noteAwaitingHuman(state, t, awaitingHuman); err != nil {

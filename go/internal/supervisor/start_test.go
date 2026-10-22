@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -14,7 +15,6 @@ import (
 
 // starter records the detached launch instead of making it; no test starts a daemon.
 type starter struct {
-	live      map[float64]bool
 	keepAwake bool
 	pid       int
 	err       error
@@ -24,8 +24,7 @@ type starter struct {
 
 func (s *starter) Starter() Starter {
 	return Starter{
-		Self:  "/bin/orch",
-		Alive: func(pid any) bool { n, _ := pid.(float64); return s.live[n] },
+		Self: "/bin/orch",
 		KeepAwake: func(cmd string, args []string) (string, []string) {
 			if s.keepAwake {
 				return "caffeinate", append([]string{"-i", "-s", cmd}, args...)
@@ -107,24 +106,44 @@ func TestStartAppendsToTheLog(t *testing.T) {
 }
 
 func TestStartAlreadyRunning(t *testing.T) {
-	s := &starter{live: map[float64]bool{77: true}}
+	s := &starter{}
+	var holder *helper
 	_, out, err := startIn(t, s, func(p Project) {
-		mustWrite(t, p.LockPath, " 77\n")
+		holder = holdLock(t, p.LockPath)
 		mustWrite(t, p.StopPath, "")
 	})
-	if err != nil || out != `{"started":false,"reason":"already running","pid":77}` {
-		t.Errorf("out %s, %v", out, err)
+	if want := `{"started":false,"reason":"already running","pid":` + strconv.Itoa(holder.pid()) + `}`; err != nil || out != want {
+		t.Errorf("out %s, %v; want %s", out, err, want)
 	}
 	if len(s.launched) != 0 {
-		t.Error("launched over a live lock")
+		t.Error("launched over a held lock")
 	}
 }
 
-func TestStartOverAStaleLockLaunches(t *testing.T) {
-	s := &starter{pid: 5}
-	_, out, err := startIn(t, s, func(p Project) { mustWrite(t, p.LockPath, "77") })
-	if err != nil || len(s.launched) != 1 {
-		t.Errorf("out %s, %v, launched %d", out, err, len(s.launched))
+// PE-30: a lock file no process holds is a supervisor that is gone, whatever pid its text
+// names; the JS reports a live pid in it as running.
+func TestStartOverALockNoProcessHoldsLaunches(t *testing.T) {
+	for name, text := range map[string]string{"dead pid": "999999999", "live pid": strconv.Itoa(os.Getpid())} {
+		t.Run(name, func(t *testing.T) {
+			s := &starter{pid: 5}
+			_, out, err := startIn(t, s, func(p Project) { mustWrite(t, p.LockPath, text) })
+			if err != nil || len(s.launched) != 1 {
+				t.Errorf("out %s, %v, launched %d", out, err, len(s.launched))
+			}
+		})
+	}
+}
+
+func TestStartOverAnUnprobeableLockIsTheError(t *testing.T) {
+	s := &starter{}
+	_, _, err := startIn(t, s, func(p Project) {
+		if err := os.Mkdir(p.LockPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	})
+	wantError(t, err, `lock "supervisor.lock" is not a regular file`)
+	if len(s.launched) != 0 {
+		t.Error("launched over an unprobeable lock")
 	}
 }
 

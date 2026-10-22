@@ -5,7 +5,7 @@
 // pushes of one project.
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -20,7 +20,7 @@ import {
   TEAM_DOMAIN,
 } from "./access-emulator.ts";
 import { RunCleanup } from "./cleanup.ts";
-import { buildOrch, OrchSandbox, type Credentials } from "./orch.ts";
+import { buildLockHolder, buildOrch, holdLock, OrchSandbox, type Credentials } from "./orch.ts";
 import { getOnHost, OLD_PAGE_ORIGIN, PAGE_ORIGIN, Phone, type Json } from "./phone.ts";
 import { delay, freePort, startWorkerDev, type WorkerDev } from "./worker-dev.ts";
 
@@ -369,22 +369,27 @@ describe("Work Trains end to end", { timeout: 300_000 }, () => {
     const paused = await phone.project("alpha");
     assert.equal(paused.state, "paused");
 
-    // A live supervisor already holds the lock (this process), so resume has none to start.
+    // A live supervisor already holds the lock (a holder process with a real kernel lock, CA2),
+    // so resume has none to start.
     const lockFile = join(alpha, ".orchestrator", "supervisor.lock");
-    writeFileSync(lockFile, String(process.pid));
-    const tapKey = randomUUID();
-    const tap = await phone.act(paused.key, "resume", tapKey);
-    assert.equal(tap.status, 201);
-    await delay(PAST_UNDO_WINDOW_MS);
-    const { code, report } = await once();
-    assert.equal(code, 0, report.error);
-    assert.equal(report.applied, 1);
-    const flip = flipOf(alpha);
-    assert.equal(flip.awaiting_human, undefined, "the gate is cleared");
-    assert.equal(flip.pending_launch.to, "opencode");
-    assert.equal(flip.pending_launch.reason, "human gate cleared");
-    assert.equal(readFileSync(lockFile, "utf8"), String(process.pid), "no supervisor was started");
-    assert.equal((await phone.act(paused.key, "resume", tapKey)).body.action.status, "applied");
+    const holder = await holdLock(buildLockHolder(tmp), lockFile);
+    try {
+      const tapKey = randomUUID();
+      const tap = await phone.act(paused.key, "resume", tapKey);
+      assert.equal(tap.status, 201);
+      await delay(PAST_UNDO_WINDOW_MS);
+      const { code, report } = await once();
+      assert.equal(code, 0, report.error);
+      assert.equal(report.applied, 1);
+      const flip = flipOf(alpha);
+      assert.equal(flip.awaiting_human, undefined, "the gate is cleared");
+      assert.equal(flip.pending_launch.to, "opencode");
+      assert.equal(flip.pending_launch.reason, "human gate cleared");
+      assert.equal(readFileSync(lockFile, "utf8"), String(holder.pid), "no supervisor was started");
+      assert.equal((await phone.act(paused.key, "resume", tapKey)).body.action.status, "applied");
+    } finally {
+      await holder.release();
+    }
   });
 
   it("A1: neither the machine token nor the service secret appears in any output or file", () => {

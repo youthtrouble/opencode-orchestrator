@@ -32,6 +32,12 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   holder when it is the state's pid, so a killed runner's reused pid is never signalled (R3,
   PE-23). The lane-locked hint no longer says to remove the lock: never delete a lock file by
   hand.
+- supervisor (S13c): `orch supervisor serve` owns the project through a kernel record lock on
+  `supervisor.lock` held for its life, so of two serves started at once exactly one runs (sol-5
+  R2, supervisor side). Every lock reader asks the kernel, not the file or its pid text (PE-30):
+  `start` reports the kernel's holder; a lock file no process holds (a killed serve or runner)
+  is claimed by the next serve, is no lane `stale_lock`, and no longer blocks a conductor
+  relaunch; `remote apply`'s resume waits for a held supervisor lock.
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.

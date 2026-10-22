@@ -246,7 +246,7 @@ func TestFlipTargetNeverStartedNeedsEveryCondition(t *testing.T) {
 			f.write("flip.json", `{"to": "claude", "at": "2027-01-15T09:00:00.000Z", "pending_launch": {"to": "claude"}}`)
 		}, `{}`},
 		{"lane alive", func(f *fixture) { f.live[9] = true }, `{}`},
-		{"lock present", func(f *fixture) { f.write("workers/conductor.lock", "1") }, `{}`},
+		{"lock held", func(f *fixture) { f.holdLock("workers/conductor.lock") }, `{}`},
 		{"no lane", func(f *fixture) { f.write("workers/conductor.json", `null`) }, `{}`},
 		{"same door", func(f *fixture) {
 			f.write("workers/conductor.json", strings.Replace(deadConductor, `"opencode"`, `"claude"`, 1))
@@ -325,12 +325,37 @@ func TestFlipPendingLaunch(t *testing.T) {
 func TestFlipPendingLaunchWaitsForAnIdleLaneAndAFreeLock(t *testing.T) {
 	f := newFixture(t)
 	f.write("flip.json", `{"pending_launch": {"to": "claude"}}`)
-	f.write("workers/conductor.lock", "1")
+	f.holdLock("workers/conductor.lock")
 	f.decides("")
 	f.mustEvaluate(`{}`)
 	if len(f.launches()) != 0 || len(f.runs) != 1 {
 		t.Errorf("runs %+v, want only decide", f.runs)
 	}
+}
+
+// PE-30: a conductor lock file no process holds (a runner killed with SIGKILL) no longer
+// blocks the relaunch of an idle lane; the JS waits for the file to go.
+func TestFlipStaleConductorLockDoesNotBlockARelaunch(t *testing.T) {
+	t.Run("pending launch", func(t *testing.T) {
+		f := newFixture(t)
+		f.mkdir("logs")
+		f.write("flip.json", `{"pending_launch": {"to": "claude"}}`)
+		f.write("workers/conductor.lock", "999999999")
+		f.decides("")
+		f.mustEvaluate(`{}`)
+		if launches := f.launches(); len(launches) != 1 || launches[0].Args[1] != "run" {
+			t.Errorf("runs %+v, want one flip run", f.runs)
+		}
+	})
+	t.Run("flip target never started", func(t *testing.T) {
+		f := newFixture(t)
+		neverStarted(f)
+		f.write("workers/conductor.lock", "999999999")
+		f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-120)) + `}`)
+		if launches := f.launches(); len(launches) != 1 || launches[0].Args[7] != "flip target never started" {
+			t.Errorf("runs %+v, want the never-started launch", f.runs)
+		}
+	})
 }
 
 func TestFlipDecideOutputs(t *testing.T) {

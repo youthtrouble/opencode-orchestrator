@@ -24,6 +24,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/registry"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
@@ -417,31 +418,30 @@ const (
 )
 
 // ensureSupervisor returns once a live supervisor holds supervisor.lock, starting one when
-// none does. ErrSupervisorNotLive is a start that succeeded without one appearing in time.
+// none does. ErrSupervisorNotLive is a start that succeeded without one appearing in time; a
+// lock that cannot be probed is that error.
 func (a Applier) ensureSupervisor(root string) error {
-	if a.supervisorRunning(root) {
-		return nil
+	if running, err := supervisorRunning(root); running || err != nil {
+		return err
 	}
 	if err := a.StartSupervisor(root); err != nil {
 		return err
 	}
 	for range supervisorReadyPolls {
 		a.Sleep(supervisorReadyInterval)
-		if a.supervisorRunning(root) {
-			return nil
+		if running, err := supervisorRunning(root); running || err != nil {
+			return err
 		}
 	}
 	return ErrSupervisorNotLive
 }
 
-// supervisorRunning reads the pid the serving supervisor holds in supervisor.lock, as
-// `supervisor start` does before it launches another.
-func (a Applier) supervisorRunning(root string) bool {
-	data, err := os.ReadFile(supervisor.NewProject(root).LockPath)
-	if err != nil {
-		return false
-	}
-	return a.Alive(jsjson.ToNumber(string(data)))
+// supervisorRunning reports whether a process holds supervisor.lock, as `supervisor start`
+// asks before it launches another: the kernel's record lock (ownlock.Probe, PE-30), never the
+// pid text, so a lock file a killed supervisor left is not a live one.
+func supervisorRunning(root string) (bool, error) {
+	held, _, err := ownlock.Probe(supervisor.NewProject(root).LockPath)
+	return held, err
 }
 
 // StartSupervisorBySelfExec runs `orch supervisor start --cwd <root>` from this executable,

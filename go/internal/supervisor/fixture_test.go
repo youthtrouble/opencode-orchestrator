@@ -68,6 +68,14 @@ func newFixture(t *testing.T) *fixture {
 		},
 		Incident: func(d incident.Draft) { f.incidents = append(f.incidents, d) },
 	})
+	// A serve that crashed keeps its lock until its process exits; the test process does not.
+	t.Cleanup(func() {
+		if f.sup.lock != nil {
+			if err := f.sup.lock.Release(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
 	return f
 }
 

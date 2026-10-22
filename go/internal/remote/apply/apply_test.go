@@ -14,6 +14,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervisor"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/worker"
@@ -148,9 +149,17 @@ func (f *fixture) flip(t *testing.T) any {
 	return value
 }
 
-// holdSupervisorLock is a live supervisor claiming supervisor.lock.
+// holdSupervisorLock is a live supervisor claiming supervisor.lock: a helper process holding
+// its kernel lock until the test ends (CA2), unless one already does.
 func (f *fixture) holdSupervisorLock(t *testing.T) {
-	writeFile(t, supervisor.NewProject(f.root).LockPath, fmt.Sprintf("%d\n", livePid))
+	path := supervisor.NewProject(f.root).LockPath
+	if held, _, err := ownlock.Probe(path); err != nil || held {
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	holdLock(t, path)
 }
 
 func (f *fixture) journal() actionJournal { return newActionJournal(f.root) }
@@ -460,9 +469,10 @@ func TestResumeClearsTheGateAndQueuesTheRelaunch(t *testing.T) {
 	}
 }
 
+// PE-30: a supervisor.lock no process holds is no supervisor, whatever pid its text names.
 func TestResumeStartsTheSupervisorWhenNoneRuns(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, supervisor.NewProject(f.root).LockPath, "999999")
+	writeFile(t, supervisor.NewProject(f.root).LockPath, fmt.Sprintf("%d\n", os.Getpid()))
 	writeFile(t, f.flipPath(), `{"awaiting_human":{"door":"opencode"}}`)
 	got, err := f.applier.ApplyAction(action("resume"))
 	expect(t, got, err, Outcome{Applied, "resuming: opencode conductor relaunches within a minute"})

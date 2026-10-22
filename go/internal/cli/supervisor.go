@@ -81,8 +81,7 @@ func supervisorStart(project supervisor.Project, stdio Stdio) int {
 		return crash(stdio, err)
 	}
 	launched, err := project.Start(supervisor.Starter{
-		Self:  self,
-		Alive: worker.Alive,
+		Self: self,
 		KeepAwake: func(cmd string, args []string) (string, []string) {
 			return keepawake.Wrap(cmd, args, worker.KeepAwakeEnabled(os.Getenv))
 		},

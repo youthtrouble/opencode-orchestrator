@@ -7,6 +7,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 )
 
@@ -14,24 +15,32 @@ import (
 // tests inject them, so no unit test starts a daemon.
 type Starter struct {
 	Self      string                                             // this executable
-	Alive     func(pid any) bool                                 // worker.Alive
 	KeepAwake func(cmd string, args []string) (string, []string) // keepawake.Wrap, enabled per registry
 	Detach    func(procs.Detached) (int, error)                  // procs.Detached.Start
 }
 
-// Start is `start`: unless a live supervisor holds the lock, remove the stop file and launch
+// Start is `start`: unless a supervisor holds the lock, remove the stop file and launch
 // `<self> supervisor serve --cwd <root>` in a session of its own (kept awake when enabled),
 // its output appended to the supervisor log. The result is the JSON line start prints (exit
-// 0); the error is the one the JS dies of (exit 1).
+// 0); the error is the one the JS dies of (exit 1), or a lock that cannot be probed.
+//
+// PE-30: held means the kernel says a process holds the lock (ownlock.Probe), and the pid
+// reported is the kernel's holder; a lock file no process holds is a supervisor that is gone,
+// whatever pid its text names. The probe is advisory: serve's Acquire decides, so of two
+// starts that both probe "free", one serve claims the project and the other exits 1.
 func (p Project) Start(st Starter) (*jsjson.Object, error) {
 	if err := nodefs.MkdirPrivate(filepath.Dir(p.LogPath)); err != nil {
 		return nil, err
 	}
-	if holder := p.lockHolder(); st.Alive(holder) {
+	held, holder, err := ownlock.Probe(p.LockPath)
+	if err != nil {
+		return nil, err
+	}
+	if held {
 		running := jsjson.NewObject()
 		running.Set("started", false)
 		running.Set("reason", "already running")
-		running.Set("pid", holder)
+		running.Set("pid", float64(holder))
 		return running, nil
 	}
 	_ = syscall.Unlink(p.StopPath)

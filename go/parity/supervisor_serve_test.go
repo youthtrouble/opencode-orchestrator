@@ -211,7 +211,9 @@ func (h *harness) serveInvocation(c serveCase) invocation {
 		errorLine:    c.errorLine,
 		projectPaths: true,
 		normalize:    normalizeServe(time.Now()),
-		daemon:       true,
+		// A lock a helper holds names the helper's pid, which differs per sandbox.
+		normalizeWrites: func(o outcome, _ map[string]string) outcome { return withLockHolderPids(o) },
+		daemon:          true,
 	}
 }
 
@@ -297,7 +299,7 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "lane/interrupted", seed: seeds(seedWorkerState("c", `{"status": "interrupted", "run_id": "rc", "breadth": "deep"}`), command(0))},
 		{name: "lane/deferred-not-yet", seed: seeds(seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`), command(0))},
 		{name: "lane/unknown-status", seed: seeds(seedWorkerState("e", `{"status": "weird", "run_id": "re"}`), command(0))},
-		{name: "lane/stale-lock", seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedWorkerLock("f"), command(0))},
+		{name: "lane/stale-lock", seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedHeldLock(workerLockPath("f")), command(0))},
 		{name: "lane/process-exited", seed: seeds(seedWorkerState("g", `{"status": "running", "run_id": "rg", "pid": 999999999}`), command(0))},
 		{name: "lane/primitive-file", seed: seeds(seedWorkerState("h", `5`), command(0))},
 		{name: "lane/primitive-lanes", seed: seeds(finishedLane("a"), seedSupervisorState(`{"lanes": 5}`), command(0))},
@@ -328,7 +330,7 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		flipEvalCase("awaiting-human", seeds(seedFlip(`{"to": "claude", "at": "2026-10-19T10:00:00.000Z", "awaiting_human": {"reason": "push to main"}}`), seedProjectDir(".orchestrator/logs"))),
 		flipEvalCase("awaiting-human-already-logged", seeds(seedFlip(`{"awaiting_human": {"reason": "push"}}`), seedSupervisorState(`{"awaiting_human_logged": true}`))),
 		flipEvalCase("live-conductor", seeds(seedConductor(`{"status": "running", "harness": "claude", "pid": `+ownPid+`, "started_at": "2026-10-19T10:00:00.000Z"}`), seedFlip(`{"to": "opencode", "paused": true}`))),
-		flipEvalCase("conductor-lock-held", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "redispatched_at": "2026-10-19T10:00:00.000Z"}`), seedWorkerLock("conductor"), seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode"}}`), inCooldown, caches.green)),
+		flipEvalCase("conductor-lock-held", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "redispatched_at": "2026-10-19T10:00:00.000Z"}`), seedHeldLock(workerLockPath("conductor")), seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode"}}`), inCooldown, caches.green)),
 		// decide reads a green cache and stays, so only the cooldown keeps the finished-early
 		// lane from a relaunch (without a cache decide pauses and the cooldown is never reached).
 		flipEvalCase("finished-early-in-cooldown", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), inCooldown, caches.green)),
@@ -387,7 +389,15 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 	})
 	t.Run("live-lock", func(t *testing.T) {
 		t.Parallel()
-		h.comparePair(t, h.serveInvocation(serveCase{seed: seedProjectFile(".orchestrator/supervisor.lock", strconv.Itoa(os.Getpid()))}))
+		h.comparePair(t, h.serveInvocation(serveCase{seed: seedHeldLock(".orchestrator/supervisor.lock")}))
+	})
+	t.Run("PE-30-unheld-live-pid-lock", func(t *testing.T) {
+		t.Parallel()
+		h.testServePE30UnheldSupervisorLock(t)
+	})
+	t.Run("PE-30-unheld-lane-lock", func(t *testing.T) {
+		t.Parallel()
+		h.testServePE30UnheldLaneLock(t)
 	})
 	t.Run("channel/delivered", func(t *testing.T) {
 		t.Parallel()
@@ -405,6 +415,36 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		t.Parallel()
 		h.testServeArrayState(t)
 	})
+}
+
+// testServePE30UnheldSupervisorLock asserts PE-30 for serve: a supervisor.lock naming a live
+// pid (this test's) that no process holds is refused by the JS (pinned) and claimed by orch,
+// which ticks and stops.
+func (h *harness) testServePE30UnheldSupervisorLock(t *testing.T) {
+	js, orch := h.runPair(t, h.serveInvocation(serveCase{seed: seedProjectFile(".orchestrator/supervisor.lock", ownPid)}))
+	// The lock's pid is normalised to <pid>; its presence shows the JS left the seeded lock.
+	if _, locked := js.files["project/supervisor.lock"]; js.exitCode != 1 || js.stderr != "a supervisor already owns this project\n" || !locked {
+		t.Errorf("js: exit %d, stderr %q, lock left %v; want the pinned refusal", js.exitCode, js.stderr, locked)
+	}
+	_, locked := orch.files["project/supervisor.lock"]
+	if orch.exitCode != 0 || orch.stderr != "" || locked || !strings.Contains(orch.files["project/supervisor-state.json"], `"status": "stopped"`) {
+		t.Errorf("orch: exit %d, stderr %q, lock left %v, state %q; want a claimed, ticked and stopped serve", orch.exitCode, orch.stderr, locked, orch.files["project/supervisor-state.json"])
+	}
+}
+
+// testServePE30UnheldLaneLock asserts PE-30 for a lane: a finished lane whose lock file no
+// runner holds (pid text only, a runner killed with SIGKILL) is stale_lock in the JS (pinned)
+// and finished in orch.
+func (h *harness) testServePE30UnheldLaneLock(t *testing.T) {
+	const state = "project/supervisor-state.json"
+	c := serveCase{seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedWorkerLock("f"), seedWake("["+commandChannel(0)+"]"))}
+	js, orch := h.runPair(t, h.serveInvocation(c))
+	if !strings.Contains(js.files[state], `"phase": "stale_lock"`) {
+		t.Errorf("js state %q, want the pinned stale_lock phase", js.files[state])
+	}
+	if !strings.Contains(orch.files[state], `"phase": "finished"`) || strings.Contains(orch.files[state], "stale_lock") {
+		t.Errorf("orch state %q, want the finished phase", orch.files[state])
+	}
 }
 
 // requireFlipEvaluated fails the case unless the run's tick reached the flip evaluation and
@@ -440,7 +480,7 @@ func (h *harness) testSupervisorStart(t *testing.T) {
 		{"fresh", nil},
 		{"stop-file-removed", seedProjectFile(".orchestrator/supervisor.stop", "")},
 		{"stale-lock", seedProjectFile(".orchestrator/supervisor.lock", "999999999")},
-		{"already-running", seedProjectFile(".orchestrator/supervisor.lock", strconv.Itoa(os.Getpid())+"\n")},
+		{"already-running", seedHeldLock(".orchestrator/supervisor.lock")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -455,6 +495,26 @@ func (h *harness) testSupervisorStart(t *testing.T) {
 		t.Parallel()
 		h.testStartKeepAwake(t)
 	})
+	t.Run("PE-30-unheld-live-pid-lock", func(t *testing.T) {
+		t.Parallel()
+		h.testStartPE30UnheldLock(t)
+	})
+}
+
+// testStartPE30UnheldLock asserts PE-30 for start: a supervisor.lock naming a live pid (this
+// test's) that no process holds is "already running" in the JS (pinned) and a gone supervisor
+// in orch, which launches a serve (stopped by runStart).
+func (h *harness) testStartPE30UnheldLock(t *testing.T) {
+	s := seedProjectFile(".orchestrator/supervisor.lock", ownPid+"\n")
+	args := []string{"start", "--cwd", "."}
+	js := h.runStart(t, s, append([]string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, args...))
+	orch := h.runStart(t, s, append([]string{h.orchBin, "supervisor"}, args...))
+	if want := `{"started":false,"reason":"already running","pid":` + ownPid + "}\n"; js.stdout != want {
+		t.Errorf("js stdout %q, want the pinned %q", js.stdout, want)
+	}
+	if !strings.HasPrefix(orch.stdout, `{"started":true,"supervisor_pid":<pid>,`) {
+		t.Errorf("orch stdout %q, want a launched serve", orch.stdout)
+	}
 }
 
 // testStartKeepAwake: with the fake which finding the wrapper, each runtime launches its own
@@ -518,8 +578,9 @@ func (h *harness) runStart(t *testing.T, s seed, argv []string) outcome {
 		h.stopLaunched(t, sb, launched.Pid)
 		o.stdout = strings.Replace(o.stdout, `"supervisor_pid":`+strconv.Itoa(launched.Pid), `"supervisor_pid":<pid>`, 1)
 	}
+	o.stdout = withSupervisorHolder(o.stdout)
 	o.files = sb.files(t)
-	return o.withProjectPlaceholder(t, sb).normalized(normalizeServe(since))
+	return withLockHolderPids(o.withProjectPlaceholder(t, sb)).normalized(normalizeServe(since))
 }
 
 // stopLaunched waits for the launched serve to hold its lock and tick, writes the stop file

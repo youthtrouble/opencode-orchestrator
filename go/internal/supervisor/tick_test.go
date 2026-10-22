@@ -139,7 +139,7 @@ func TestTickPerPhase(t *testing.T) {
 			f.worker("b1", tc.fields)
 			f.live[7] = tc.live
 			if tc.lock {
-				f.write("workers/b1.lock", "")
+				f.holdLock("workers/b1.lock")
 			}
 			state := f.mustTick(`{}`)
 			if got := jsjson.Path(state, "lanes", "b1", "phase"); got != tc.phase {
@@ -168,12 +168,28 @@ func TestTickPerPhase(t *testing.T) {
 	}
 }
 
+// PE-30: a lane lock file no process holds (a runner killed with SIGKILL) is no stale_lock;
+// the lane reads as its terminal status. The JS tests the file's presence.
+func TestALaneLockFileNoProcessHoldsIsNotAStaleLock(t *testing.T) {
+	f := newFixture(t)
+	f.mkdir("logs")
+	f.worker("b1", `"status": "failed", "pid": 7`)
+	f.write("workers/b1.lock", "7")
+	state := f.mustTick(`{}`)
+	if got := jsjson.Path(state, "lanes", "b1", "phase"); got != "failed" {
+		t.Errorf("lane phase = %v, want failed", got)
+	}
+	if len(f.incidents) != 0 {
+		t.Errorf("incidents = %+v, want none", f.incidents)
+	}
+}
+
 func TestStaleLockIncidentIsRecordedOnEveryEmissionIncludingRetries(t *testing.T) {
 	f := newFixture(t)
 	f.mkdir("logs")
 	f.write("mailbox", "not a directory") // the post fails, no channel: delivery_failed
 	f.worker("b1", `"status": "failed", "pid": 7`)
-	f.write("workers/b1.lock", "")
+	f.holdLock("workers/b1.lock")
 	state := f.mustTick(`{}`)
 	if got := jsjson.Path(state, "events", "run-b1:stale_lock", "status"); got != "delivery_failed" {
 		t.Fatalf("status = %v", got)

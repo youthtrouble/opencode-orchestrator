@@ -10,6 +10,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervise"
 )
@@ -48,6 +49,8 @@ type Supervisor struct {
 	// deliver wakes the coordinator through one configured channel: deliverChannel, which
 	// tests of the tick replace.
 	deliver func(channel any, text string) *jsjson.Object
+	// lock is the project's lock while Serve holds it.
+	lock *ownlock.Lock
 }
 
 // New returns the supervisor of project with deps.
@@ -131,9 +134,15 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	}
 	worker.Set("lane", lane)
 
+	// PE-30: the lane's lock counts only while the kernel says a runner holds it; a lock file
+	// a killed runner left is no stale_lock.
+	lockHeld, _, err := ownlock.Probe(filepath.Join(s.workers.WorkersDir, lane+".lock"))
+	if err != nil {
+		return err
+	}
 	obs := supervise.Observe(worker, t.now, supervise.Liveness{
 		Alive:       s.Alive(jsjson.Path(worker, "pid")),
-		LockPresent: nodefs.Exists(filepath.Join(s.workers.WorkersDir, lane+".lock")),
+		LockPresent: lockHeld,
 	})
 	laneState := jsjson.Path(t.lanes, lane)
 	run := runValue(worker, obs)

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +17,29 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
-// supervisorHeldByThisTest locks the project's supervisor with this test process's pid, which
-// is only ever sent signal 0: `supervisor start` answers "already running" and starts nothing.
+// supervisorHeldByThisTest has a helper process hold the project's supervisor lock (CA2), whose
+// pid each runtime sees (the JS in the text, orch from the kernel) and only ever sends signal
+// 0: `supervisor start` answers "already running" and starts nothing.
 func supervisorHeldByThisTest() seed {
-	return seedProjectFile(".orchestrator/supervisor.lock", strconv.Itoa(os.Getpid())+"\n")
+	return seedHeldLock(".orchestrator/supervisor.lock")
+}
+
+// supervisorHolderLine is the "already running" answer naming a held supervisor lock's pid,
+// which differs per runtime's sandbox; withSupervisorHolder writes it as <holder>.
+const supervisorHolderLine = `supervisor: {"started":false,"reason":"already running","pid":<holder>}`
+
+var supervisorHolderPid = regexp.MustCompile(`("reason":"already running","pid":)(\d+)`)
+
+// withSupervisorHolder replaces the pid of an "already running" answer with <holder> when a
+// lock holder this test started has it.
+func withSupervisorHolder(s string) string {
+	return supervisorHolderPid.ReplaceAllStringFunc(s, func(m string) string {
+		parts := supervisorHolderPid.FindStringSubmatch(m)
+		if _, held := lockHolders.Load(parts[2]); held {
+			return parts[1] + "<holder>"
+		}
+		return m
+	})
 }
 
 // kickoffFeedsFail makes both feeds fail, so each runtime's refresh keeps the seeded cache's
@@ -60,7 +79,7 @@ func (h *harness) testKickoff(t *testing.T) {
 	preflightOnly := []string{"--brief", "a.md", "--door", "gemini"}
 	gate := seedFlip(`{"from":"opencode","to":"claude","at":"2026-01-01T00:00:00.000Z","awaiting_human":{"reason":"push?"}}`)
 	usageLine := cmdref.KickoffUsage()
-	supervisorLine := `supervisor: {"started":false,"reason":"already running","pid":` + strconv.Itoa(os.Getpid()) + `}`
+	supervisorLine := supervisorHolderLine
 	const dryRunSupervisorLine = "supervisor: not started (dry-run)"
 	door := func(door, vendor, home, mode string) string {
 		return "door: " + door + " (" + vendor + " green; home " + home + ") " + mode
@@ -162,6 +181,7 @@ func (h *harness) testKickoff(t *testing.T) {
 		h.testKickoffRegistryMissing(t, seeds(brief, c.green))
 	})
 	t.Run("launch", h.testKickoffLaunches)
+	t.Run("cleanup/unread-serve", h.testKickoffUnreadServeCleanup)
 }
 
 // compareKickoff checks that the JS run printed the expected line (or nothing, for "") and
@@ -278,8 +298,9 @@ func (h *harness) kickoffInvocation(c kickoffCase) invocation {
 		// a case may make .git a file
 		extraFilesMayBeBlocked: true,
 		normalize: func(s string) string {
-			return normalizeFlip(time.Now().Add(-time.Minute))(normalizeGeneratedAt(s))
+			return withSupervisorHolder(normalizeFlip(time.Now().Add(-time.Minute))(normalizeGeneratedAt(s)))
 		},
+		normalizeWrites: func(o outcome, _ map[string]string) outcome { return withLockHolderPids(o) },
 	}
 }
 
@@ -345,7 +366,7 @@ func (h *harness) testKickoffDryRunChangesNothingInTheProject(t *testing.T, s se
 				changed = append(changed, key)
 			}
 		}
-		return o
+		return withLockHolderPids(o)
 	}
 	js, orch := h.runPair(t, inv)
 	if len(unseeded) > 0 {
@@ -379,7 +400,7 @@ func (h *harness) testKickoffDryRunThenReal(t *testing.T, s seed, dryRun, real [
 		}
 		o := h.run(t, sb, realArgv, nil, then.env)
 		collectExtraFiles(t, sb, then, o.files)
-		return o.withProjectPlaceholder(t, sb).normalized(then.normalize)
+		return withLockHolderPids(o.withProjectPlaceholder(t, sb)).normalized(then.normalize)
 	}
 	js, orch := run("js", dry.js, then.js), run("orch", dry.orch, then.orch)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
