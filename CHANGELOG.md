@@ -21,6 +21,8 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
+  agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.
   Missing windows show `n/a` (unreadable readings stay unknown); weekly-only usage drives routing,
   flip, headroom, doctor and remote snapshots alone: amber steers, red blocks. PE-27 documents
