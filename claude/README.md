@@ -2,7 +2,7 @@
 
 `claude --agent conductor` is the Anthropic-native conductor. It mirrors the opencode conductor and
 shares everything with it: the project's `.orchestrator/` state, the mailbox, manifests, the
-autonomy policy and the scripts in `~/.config/opencode/orchestrator/bin`. Claude roles run as Claude
+autonomy policy and the `orch` commands. Claude roles run as Claude
 Code subagents; OpenAI roles (cross-vendor review, Sol/Astra work) go through the Codex bridge.
 
 ## Install
@@ -30,7 +30,7 @@ is skipped with a message, never replaced. Safe to re-run.
 | `researcher` | Sonnet 5.5, low | Official docs and current facts, with citations |
 | `reviewer` | Sonnet 5.5, medium | Same-vendor fallback review, only when the OpenAI window is red |
 
-Normal review is cross-vendor: `codex-exec.mjs --sandbox read-only` with GPT-6.1 Sol, or
+Normal review is cross-vendor: `orch codex-exec --sandbox read-only` with GPT-6.1 Sol, or
 `codex review --uncommitted`. Exploration uses Claude Code's built-in `Explore` agent.
 
 ## Skills
@@ -52,8 +52,8 @@ The opencode-side skills (`deep-planning`, `clean-code`, `cross-review`, `handof
 
 ## Headless use
 
-`kickoff.mjs --door claude --headless` and `flip.mjs run --to claude` start this conductor as the
-worker lane `conductor` through `claude-exec.mjs` with `--permission-mode auto`. A headless
+`orch kickoff --door claude --headless` and `orch flip run --to claude` start this conductor as the
+worker lane `conductor` through `orch claude-exec` with `--permission-mode auto`. A headless
 conductor cannot ask you anything: questions land in the mailbox. See
 [orchestrator/README.md](../orchestrator/README.md#flipping-between-the-two-doors) for the flip
 rules.

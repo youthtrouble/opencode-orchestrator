@@ -577,6 +577,12 @@
   or ORCH_RUNTIME (orch is the only runtime)` instead of running something else. The plugin tests no longer read
   the JS tree: the routing documents their fake `orch` replays are fixtures in `tests/fixtures/routing/`, the
   JS-vs-orch argv comparisons are pinned expectations, and `tests/plugin-orch-parity.test.mjs` is deleted.
+- prompts: `AGENTS.md`, the Claude agents (`conductor`, `coder`, `coder-hard`, `reviewer`), the Claude
+  `orchestrator` skill, `claude/README.md`, the `/continue`, `/usage` and `/retro` commands and the
+  `orchestrator-audit` skill call `orch <cmd> ...` instead of `node ~/.config/opencode/orchestrator/bin/<cmd>.mjs`
+  (the conductor's session-heartbeat hooks included); the audit's smoke tests are `orch doctor`, `orch usage
+  --refresh`, `orch codex-exec` and `orch claude-exec`, and a changed bridge flag is fixed in
+  `go/internal/bridge/`. Wording is otherwise unchanged.
 
 ## 0.5.0 — 2026-10-19
 
