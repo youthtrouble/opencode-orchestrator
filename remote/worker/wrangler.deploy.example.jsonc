@@ -1,8 +1,8 @@
 // Template for the owner's deploy config. Copy it to wrangler.deploy.jsonc (gitignored), fill in the
 // placeholders, and deploy with `wrangler deploy --config wrangler.deploy.jsonc`.
 //
-// Identity values are Worker secrets (`wrangler secret put <NAME> --config wrangler.deploy.jsonc`),
-// never config:
+// Identity values are Worker secrets, never config. Set them all in one `wrangler secret bulk` as in
+// remote/README.md section 2 (each `wrangler secret put` deploys the Worker at once):
 //   ACCESS_TEAM_DOMAIN        https://<team>.cloudflareaccess.com
 //   ACCESS_AUD                the Access application's AUD tag
 //   OWNER_EMAIL               the emails the browser routes accept, comma-separated (one is fine):

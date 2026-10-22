@@ -8,10 +8,10 @@
   "Before you start". Docs only.
 - remote: Worker secrets are set with one `wrangler secret bulk` instead of chained `wrangler secret put`s (SI-2).
   Each `secret put` deploys the Worker at once, so six of them made six deployments, each live with a partial set.
-  Section 2 now fills a private file (`umask 077`, outside the repository, deleted after) and sends it in one
-  request; the notification and `wrong_issuer` fixes set their two secrets the same way. Moving to another hostname
-  stays one `secret put PUBLIC_ORIGIN` plus the `wrangler deploy` its routes need. `orch remote token rotate` notes
-  that its `secret put` line deploys at once. See `remote/README.md`, "Reference".
+  Section 2 now fills a new private file (`mktemp` under `umask 077`, outside the repository, deleted after) and
+  sends it in one request; the notification and `wrong_issuer` fixes set their two secrets the same way. Moving to
+  another hostname stays one `secret put PUBLIC_ORIGIN` plus the `wrangler deploy` its routes need. `orch remote
+  token rotate` notes that its `secret put` line deploys at once. See `remote/README.md`, "Reference".
 
 - remote: a Work Trains push now fits the Workers Free plan's 50 D1 queries per invocation (SI-3). Before, a push
   that needed more failed with 500 part-way: a machine's first push of 24 question-less projects needed 51, and with 50

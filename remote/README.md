@@ -79,21 +79,21 @@ git status --porcelain              # must NOT list wrangler.deploy.jsonc
 wrangler d1 migrations apply work-trains --remote -c wrangler.deploy.jsonc
 orch remote token rotate            # stores the machine token in your Keychain; prints only its SHA-256
 wrangler deploy -c wrangler.deploy.jsonc   # 503 on every route until the secrets below exist
-(umask 077 && touch ~/work-trains-secrets.env)   # private to you, and outside the repository
-# In an editor, fill ~/work-trains-secrets.env with one KEY=value line per secret (PUBLIC_ORIGIN has no
-# trailing slash):
+f=$(umask 077 && mktemp "$HOME/work-trains-secrets.XXXXXX")   # a new file only you can read, outside the repository
+# In an editor, fill "$f" with one KEY=value line per secret (PUBLIC_ORIGIN has no trailing slash):
 #   ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com
 #   ACCESS_AUD=<the AUD tag>
 #   OWNER_EMAIL=<the policy's emails, comma-separated>
 #   ACCESS_SERVICE_CLIENT_ID=<the service token's Client ID>
 #   PUBLIC_ORIGIN=https://trains.example.com
 #   MACHINE_TOKEN_SHA256=<the hash token rotate printed>
-wrangler secret bulk ~/work-trains-secrets.env -c wrangler.deploy.jsonc   # all six in one request
-rm ~/work-trains-secrets.env                     # never commit it or keep it
+wrangler secret bulk "$f" -c wrangler.deploy.jsonc   # all six in one request
+rm -f "$f"                                            # never commit it or keep it
 ```
 
 `wrangler secret bulk` sets every secret in the file in one request, so the Worker goes from 503 to fully configured
-in one step. It also reads the same lines from stdin when you give it no file.
+in one step. It also reads the same lines from stdin when you give it no file. `mktemp` makes a file that did not
+exist before, so it never inherits an older file's wider permissions.
 
 The deploy config keeps `workers_dev: false` and `preview_urls: false`, so the Worker is reachable only on your
 hostname, behind Access. `UNDO_SECONDS` (default 10) is how long the page offers Undo before the Mac may pull an
@@ -108,12 +108,12 @@ and click the verification link
 `wrangler secret bulk`, the same way:
 
 ```sh
-(umask 077 && touch ~/work-trains-secrets.env)
-# In an editor:
+f=$(umask 077 && mktemp "$HOME/work-trains-secrets.XXXXXX")
+# In an editor, fill "$f":
 #   NOTIFY_FROM=<a sender address on the Email Routing subdomain>
 #   NOTIFY_TO=<your verified address>
-wrangler secret bulk ~/work-trains-secrets.env -c wrangler.deploy.jsonc
-rm ~/work-trains-secrets.env
+wrangler secret bulk "$f" -c wrangler.deploy.jsonc
+rm -f "$f"
 ```
 
 When GitHub Actions deploys (below), also set the environment variable `WORK_TRAINS_SEND_EMAIL` to `true`, or the
