@@ -39,9 +39,10 @@
     { "action": "read",  "resource": "*.env.example",          "effect": "allow" }
   ],
 
-  // The orchestrator plugin's runtime is "js" (default) or "go" (every tool and hook through `orch`).
-  // Select go with ORCH_RUNTIME=go in the opencode service environment (the supported switch).
-  // Object-form plugin options did not reach the plugin in the S10 live check; see README
-  // "Plugin runtime".
+  // The orchestrator plugin runs every tool and hook through `orch`, its only runtime since 0.6.0.
+  // The object form with a "binary" option is still supported; "runtime" is accepted only as "go",
+  // and the removed js runtime (option or ORCH_RUNTIME) is a configuration error naming the fix.
+  // Object-form plugin options did not reach the plugin in the S10 live check, so prefer ORCH_BIN
+  // in the opencode service environment; see README "Plugin runtime".
   "plugins": ["*"]  // plugins/*.ts in this directory are auto-discovered
 }

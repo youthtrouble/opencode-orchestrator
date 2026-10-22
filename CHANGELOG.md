@@ -570,6 +570,13 @@
   by install.sh and uninstall.sh` instead of a FAIL, and a new `orch on PATH` row after `orch binary` checks that
   `orch` on `PATH` is this binary (OK), warns when it is not on `PATH` (naming the directory to add) or when
   `PATH` resolves another `orch` (with its version); the row never fails doctor (PE-18).
+- plugin: `orch` is the plugin's only runtime; the JS runtime is gone, so the plugin never imports or spawns
+  orchestrator JS. With no `runtime` option and no `ORCH_RUNTIME` it runs `orch`, and `runtime: "go"` still works.
+  **Upgrade:** remove `ORCH_RUNTIME=js` (e.g. `opencode service unset env ORCH_RUNTIME`) or a `runtime: "js"`
+  option; either now fails every `orch_*` tool with `the js runtime was removed in 0.6.0; remove the runtime option
+  or ORCH_RUNTIME (orch is the only runtime)` instead of running something else. The plugin tests no longer read
+  the JS tree: the routing documents their fake `orch` replays are fixtures in `tests/fixtures/routing/`, the
+  JS-vs-orch argv comparisons are pinned expectations, and `tests/plugin-orch-parity.test.mjs` is deleted.
 
 ## 0.5.0 — 2026-10-19
 

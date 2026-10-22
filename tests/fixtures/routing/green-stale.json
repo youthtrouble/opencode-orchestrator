@@ -1,0 +1,449 @@
+{
+  "usage": {
+    "generated_at": "2026-10-22T14:09:10.827Z",
+    "claude": {
+      "ok": true,
+      "source": "claude-code-keychain",
+      "plan": "team",
+      "tier": "default_claude_max_5x",
+      "session": {
+        "pct": 12,
+        "resets_at": "2099-01-01T05:00:00.123456+00:00",
+        "severity": "normal"
+      },
+      "weekly": {
+        "pct": null,
+        "resets_at": null,
+        "severity": null
+      },
+      "weekly_by_model": {
+        "fable": {
+          "pct": 20,
+          "resets_at": "2099-01-07T00:00:00.5+00:00",
+          "severity": "normal",
+          "active": true
+        }
+      },
+      "extra_usage_enabled": false,
+      "locked_reason": null
+    },
+    "codex": {
+      "ok": true,
+      "plan": "plus",
+      "five_hour": {
+        "pct": 5,
+        "resets_at": "2099-01-01T05:00:00.000Z",
+        "window_mins": 300
+      },
+      "weekly": {
+        "pct": 10,
+        "resets_at": "2099-01-07T00:00:00.000Z",
+        "window_mins": 10080
+      },
+      "rate_limit_reached": null,
+      "ordinary_usage_allowed": true,
+      "reset_credits_available": 3,
+      "credits": {
+        "hasCredits": false,
+        "unlimited": false,
+        "balance": "0"
+      }
+    },
+    "stale": true
+  },
+  "registry": {
+    "$comment": "Configuration: vendors define subscription labels, windows and model tiers; roles list tier preferences; thresholds are percent used and reset grace minutes. last_verified is an ISO date. Refresh with /audit-orchestrator.",
+    "last_verified": "2026-10-18",
+    "vendors": {
+      "anthropic": {
+        "opencode_provider": "anthropic",
+        "cli": "claude",
+        "subscription": "Claude subscription via Claude Code",
+        "windows": [
+          "session (5h)",
+          "weekly (all models)",
+          "weekly scoped: Fable"
+        ],
+        "tiers": {
+          "frontier": {
+            "opencode": "anthropic/claude-fable-5-1",
+            "cli": "claude-fable-5-1",
+            "variant": "high",
+            "context": 1000000,
+            "note": "Fable 5.1: deepest reasoning; has its own weekly cap. Use for planning/architecture/hard debugging only."
+          },
+          "strong": {
+            "opencode": "anthropic/claude-opus-5-5",
+            "cli": "claude-opus-5-5",
+            "variant": "medium",
+            "context": 1000000,
+            "note": "Opus 5.5: Anthropic's recommended default; the everyday writer. Clean, maintainable code. Default coder. Default effort medium; we run high for implementation."
+          },
+          "mid": {
+            "opencode": "anthropic/claude-sonnet-5-5",
+            "cli": "claude-sonnet-5-5",
+            "variant": "medium",
+            "context": 1000000,
+            "note": "Sonnet 5.5: reviews, verification, research, test writing."
+          },
+          "cheap": {
+            "opencode": "anthropic/claude-haiku-5-5",
+            "cli": "claude-haiku-5-5",
+            "variant": null,
+            "context": 1000000,
+            "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated."
+          }
+        },
+        "fable_note": "On plans that include Fable, Fable draws from the weekly pool under its own scoped limit ('weekly_scoped' in the usage endpoint). Routing treats that window separately."
+      },
+      "openai": {
+        "opencode_provider": "openai",
+        "cli": "codex",
+        "subscription": "ChatGPT subscription via Codex / opencode",
+        "windows": [
+          "primary (5h)",
+          "secondary (weekly)"
+        ],
+        "tiers": {
+          "frontier": {
+            "opencode": "openai/gpt-6-astra",
+            "cli": "gpt-6-astra",
+            "effort": "high",
+            "context": 272000,
+            "note": "GPT-6 Astra: frontier tier (API $10/$50). Planning/hard debugging when Fable/Claude is constrained. Expensive in subscription usage terms; use sparingly."
+          },
+          "strong": {
+            "opencode": "openai/gpt-6.1-sol",
+            "cli": "gpt-6.1-sol",
+            "effort": "medium",
+            "context": 500000,
+            "note": "GPT-6.1 Sol: Codex's workhorse (500k ctx in Codex, 'near-Astra at 1/5 cost'). Long-running autonomous implementation and blind second-opinion review."
+          },
+          "mid": {
+            "opencode": "openai/gpt-6.1-sol",
+            "cli": "gpt-6.1-sol",
+            "effort": "medium",
+            "context": 500000,
+            "note": "Same model, medium effort: code review of Anthropic-written code (cross-vendor review)."
+          },
+          "cheap": {
+            "opencode": "openai/gpt-6-luna",
+            "cli": "gpt-6-luna",
+            "effort": "low",
+            "context": 272000,
+            "note": "GPT-6 Luna (API $0.10/$0.50): exploration, lint-level review, summaries. ~10x cheaper in usage than Sol."
+          }
+        },
+        "notes": "GPT-5.5/5.4 retired from ChatGPT sign-in (Oct 2026). 'ultra' effort auto-delegates subagents inside Codex. Fast tier costs 2.5x usage; never enable it automatically.",
+        "catalog_note": "Verify the live catalog for your account with `codex debug models`; the audit skill does this."
+      }
+    },
+    "roles": {
+      "planner": {
+        "purpose": "Deep, tireless, meticulous planning and architecture. Thinks; does not write product code. Fable only while its weekly posture is green (or size=hard); otherwise Opus 5.5 high. GPT-6 Astra is reached only by size=hard when Fable is unavailable.",
+        "prefer": [
+          "anthropic.frontier",
+          "anthropic.strong",
+          "openai.strong"
+        ]
+      },
+      "coder": {
+        "purpose": "Writes the actual code. Clean, maintainable, beautiful. Opus 5.5 and GPT-6.1 Sol are both first-class; the vendor with more 5-hour headroom gets the slice.",
+        "prefer": [
+          "anthropic.strong",
+          "openai.strong"
+        ]
+      },
+      "reviewer": {
+        "purpose": "Reviews code written by the OTHER vendor (cross-vendor review). Correctness + craft.",
+        "prefer": [
+          "cross.mid",
+          "cross.cheap",
+          "same.mid"
+        ]
+      },
+      "verifier": {
+        "purpose": "Runs tests, reproduces bugs, checks claims against reality, red-team QA.",
+        "prefer": [
+          "anthropic.mid",
+          "openai.cheap",
+          "anthropic.cheap"
+        ]
+      },
+      "researcher": {
+        "purpose": "Reads docs and the web, summarizes with citations.",
+        "prefer": [
+          "anthropic.mid",
+          "openai.cheap"
+        ]
+      },
+      "explorer": {
+        "purpose": "Fast codebase search and orientation.",
+        "prefer": [
+          "anthropic.cheap",
+          "openai.cheap"
+        ]
+      },
+      "utility": {
+        "purpose": "Titles, summaries, compaction.",
+        "prefer": [
+          "anthropic.cheap",
+          "openai.cheap"
+        ]
+      }
+    },
+    "thresholds": {
+      "$comment": "percent used. The 5-hour window (Claude session / Codex primary) drives routing; weekly caps only block a vendor when RED (they are long-horizon signals, shown but not steering). When both vendors can serve a role at an equivalent tier, the one with more 5-hour headroom wins if it leads by more than balance_margin points; otherwise the registry order is the tie-break.",
+      "amber": 60,
+      "red": 85,
+      "soon_minutes": 20,
+      "balance_margin": 15
+    },
+    "sources": [
+      "https://platform.claude.com/docs/en/models/overview",
+      "https://code.claude.com/docs/en/model-config",
+      "https://support.claude.com/en/articles/15424964",
+      "https://learn.chatgpt.com/docs/models",
+      "https://learn.chatgpt.com/docs/pricing.md",
+      "https://models.dev/api.json"
+    ],
+    "effort_policy": {
+      "$comment": "Effort scales with the task, never pinned. Sizes: trivial (rename, one-liner), small (<1h, one file), medium (one bounded brief), large (multi-file slice), hard (gnarly bug, architecture, subtle concurrency). Default size is medium. Escalate on failure, not pre-emptively. Both vendors use low|medium|high|xhigh|max; Claude maps max->max, OpenAI additionally has ultra (never automatic).",
+      "default_size": "medium",
+      "planner": {
+        "trivial": "low",
+        "small": "medium",
+        "medium": "high",
+        "large": "high",
+        "hard": "max"
+      },
+      "coder": {
+        "trivial": "low",
+        "small": "medium",
+        "medium": "medium",
+        "large": "high",
+        "hard": "xhigh"
+      },
+      "reviewer": {
+        "trivial": "low",
+        "small": "low",
+        "medium": "medium",
+        "large": "medium",
+        "hard": "high"
+      },
+      "verifier": {
+        "trivial": "low",
+        "small": "low",
+        "medium": "low",
+        "large": "medium",
+        "hard": "medium"
+      },
+      "researcher": {
+        "trivial": "low",
+        "small": "low",
+        "medium": "medium",
+        "large": "medium",
+        "hard": "high"
+      },
+      "explorer": {
+        "trivial": "low",
+        "small": "low",
+        "medium": "low",
+        "large": "low",
+        "hard": "medium"
+      },
+      "native_redirect_max_size": "medium"
+    },
+    "conductor": {
+      "$comment": "Which front door owns a project by default and how hand-back works. Flips happen only when the active conductor's own vendor is red (forced) or, for the away conductor, at a brief boundary once the home vendor is stably green again.",
+      "home": "opencode",
+      "return_policy": "boundary",
+      "green_grace_minutes": 10,
+      "flip_cooldown_minutes": 10
+    },
+    "runtime": {
+      "keep_awake": true,
+      "$comment": "Wrap detached workers and the supervisor in caffeinate (macOS) / systemd-inhibit (Linux) so long runs survive idle sleep. Lid-closed sleep still happens on a laptop without external display + power."
+    },
+    "autonomy": {
+      "$comment": "What a conductor may do without asking. 'auto' = do it when the slice is verified (review pass + checks green); 'ask' = post a question to the mailbox, record a human gate ONLY if no independent work remains, otherwise keep working. openai_credits: 'off' (default) never draws ChatGPT credits; 'on' lets OpenAI roles whose plan limit is reached run on credits through the codex bridge while the balance is above openai_credits_floor (optional, default 0). Per-project override: .orchestrator/policy.json (same keys).",
+      "push_to_main": "auto",
+      "release": "ask",
+      "delete_code": "ask",
+      "spend": "ask",
+      "deploy": "ask",
+      "force_push": "never",
+      "product_questions": "continue_with_assumption",
+      "openai_credits": "off"
+    }
+  },
+  "channels": {
+    "anthropic": false,
+    "openai": true
+  },
+  "resolved": {
+    "postures": {
+      "anthropic": {
+        "available": true,
+        "overall": "green",
+        "frontier": "green",
+        "headroom": 88,
+        "windows": {
+          "session": "green",
+          "weekly": "unknown",
+          "fable": "green"
+        },
+        "resets_soon": false,
+        "detail": {
+          "ok": true,
+          "source": "claude-code-keychain",
+          "plan": "team",
+          "tier": "default_claude_max_5x",
+          "session": {
+            "pct": 12,
+            "resets_at": "2099-01-01T05:00:00.123456+00:00",
+            "severity": "normal"
+          },
+          "weekly": {
+            "pct": null,
+            "resets_at": null,
+            "severity": null
+          },
+          "weekly_by_model": {
+            "fable": {
+              "pct": 20,
+              "resets_at": "2099-01-07T00:00:00.5+00:00",
+              "severity": "normal",
+              "active": true
+            }
+          },
+          "extra_usage_enabled": false,
+          "locked_reason": null
+        }
+      },
+      "openai": {
+        "available": true,
+        "overall": "green",
+        "frontier": "green",
+        "headroom": 95,
+        "windows": {
+          "five_hour": "green",
+          "weekly": "green"
+        },
+        "resets_soon": false,
+        "detail": {
+          "ok": true,
+          "plan": "plus",
+          "five_hour": {
+            "pct": 5,
+            "resets_at": "2099-01-01T05:00:00.000Z",
+            "window_mins": 300
+          },
+          "weekly": {
+            "pct": 10,
+            "resets_at": "2099-01-07T00:00:00.000Z",
+            "window_mins": 10080
+          },
+          "rate_limit_reached": null,
+          "ordinary_usage_allowed": true,
+          "reset_credits_available": 3,
+          "credits": {
+            "hasCredits": false,
+            "unlimited": false,
+            "balance": "0"
+          }
+        }
+      }
+    },
+    "roles": {
+      "planner": {
+        "vendor": "anthropic",
+        "tier": "frontier",
+        "model": "anthropic/claude-fable-5-1",
+        "cli_model": "claude-fable-5-1",
+        "cli": "claude",
+        "variant": "high",
+        "effort": null,
+        "context": 1000000,
+        "note": "Fable 5.1: deepest reasoning; has its own weekly cap. Use for planning/architecture/hard debugging only.",
+        "via": "claude-cli"
+      },
+      "coder": {
+        "vendor": "anthropic",
+        "tier": "strong",
+        "model": "anthropic/claude-opus-5-5",
+        "cli_model": "claude-opus-5-5",
+        "cli": "claude",
+        "variant": "medium",
+        "effort": null,
+        "context": 1000000,
+        "note": "Opus 5.5: Anthropic's recommended default; the everyday writer. Clean, maintainable code. Default coder. Default effort medium; we run high for implementation.",
+        "via": "claude-cli"
+      },
+      "reviewer": {
+        "vendor": "openai",
+        "tier": "mid",
+        "model": "openai/gpt-6.1-sol",
+        "cli_model": "gpt-6.1-sol",
+        "cli": "codex",
+        "variant": null,
+        "effort": "medium",
+        "context": 500000,
+        "note": "Same model, medium effort: code review of Anthropic-written code (cross-vendor review).",
+        "cross_vendor": true,
+        "via": "opencode"
+      },
+      "verifier": {
+        "vendor": "anthropic",
+        "tier": "mid",
+        "model": "anthropic/claude-sonnet-5-5",
+        "cli_model": "claude-sonnet-5-5",
+        "cli": "claude",
+        "variant": "medium",
+        "effort": null,
+        "context": 1000000,
+        "note": "Sonnet 5.5: reviews, verification, research, test writing.",
+        "via": "claude-cli"
+      },
+      "researcher": {
+        "vendor": "anthropic",
+        "tier": "mid",
+        "model": "anthropic/claude-sonnet-5-5",
+        "cli_model": "claude-sonnet-5-5",
+        "cli": "claude",
+        "variant": "medium",
+        "effort": null,
+        "context": 1000000,
+        "note": "Sonnet 5.5: reviews, verification, research, test writing.",
+        "via": "claude-cli"
+      },
+      "explorer": {
+        "vendor": "anthropic",
+        "tier": "cheap",
+        "model": "anthropic/claude-haiku-5-5",
+        "cli_model": "claude-haiku-5-5",
+        "cli": "claude",
+        "variant": null,
+        "effort": null,
+        "context": 1000000,
+        "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated.",
+        "via": "claude-cli"
+      },
+      "utility": {
+        "vendor": "anthropic",
+        "tier": "cheap",
+        "model": "anthropic/claude-haiku-5-5",
+        "cli_model": "claude-haiku-5-5",
+        "cli": "claude",
+        "variant": null,
+        "effort": null,
+        "context": 1000000,
+        "note": "Haiku 5.5 (2026-10-07): exploration, titles, summaries, mechanical edits. Falls back to claude-haiku-4-5-20250101 if the alias is gated.",
+        "via": "claude-cli"
+      }
+    },
+    "reasons": [],
+    "paused": false
+  },
+  "prompt": "Claude (team): session 12% [green] resets 2099-01-01T05:00:00.123456+00:00; weekly n/a%; Fable weekly 20% [green] resets 2099-01-07T00:00:00.5+00:00.\nCodex (plus): 5h 5% [green] resets 2099-01-01T05:00:00.000Z; weekly 10% [green] resets 2099-01-07T00:00:00.000Z; no credits; 3 banked resets (window resets, not money).\nRouting now:\n  planner: anthropic/claude-fable-5-1#high via claude-cli\n  coder: anthropic/claude-opus-5-5#medium via claude-cli\n  reviewer: openai/gpt-6.1-sol (effort medium) via opencode\n  verifier: anthropic/claude-sonnet-5-5#medium via claude-cli\n  researcher: anthropic/claude-sonnet-5-5#medium via claude-cli\n  explorer: anthropic/claude-haiku-5-5 via claude-cli\n  utility: anthropic/claude-haiku-5-5 via claude-cli"
+}
