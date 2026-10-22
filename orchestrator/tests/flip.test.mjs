@@ -6,6 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { clearGate, decideFlip, ensureGitExclude } from "../lib/flip.mjs";
+import { vendorPostures } from "../lib/routing.mjs";
 
 const flipCli = fileURLToPath(new URL("../bin/flip.mjs", import.meta.url));
 
@@ -51,6 +52,25 @@ function flip(project, ...args) {
   return r.stdout.trim();
 }
 const readFlipJson = (project) => JSON.parse(fs.readFileSync(path.join(project, ".orchestrator", "flip.json"), "utf8"));
+
+test("weekly-only Codex flip uses weekly red and weekly reset grace (Go contract)", () => {
+  const reg = { ...registry, thresholds: { amber: 60, red: 85, soon_minutes: 20 } };
+  for (const [pct, claudePct, resetIn, active, action, to] of [
+    [0, 10, 10080 - 5, "claude", "stay"],
+    [0, 10, 10080 - 60, "claude", "handback", "opencode"],
+    [85, 10, 10080, "opencode", "flip", "claude"],
+    [85, 99, 10080, "opencode", "pause"],
+    [0, 10, 10080, "opencode", "stay"],
+  ]) {
+    const usage = {
+      claude: { ok: true, session: { pct: claudePct }, weekly: { pct: 10 } },
+      codex: { ok: true, plan: "prolite", five_hour: { pct: null, resets_at: null, window_mins: null, applicable: false }, weekly: { pct, resets_at: new Date(now + resetIn * 60000).toISOString(), window_mins: 10080 } },
+    };
+    const d = decideFlip({ active, postures: vendorPostures(usage, reg, now), registry: reg, nowMs: now });
+    assert.equal(d.action, action);
+    if (to) assert.equal(d.to, to);
+  }
+});
 
 test("gate --clear removes the gate and queues a relaunch of the gated door", (t) => {
   const project = tempProject(t);

@@ -71,6 +71,17 @@ test("the bridge gate refuses a red OpenAI window unless the project's policy fu
   assert.equal((await budgetGate("openai", { cwd: project({ openai_credits: "on", openai_credits_floor: "300" }), mayDrawCredits: true })).allowed, false, "floor respected");
 });
 
+test("weekly-only red refusal names the weekly reset", async () => {
+  writeLimitReachedCache();
+  const cache = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+  cache.codex = { ok: true, five_hour: { pct: null, resets_at: null, applicable: false }, weekly: { pct: 85, resets_at: inHours(100) } };
+  fs.writeFileSync(USAGE_FILE, JSON.stringify(cache));
+  const d = await budgetGate("openai", { cwd: project(null) });
+  assert.equal(d.allowed, false);
+  assert.equal(d.resets_at, cache.codex.weekly.resets_at);
+  assert.ok(d.note.includes(cache.codex.weekly.resets_at));
+});
+
 test("a credit draw is decided on a fresh reading and refused without one", async () => {
   const floor20 = project({ openai_credits: "on", openai_credits_floor: "20" });
   writeLimitReachedCache();

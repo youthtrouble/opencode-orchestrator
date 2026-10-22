@@ -22,11 +22,19 @@ export function loadRegistry() {
 export function normalizeCodex({ account, limits }) {
   const rl = limits?.rateLimits || limits?.rateLimitsByLimitId?.codex || {};
   const iso = (s) => (typeof s === "number" ? new Date(s * 1000).toISOString() : null);
+  const candidates = [rl.primary, rl.secondary].map((w) => w && typeof w === "object" && !Array.isArray(w) ? w : null);
+  const slots = candidates.map((w, i) => typeof w?.windowDurationMins === "number" ? (w.windowDurationMins < 1440 ? 0 : 1) : i);
+  // Ambiguous durations retain the legacy positional mapping.
+  if (candidates.every(Boolean) && slots[0] === slots[1]) slots.splice(0, 2, 0, 1);
+  const windows = [null, null];
+  candidates.forEach((w, i) => { if (w) windows[slots[i]] = w; });
+  const labeled = candidates.some((w) => typeof w?.windowDurationMins === "number");
+  const window = (w) => ({ pct: w?.usedPercent ?? null, resets_at: iso(w?.resetsAt), window_mins: w?.windowDurationMins ?? null, ...(!w && labeled ? { applicable: false } : {}) });
   return {
     ok: true,
     plan: account?.account?.planType || rl.planType || null,
-    five_hour: { pct: rl.primary?.usedPercent ?? null, resets_at: iso(rl.primary?.resetsAt), window_mins: rl.primary?.windowDurationMins ?? null },
-    weekly: { pct: rl.secondary?.usedPercent ?? null, resets_at: iso(rl.secondary?.resetsAt), window_mins: rl.secondary?.windowDurationMins ?? null },
+    five_hour: window(windows[0]),
+    weekly: window(windows[1]),
     rate_limit_reached: rl.rateLimitReachedType || null,
     ordinary_usage_allowed: limits?.ordinaryUsageAllowed ?? null,
     reset_credits_available: limits?.rateLimitResetCredits?.availableCount ?? 0,

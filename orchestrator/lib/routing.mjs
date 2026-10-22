@@ -10,6 +10,7 @@ export function postureFromPct(pct, thresholds, { locked = false } = {}) {
 }
 
 const RANK = { green: 0, unknown: 1, amber: 2, red: 3 };
+export const NOT_APPLICABLE = "n/a";
 export const worst = (...p) => p.reduce((a, b) => (RANK[b] > RANK[a] ? b : a), "green");
 
 function minutesUntil(iso, now) {
@@ -48,11 +49,14 @@ export function vendorPostures(usage, registry, now = Date.now()) {
 
   const x = usage.codex;
   if (x?.ok) {
-    const fiveSoon = (minutesUntil(x.five_hour.resets_at, now) ?? 1e9) <= th.soon_minutes;
-    const five = postureFromPct(x.five_hour.pct, th, { locked: Boolean(x.rate_limit_reached) });
-    const weekly = postureFromPct(x.weekly.pct, th);
+    const weeklyOnly = x.five_hour.applicable === false;
+    const driving = weeklyOnly ? x.weekly : x.five_hour;
+    const drivingSoon = (minutesUntil(driving.resets_at, now) ?? 1e9) <= th.soon_minutes;
+    const five = weeklyOnly ? NOT_APPLICABLE : postureFromPct(x.five_hour.pct, th, { locked: Boolean(x.rate_limit_reached) });
+    const weekly = x.weekly.applicable === false ? NOT_APPLICABLE : postureFromPct(x.weekly.pct, th, { locked: weeklyOnly && Boolean(x.rate_limit_reached) });
     const weeklyBlockO = weekly === "red" ? "red" : "green";
-    out.openai = { available: true, overall: worst(five, weeklyBlockO), frontier: worst(five, weeklyBlockO), headroom: x.five_hour.pct === null || x.five_hour.pct === undefined ? null : 100 - x.five_hour.pct, windows: { five_hour: five, weekly }, resets_soon: fiveSoon, detail: x };
+    const overall = weeklyOnly ? weekly : worst(five, weeklyBlockO);
+    out.openai = { available: true, overall, frontier: overall, headroom: driving.pct === null || driving.pct === undefined ? null : 100 - driving.pct, windows: { five_hour: five, weekly }, resets_soon: drivingSoon, detail: x };
   } else {
     out.openai = { available: false, overall: "unknown", frontier: "unknown", windows: {}, detail: x || null };
   }
@@ -182,7 +186,7 @@ export function resolveRoles(usage, registry, { now = Date.now(), channels = {},
   if (a.available && a.windows.fable === "amber") reasons.push("Fable weekly cap is amber: routine planning goes to Opus 5.5; only size=hard delegations use Fable.");
   if (a.available && a.overall === "red") reasons.push("Claude session/weekly is red: Anthropic roles failed over to OpenAI.");
   if (roles.coder?.balanced) reasons.push(`Coder balanced to ${roles.coder.vendor}: it has more 5-hour headroom (Claude ${100 - (a.headroom ?? 0)}% vs Codex ${100 - (o.headroom ?? 0)}% used).`);
-  if ((a.available && a.windows.weekly === "amber") || (o.available && o.windows.weekly === "amber")) reasons.push("A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.");
+  if ((a.available && a.windows.weekly === "amber") || (o.available && o.windows.five_hour !== NOT_APPLICABLE && o.windows.weekly === "amber")) reasons.push("A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.");
   if (o.available && o.overall === "red") reasons.push(o.credit_funded ? `Codex window is red but ${creditsPolicyText(credits)}: OpenAI roles spend ChatGPT credits through the codex bridge (${creditsText(openaiCredits(o.detail))}).` : "Codex window is red: OpenAI roles failed over to Anthropic.");
   if (!a.available) reasons.push("Claude usage unknown (no OAuth token found): treating Anthropic as unavailable for automatic routing.");
   if (!o.available) reasons.push("Codex usage unknown (app-server unreachable or not logged in): treating OpenAI as unavailable for automatic routing.");
@@ -211,7 +215,8 @@ export function summarizeForPrompt(resolved, usage) {
   } else lines.push(`Claude usage: unavailable (${c?.error || "no data"}).`);
   if (x?.ok) {
     const credits = openaiCredits(x);
-    lines.push(`Codex (${x.plan || "subscription"}): 5h ${x.five_hour.pct}% [${p.openai.windows.five_hour}] resets ${x.five_hour.resets_at}; weekly ${x.weekly.pct}% [${p.openai.windows.weekly}] resets ${x.weekly.resets_at}${credits ? "; " + creditsText(credits) : ""}.`);
+    const windowText = (key, label) => x[key].applicable === false ? `${label} n/a` : `${label} ${x[key].pct}% [${p.openai.windows[key]}] resets ${x[key].resets_at}`;
+    lines.push(`Codex (${x.plan || "subscription"}): ${windowText("five_hour", "5h")}; ${windowText("weekly", "weekly")}${credits ? "; " + creditsText(credits) : ""}.`);
   }
   else lines.push(`Codex usage: unavailable (${x?.error || "no data"}).`);
   lines.push("Routing now:");

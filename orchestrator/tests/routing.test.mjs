@@ -1,12 +1,59 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { creditsPolicyOf, creditsText, openaiCredits, resolveRoles, summarizeForPrompt, vendorPostures } from "../lib/routing.mjs";
+import { creditsPolicyOf, creditsText, openaiCredits, resolveRoles, summarizeForPrompt, vendorPostures, worst } from "../lib/routing.mjs";
+import { normalizeCodex } from "../lib/usage.mjs";
 
 const registry = JSON.parse(fs.readFileSync(new URL("../models.json", import.meta.url), "utf8"));
 const soon = (mins) => new Date(Date.now() + mins * 60000).toISOString();
 const claude = (session, fable, extra = {}) => ({ ok: true, plan: "team", session: { pct: session, resets_at: soon(120) }, weekly: { pct: null, resets_at: null }, weekly_by_model: fable === null ? {} : { fable: { pct: fable, resets_at: soon(600) } }, ...extra });
 const codex = (five, weekly) => ({ ok: true, plan: "plus", five_hour: { pct: five, resets_at: soon(120) }, weekly: { pct: weekly, resets_at: soon(5000) } });
+
+test("weekly-only Codex alone steers posture and routing", () => {
+  const limits = JSON.parse(fs.readFileSync(new URL("../../go/testdata/usage/codex-ratelimits-weekly-only.json", import.meta.url), "utf8"));
+  for (const [pct, level] of [[10, "green"], [registry.thresholds.amber, "amber"], [registry.thresholds.red, "red"], [null, "unknown"]]) {
+    const x = normalizeCodex({ limits });
+    x.weekly.pct = pct;
+    const usage = { claude: claude(10, 10), codex: x };
+    const r = resolveRoles(usage, registry);
+    const p = r.postures.openai;
+    assert.deepEqual(p.windows, { five_hour: "n/a", weekly: level });
+    assert.equal(p.overall, level);
+    assert.equal(p.frontier, level);
+    assert.equal(p.headroom, pct === null ? null : 100 - pct);
+    assert.equal(p.resets_soon, false);
+    assert.doesNotMatch(r.reasons.join(" "), /not steering/);
+    if (level === "red") {
+      for (const role of Object.values(r.roles)) assert.equal(role.vendor, "anthropic");
+      assert.match(r.reasons.join(" "), /Codex window is red/);
+      assert.equal(resolveRoles({ ...usage, claude: claude(99, 99) }, registry).paused, true);
+    }
+    if (level === "green") assert.equal(r.roles.reviewer.vendor, "openai");
+  }
+  const x = normalizeCodex({ limits });
+  x.weekly.pct = 5;
+  x.rate_limit_reached = "primary";
+  assert.equal(vendorPostures({ codex: x }, registry).openai.overall, "red");
+  assert.equal(worst("n/a"), "green");
+  x.rate_limit_reached = null;
+  x.weekly.resets_at = soon(5);
+  assert.equal(vendorPostures({ codex: x }, registry).openai.resets_soon, true);
+});
+
+test("weekly-only literal posture and prompt match the Go contract", () => {
+  const x = { ok: true, plan: "prolite", five_hour: { pct: null, resets_at: null, window_mins: null, applicable: false }, weekly: { pct: 0, resets_at: "2099-01-07T20:06:43.000Z", window_mins: 10080 } };
+  const usage = { claude: claude(10, 10), codex: x };
+  const r = resolveRoles(usage, registry);
+  assert.deepEqual(r.postures.openai.windows, { five_hour: "n/a", weekly: "green" });
+  assert.equal(summarizeForPrompt(r, usage).split("\n")[1], "Codex (prolite): 5h n/a; weekly 0% [green] resets 2099-01-07T20:06:43.000Z.");
+  x.five_hour.applicable = true;
+  x.five_hour.pct = 10;
+  x.weekly.applicable = false;
+  const short = resolveRoles(usage, registry);
+  assert.equal(short.postures.openai.overall, "green");
+  assert.equal(short.postures.openai.windows.weekly, "n/a");
+  assert.match(summarizeForPrompt(short, usage), /; weekly n\/a\./);
+});
 
 test("green everywhere: Fable plans, Opus codes, OpenAI reviews (cross-vendor)", () => {
   const r = resolveRoles({ claude: claude(20, 30), codex: codex(20, 5) }, registry, { channels: { openai: true } });

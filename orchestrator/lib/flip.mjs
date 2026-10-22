@@ -8,7 +8,7 @@ export const otherDoor = (door) => (door === "opencode" ? "claude" : "opencode")
 function minutes(ms) { return ms / 60000; }
 function windowFreshlyReset(detail, vendor, nowMs, graceMin) {
   // A window that reset less than `grace` minutes ago is not yet "stable"; infer from resets_at and window length.
-  const win = vendor === "openai" ? detail?.five_hour : detail?.session;
+  const win = vendor === "openai" ? (detail?.five_hour?.applicable === false ? detail?.weekly : detail?.five_hour) : detail?.session;
   if (!win?.resets_at) return false;
   const lengthMin = win.window_mins || 300;
   const untilReset = minutes(Date.parse(win.resets_at) - nowMs);

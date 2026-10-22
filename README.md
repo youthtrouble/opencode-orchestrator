@@ -20,8 +20,9 @@ model, and stalling whenever one window hits its cap. This project turns that in
   review and verify. Effort scales with the size of the task, not a fixed setting.
 - **Independent review.** Code written by one vendor is reviewed by the other, against a sha256
   manifest of exactly the files that were released. Nobody approves their own work.
-- **Budget awareness.** It reads the Claude session and Fable weekly windows and the Codex 5-hour
-  and weekly windows. Each vendor is green, amber or red; red work moves to the other vendor, and
+- **Budget awareness.** It reads the Claude session and Fable weekly windows and the available Codex
+  5-hour and weekly windows. On weekly-only Codex plans, weekly usage alone steers routing.
+  Each vendor is green, amber or red; red work moves to the other vendor, and
   coding is balanced toward whoever has more headroom.
 - **It keeps going without you.** Two front doors, opencode and Claude Code, hand the project back
   and forth as budgets change. A per-project supervisor restarts a stopped conductor and resumes it
@@ -172,8 +173,10 @@ checks, and records the next step. All routing comes from one file,
 [`orchestrator/models.json`](orchestrator/models.json): roles, tiers, thresholds, effort policy and
 autonomy.
 
-**Budgets.** A vendor is amber at 60% used and red at 85%. The 5-hour window decides routing; a
-weekly cap only matters once it is red. Fable is used only while Claude's frontier posture is green.
+**Budgets.** A vendor is amber at 60% used and red at 85%. When a 5-hour window exists, it steers
+routing; the vendor-wide weekly cap blocks only when red. Codex weekly-only plans show `5h n/a`
+in usage and doctor; their weekly window alone steers routing and flip at every level (amber steers,
+red blocks). Fable is used only while Claude's frontier posture is green.
 
 **Two front doors.** `opencode` runs the OpenAI-native conductor and reaches Claude through
 `claude -p`. `claude --agent conductor` runs the Anthropic-native conductor and reaches OpenAI
@@ -401,7 +404,8 @@ never reaches the Mac). An answer, pause or resume can be undone for 10 seconds 
 cannot start runs, run commands, read files or change code. It is macOS-only and self-hosted: you deploy the Worker
 to your own Cloudflare account.
 
-Each vendor's budget chip shows the window that sets its colour (the 5-hour one, unless the weekly one is red) and
+Each vendor's budget chip shows the window that sets its colour (weekly at every level on weekly-only
+Codex plans; otherwise the 5-hour one, unless the weekly one is red) and
 when it resets, in your phone's time zone and 24-hour time: relative within a day, else the weekday:
 `Anthropic 28% · resets in 2 h 10 min`, `OpenAI weekly 100% · resets Mon 08:04 · credits 195.62` (credits only when
 Codex reports them). Tap a chip for both windows with clock and relative times, `5-hour 28% · resets 22:50 (in 2 h

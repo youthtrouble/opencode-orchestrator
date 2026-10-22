@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: map Codex windows by duration, including weekly-only plans (`5h n/a`); their weekly usage alone drives routing and flip, while unreadable data stays unknown.
+
 - plugin: `orch_delegate` gives the verifier write access by default, as it does the coder (incident 3ad1e76b).
   A verifier on Claude Code ran with `--permission-mode plan`, which blocks Bash, so it returned a plan instead of
   running the checks; on Codex it got a `read-only` sandbox, which blocks its report and the temp dirs tests
