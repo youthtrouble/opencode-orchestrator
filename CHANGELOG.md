@@ -566,6 +566,10 @@
   `orch claude-exec --help` and `orch codex-exec --help` print orch help instead of the JS source header. The
   bridge budget-red incident's summary becomes `orch <bridge> refused: budget red`, so its fingerprint changes
   and `/retro` lists old and new apart. The parity harness maps the JS side's command strings (PE-19, `go/README.md`).
+- go: `orch doctor` suits an install without the JS. A missing `node` is now `WARN node missing  —  needed only
+  by install.sh and uninstall.sh` instead of a FAIL, and a new `orch on PATH` row after `orch binary` checks that
+  `orch` on `PATH` is this binary (OK), warns when it is not on `PATH` (naming the directory to add) or when
+  `PATH` resolves another `orch` (with its version); the row never fails doctor (PE-18).
 
 ## 0.5.0 — 2026-10-19
 

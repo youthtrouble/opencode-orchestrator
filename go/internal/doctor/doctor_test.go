@@ -3,7 +3,9 @@ package doctor
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,8 @@ type machine struct {
 	routing  *usage.Routing
 	routeErr error
 	selfErr  error
+	pathOrch string // what LookPath("orch") resolves; "" for not found
+	self     string // Executable(); "" for /bin/orch
 	ran      []string
 }
 
@@ -46,11 +50,22 @@ func (m *machine) deps() Deps {
 			}
 			return nil, os.ErrNotExist
 		},
-		Exists:      func(path string) bool { return m.exists[path] },
-		OnPath:      func(string) bool { return m.goOnPath },
+		Exists: func(path string) bool { return m.exists[path] },
+		OnPath: func(string) bool { return m.goOnPath },
+		LookPath: func(name string) (string, error) {
+			if name != "orch" || m.pathOrch == "" {
+				return "", exec.ErrNotFound
+			}
+			return m.pathOrch, nil
+		},
 		OrchVersion: "0.5.0 (abc1234)",
-		Executable:  func() (string, error) { return "/bin/orch", nil },
-		SelfTest:    func() error { return m.selfErr },
+		Executable: func() (string, error) {
+			if m.self == "" {
+				return "/bin/orch", nil
+			}
+			return m.self, nil
+		},
+		SelfTest: func() error { return m.selfErr },
 	}
 }
 
@@ -73,6 +88,7 @@ func healthy(t *testing.T) *machine {
 		files:    map[string]string{pluginLogPath: "INFO fine\n"},
 		exists:   map[string]bool{"/h/.config/opencode/opencode.jsonc": true, "/repo/go/go.mod": true},
 		goOnPath: true,
+		pathOrch: "/bin/orch",
 		routing:  greenRouting(t),
 	}
 }
@@ -121,6 +137,7 @@ OK   codex present  —  codex-cli 0.9
 OK   claude present  —  2.0 (Claude Code)
 OK   node present  —  v26.5.1
 OK   orch binary  —  0.5.0 (abc1234) at /bin/orch
+OK   orch on PATH  —  /bin/orch
 OK   codex login  —  Logged in using ChatGPT
 OK   claude login
 OK   opencode: openai connected
@@ -155,8 +172,9 @@ func TestNothingInstalledFailsEveryProbe(t *testing.T) {
 	want := `FAIL opencode missing  —  install it
 FAIL codex missing  —  install it
 FAIL claude missing  —  install it
-FAIL node missing  —  install it
+WARN node missing  —  needed only by install.sh and uninstall.sh
 OK   orch binary  —  0.5.0 (abc1234) at /bin/orch
+WARN orch on PATH  —  not on PATH; agent commands "orch ..." will fail; add /bin to PATH
 WARN codex not logged in  —  run: codex login
 WARN claude auth status unclear
 WARN opencode: OpenAI not connected  —  run: opencode auth login openai --method chatgpt-token-sharing
@@ -186,7 +204,7 @@ func TestClaudeAuthForms(t *testing.T) {
 	} {
 		m := healthy(t)
 		m.answers["claude auth status"] = ok(out)
-		row := Check(m.deps())[6]
+		row := Check(m.deps())[7]
 		if (row.Name == "claude login") != loggedIn {
 			t.Errorf("%q: row %q", out, row)
 		}
@@ -216,7 +234,7 @@ func TestOpenAICreditsRow(t *testing.T) {
 	codex.Set("ordinary_usage_allowed", false)
 	codex.Set("reset_credits_available", 3.0)
 	m.routing.CreditsPolicy = routing.CreditsPolicy{On: true, Floor: 20}
-	got := lines(Check(m.deps())[10:12])
+	got := lines(Check(m.deps())[11:13])
 	want := "OK   Codex usage feed  —  5h 5% weekly 10% plan plus\n" +
 		"OK   OpenAI credits  —  credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money); policy openai_credits=on floor 20\n"
 	if got != want {
@@ -229,7 +247,7 @@ func TestUsageRowsBeforeAThrowAreKept(t *testing.T) {
 	codex, _ := m.routing.Usage.Get("codex")
 	codex.(*jsjson.Object).Delete("weekly")
 	rows := Check(m.deps())
-	got := lines(rows[9:11])
+	got := lines(rows[10:12])
 	want := "OK   Claude usage feed  —  session 12% fable 20% via claude-code-keychain\n" +
 		"FAIL usage/routing  —  Cannot read properties of undefined (reading 'pct')\n"
 	if got != want {
@@ -254,7 +272,7 @@ func TestRoutingRowThrowsForAModelThatIsNotAString(t *testing.T) {
 				t.Fatal(err)
 			}
 			jsjson.Path(m.routing.Registry, "vendors", "openai", "tiers").(*jsjson.Object).Set("mini", tier)
-			got := lines(Check(m.deps())[11:12])
+			got := lines(Check(m.deps())[12:13])
 			want := "FAIL usage/routing  —  " + c.want + "\n"
 			if c.want == "" {
 				want = "OK   routing  —  planner=fable-5.1@claude-code coder=PAUSED utility=undefined@opencode\n"
@@ -274,14 +292,14 @@ func TestFeedErrorsAndMissingFable(t *testing.T) {
 	codex.(*jsjson.Object).Set("ok", false)
 	codex.(*jsjson.Object).Set("error", "codex app-server exited")
 	rows := Check(m.deps())
-	got := lines(rows[9:11])
+	got := lines(rows[10:12])
 	want := "OK   Claude usage feed  —  session 12% fable n/a% via claude-code-keychain\n" +
 		"FAIL Codex usage feed  —  codex app-server exited\n"
 	if got != want {
 		t.Errorf("rows:\n%s\nwant:\n%s", got, want)
 	}
 	claude.(*jsjson.Object).Set("ok", false)
-	if row := Check(m.deps())[9]; row.String() != "FAIL Claude usage feed" {
+	if row := Check(m.deps())[10]; row.String() != "FAIL Claude usage feed" {
 		t.Errorf("feed without error: %q", row)
 	}
 }
@@ -296,7 +314,7 @@ func TestAgentsAnyJSONValue(t *testing.T) {
 	for out, want := range cases {
 		m := healthy(t)
 		m.answers["opencode debug agents"] = ok(out)
-		if row := Check(m.deps())[14]; row.String() != want {
+		if row := Check(m.deps())[15]; row.String() != want {
 			t.Errorf("%q: row %q, want %q", out, row, want)
 		}
 	}
@@ -320,7 +338,7 @@ func TestUnitTestOutcomes(t *testing.T) {
 			m := healthy(t)
 			m.answers["go test ./..."] = c.answer
 			m.goOnPath = c.onPath
-			if row := Check(m.deps())[16]; row.String() != c.want {
+			if row := Check(m.deps())[17]; row.String() != c.want {
 				t.Errorf("row %q, want %q", row, c.want)
 			}
 		})
@@ -331,8 +349,88 @@ func TestSelfTestFailureIsAFail(t *testing.T) {
 	m := healthy(t)
 	m.selfErr = errors.New("json: re-serialised x")
 	rows := Check(m.deps())
-	if row := rows[15]; row.String() != "FAIL orch self-test  —  json: re-serialised x" || !Failed(rows) {
+	if row := rows[16]; row.String() != "FAIL orch self-test  —  json: re-serialised x" || !Failed(rows) {
 		t.Errorf("row %q", row)
+	}
+}
+
+func TestNodeMissingOnlyWarns(t *testing.T) {
+	m := healthy(t)
+	delete(m.answers, "node --version")
+	rows := Check(m.deps())
+	if row := rows[3]; row.String() != "WARN node missing  —  needed only by install.sh and uninstall.sh" {
+		t.Errorf("row %q", row)
+	}
+	if Failed(rows) {
+		t.Error("a machine without node failed")
+	}
+}
+
+// orchOnPathRow is the `orch on PATH` row, which follows `orch binary` and never fails doctor.
+func orchOnPathRow(t *testing.T, m *machine) string {
+	t.Helper()
+	rows := Check(m.deps())
+	if rows[4].Name != "orch binary" || rows[5].Name != "orch on PATH" {
+		t.Fatalf("rows:\n%s", lines(rows))
+	}
+	if Failed(rows) {
+		t.Errorf("the PATH layout failed doctor:\n%s", lines(rows))
+	}
+	return rows[5].String()
+}
+
+func TestOrchOnPathResolvesToSelfThroughASymlink(t *testing.T) {
+	dir := t.TempDir()
+	self := filepath.Join(dir, "checkout", "orch")
+	link := filepath.Join(dir, "bin", "orch")
+	for _, d := range []string{filepath.Dir(self), filepath.Dir(link)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(self, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(self, link); err != nil {
+		t.Fatal(err)
+	}
+	m := healthy(t)
+	m.self, m.pathOrch = self, link
+	if got, want := orchOnPathRow(t, m), "OK   orch on PATH  —  "+link; got != want {
+		t.Errorf("row %q, want %q", got, want)
+	}
+}
+
+func TestOrchNotOnPathWarns(t *testing.T) {
+	m := healthy(t)
+	m.self, m.pathOrch = "/opt/orch/bin/orch", ""
+	want := `WARN orch on PATH  —  not on PATH; agent commands "orch ..." will fail; add /opt/orch/bin to PATH`
+	if got := orchOnPathRow(t, m); got != want {
+		t.Errorf("row %q, want %q", got, want)
+	}
+}
+
+func TestAnotherOrchOnPathWarnsWithItsVersion(t *testing.T) {
+	cases := []struct {
+		name    string
+		version Output
+		want    string
+	}{
+		{"version ok", ok("0.4.0 (old1234)\nextra\n"), "WARN orch on PATH  —  PATH orch is /usr/local/bin/orch (0.4.0 (old1234)), not /bin/orch"},
+		{"version failed", Output{Code: code(1), Out: "boom"}, "WARN orch on PATH  —  PATH orch is /usr/local/bin/orch (version failed), not /bin/orch"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := healthy(t)
+			m.pathOrch = "/usr/local/bin/orch"
+			m.answers["/usr/local/bin/orch version"] = c.version
+			if got := orchOnPathRow(t, m); got != c.want {
+				t.Errorf("row %q, want %q", got, c.want)
+			}
+			if !slices.Contains(m.ran, "/usr/local/bin/orch version @ 20s") {
+				t.Errorf("ran %q", m.ran)
+			}
+		})
 	}
 }
 
@@ -350,7 +448,7 @@ func TestPluginLogScan(t *testing.T) {
 	log[499] = straddling
 	m := healthy(t)
 	m.files[pluginLogPath] = strings.Join(log, "\n")
-	row := Check(m.deps())[17]
+	row := Check(m.deps())[18]
 	want := long + " | " + long + " | " + strings.TrimSuffix(straddling, "😀") + "\ufffd" // the cut keeps a lone high surrogate
 	if row.Status != Warn || row.Name != "plugin errors in log" || row.Detail != want {
 		t.Errorf("row %q, want detail %q", row, want)
@@ -361,7 +459,7 @@ func TestPluginLogRowIsRedactedBeforeItIsCut(t *testing.T) {
 	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
 	m := healthy(t)
 	m.files[pluginLogPath] = "ERROR orchestrator auth " + apiKey + " in /h/p for me@example.com " + strings.Repeat("a", 300)
-	row := Check(m.deps())[17]
+	row := Check(m.deps())[18]
 	want := "ERROR orchestrator auth <token> in ~/p for <email> " + strings.Repeat("a", 249)
 	if row.Status != Warn || row.Detail != want {
 		t.Errorf("row %q, want detail %q", row, want)

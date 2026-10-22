@@ -73,6 +73,7 @@ type Deps struct {
 	ReadFile    func(string) ([]byte, error)
 	Exists      func(string) bool
 	OnPath      func(name string) bool
+	LookPath    func(name string) (string, error) // exec.LookPath
 	OrchVersion string
 	Executable  func() (string, error)
 	SelfTest    func() error // PE-18's in-process checks
@@ -117,9 +118,13 @@ func (c *checks) sh(name string, args ...string) Output {
 func (c *checks) binaries() {
 	for _, bin := range []string{"opencode", "codex", "claude", "node"} {
 		r := c.sh(bin, "--version")
-		if exitedZero(r) {
-			c.pushDetail(OK, bin+" present", strings.SplitN(jsTrim(r.Out), "\n", 2)[0])
-		} else {
+		switch {
+		case exitedZero(r):
+			c.pushDetail(OK, bin+" present", firstLine(r.Out))
+		case bin == "node":
+			// orch runs without Node; only the installer scripts still need it (PE-18).
+			c.pushDetail(Warn, "node missing", "needed only by install.sh and uninstall.sh")
+		default:
 			c.pushDetail(Fail, bin+" missing", "install it")
 		}
 		if bin == "node" {
@@ -128,7 +133,8 @@ func (c *checks) binaries() {
 	}
 }
 
-// orchBinary is PE-18's row after `node present`.
+// orchBinary is PE-18's row after `node present`, followed by `orch on PATH` when orch knows
+// its own executable.
 func (c *checks) orchBinary() {
 	self, err := c.deps.Executable()
 	if err != nil {
@@ -136,6 +142,43 @@ func (c *checks) orchBinary() {
 		return
 	}
 	c.pushDetail(OK, "orch binary", c.deps.OrchVersion+" at "+self)
+	c.orchOnPath(self)
+}
+
+// orchOnPath checks that the `orch ...` commands agents are told to run reach this binary. It
+// only warns: the installer's post-install doctor must not fail on the user's PATH layout.
+func (c *checks) orchOnPath(self string) {
+	onPath, err := c.deps.LookPath("orch")
+	switch {
+	case err != nil:
+		c.pushDetail(Warn, "orch on PATH", `not on PATH; agent commands "orch ..." will fail; add `+filepath.Dir(self)+" to PATH")
+	case sameFile(onPath, self):
+		c.pushDetail(OK, "orch on PATH", onPath)
+	default:
+		c.pushDetail(Warn, "orch on PATH", "PATH orch is "+onPath+" ("+c.versionOf(onPath)+"), not "+self)
+	}
+}
+
+// versionOf is the first line of `<orch> version`, or "version failed".
+func (c *checks) versionOf(orch string) string {
+	r := c.sh(orch, "version")
+	if !exitedZero(r) {
+		return "version failed"
+	}
+	return firstLine(r.Out)
+}
+
+// sameFile compares two paths after resolving symlinks; a path that does not resolve is
+// compared as given, so a dangling PATH entry reads as another binary.
+func sameFile(a, b string) bool {
+	return resolveSymlinks(a) == resolveSymlinks(b)
+}
+
+func resolveSymlinks(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
 }
 
 var (
@@ -397,6 +440,9 @@ func (c *checks) pluginLog() {
 }
 
 func exitedZero(r Output) bool { return r.Code != nil && *r.Code == 0 }
+
+// firstLine is the JS `out.trim().split("\n")[0]`.
+func firstLine(out string) string { return strings.SplitN(jsTrim(out), "\n", 2)[0] }
 
 // jsTrim is String.prototype.trim.
 func jsTrim(s string) string { return strings.Trim(s, jsstr.WhiteSpace) }

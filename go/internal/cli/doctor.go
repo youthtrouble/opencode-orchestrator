@@ -33,6 +33,7 @@ func Doctor(_ []string, stdio Stdio) int {
 		ReadFile:    os.ReadFile,
 		Exists:      func(path string) bool { _, err := os.Stat(path); return err == nil },
 		OnPath:      func(name string) bool { _, err := exec.LookPath(name); return err == nil },
+		LookPath:    exec.LookPath,
 		OrchVersion: version.String(),
 		Executable:  os.Executable,
 		SelfTest:    doctor.SelfTest(p.RegistryFile, os.Executable),
