@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- remote: a pull from an orch built before `X-Work-Trains-Accept` can no longer receive an accept (Sol review B).
+  Its pull settled only the first 50 due accepts as rejected, so with a larger backlog the same pull selected the
+  next ones and delivered them, and the old orch would post the redacted recommendation as the owner's reply. Such a
+  pull now never selects or stamps an accept, however many are due: each pull refuses the next 50 and returns the
+  other answers. **Rollout:** Worker only, v1-compatible. See `remote/protocol/README.md`, "Accept answers".
+- remote: the Worker enforces that an action question carries no recommendation (Sol review D1). A push whose
+  `ask: "action"` question has a non-null `recommended` is refused with 400 `invalid_request` and stores none of its
+  projects, and an accept of an action question is refused whatever its row holds, so no completion claim can be
+  accepted from the page. `orch` already sends `recommended: null` for one. **Rollout:** Worker only.
+- remote: a Work Trains budget chip shows the credits the Mac reported even when the vendor's usage has no reading
+  (Sol review D2): `OpenAI · no reading · credits 195.62`, and the credits line when it opens. Before, both said
+  only "no reading".
+
 - remote: the setup docs say one Work Trains deployment serves one Mac (SI-1). A pull has no machine filter, so a
   second Mac on the same deployment can pull the first Mac's answers and actions, reject them as an unknown project
   and settle that rejection with its ack, and the answer is lost. Use one deployment per Mac. See `remote/README.md`,

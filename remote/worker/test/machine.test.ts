@@ -490,6 +490,65 @@ test("an old orch's pull refuses each due accept, settled as rejected for the pa
   assert.deepEqual(pulled(await app.pull()).answers, [typedId], "a refused accept stays refused for a new orch");
 });
 
+/**
+ * A pushed project with `count` more questions written straight to D1 (more than one push may carry), each with
+ * an answer of `kindAt(index)` due at 10 s and created in index order. The clock is at 10 s; returns the answer
+ * ids in pull order.
+ */
+async function appWithDueBacklog(count: number, kindAt: (index: number) => "accept" | "typed") {
+  const app = machineApp();
+  await app.push(pushRequest([snapshot()]));
+  const insertQuestion = app.db.sqlite.prepare(
+    `INSERT INTO questions (id, project_key, asked_at, asked_by, subject, body, recommended, blocking, first_seen_at)
+     VALUES (?, ?, ?, 'conductor', 'Backlog?', 'Context.', 'Yes.', 1, ?)`,
+  );
+  const insertAnswer = app.db.sqlite.prepare(
+    `INSERT INTO answers (id, question_id, kind, text, client_key, created_at, apply_after)
+     VALUES (?, ?, ?, 'Yes.', ?, ?, ?)`,
+  );
+  const ids: string[] = [];
+  for (let index = 0; index < count; index++) {
+    const questionId = `backlog-${index}`;
+    const answerId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+    const createdAt = new Date(START.getTime() + index).toISOString();
+    insertQuestion.run(questionId, KEY, iso(0), iso(0));
+    insertAnswer.run(answerId, questionId, kindAt(index), `backlog-client-${index}`, createdAt, iso(10));
+    ids.push(answerId);
+  }
+  app.at(10);
+  return { app, ids };
+}
+
+const pulledKinds = (reply: Reply) => reply.body.answers.map((answer: Json) => answer.kind);
+const acceptOutcomes = (app: ReturnType<typeof machineApp>) =>
+  (app.db.sqlite.prepare("SELECT outcome FROM answers WHERE kind = 'accept'").all() as Json[]).map((row) => row.outcome);
+const alternating = (index: number) => (index % 2 === 0 ? "accept" : "typed");
+
+test("an old orch's pull never receives an accept, however many are due: each pull refuses the next batch", async () => {
+  const { app } = await appWithDueBacklog(51, () => "accept");
+  assert.deepEqual(pulled(await app.pullFromOldOrch()).answers, []);
+  assert.deepEqual(pulled(await app.pullFromOldOrch()).answers, [], "the 51st accept is refused, not delivered");
+  assert.deepEqual(acceptOutcomes(app), Array(51).fill("rejected"));
+});
+
+test("an old orch's pull with accepts and typed answers mixed past one batch gets typed answers only", async () => {
+  const { app, ids } = await appWithDueBacklog(120, alternating);
+  const typedIds = ids.filter((_, index) => alternating(index) === "typed");
+  const first = await app.pullFromOldOrch();
+  assert.deepEqual(pulled(first).answers, typedIds.slice(0, 50));
+  assert.deepEqual(pulledKinds(first), Array(50).fill("typed"));
+  assert.deepEqual(pulled(await app.pullFromOldOrch()).answers, typedIds.slice(0, 50), "unacked typed answers again");
+  assert.deepEqual(acceptOutcomes(app), Array(60).fill("rejected"), "two pulls refuse all 60 accepts");
+});
+
+test("a pull with the accept header gets accepts and typed answers alike, in order, and refuses none", async () => {
+  const { app, ids } = await appWithDueBacklog(60, alternating);
+  const reply = await app.pull();
+  assert.deepEqual(pulled(reply).answers, ids.slice(0, 50));
+  assert.deepEqual(pulledKinds(reply), ids.slice(0, 50).map((_, index) => alternating(index)));
+  assert.ok(acceptOutcomes(app).every((outcome) => outcome === null));
+});
+
 test("a cancelled answer or action is never pulled", async () => {
   const app = await appWithPendingAnswerAndAction();
   app.db.sqlite.prepare("UPDATE answers SET cancelled_at = ?").run(iso(5));

@@ -62,8 +62,10 @@ Where a browser payload repeats a field of another payload, it refers to that fi
 - `Question.ask` rollout: a Worker built before it rejects a push that carries it (`additionalProperties: false`), so
   deploy the Worker (with its migration `0003_questions_ask.sql`) before an orch that sends it. An older Worker answers
   a push that holds an action question with 400 `invalid_request` and stores none of its projects. An action question
-  carries no recommendation, so the Worker refuses an accept of it (`this question has no recommendation; reply
-  instead`).
+  carries no recommendation: the Worker refuses a push whose action question has a non-null `recommended` with 400
+  `invalid_request` (`... at /projects/<i>/questions/<j>/recommended: an action question carries no recommendation`),
+  storing none of its projects, and refuses an accept of an action question whatever its row holds (`this question
+  has no recommendation; reply instead`). Every orch already sends `recommended: null` for one.
 
 - `Posture.weekly_resets_at` and `Posture.window` rollout: a Worker built before them rejects a push that carries
   them with 400 `invalid_request` (`additionalProperties: false`) and stores none of its projects, and every push
@@ -79,10 +81,11 @@ recommendation the question holds in its own mailbox, and rejects the accept (`t
 the Mac; reply instead`) when there is none. A typed answer's `text` is posted as it is.
 
 The Mac says it does this with the request header `X-Work-Trains-Accept: mailbox` on `GET /api/v1/machine/pull`. An
-orch built before the header would post the redacted `text`, so a pull without it settles every due accept as
-`rejected` (detail `orch on the Mac is too old to accept a recommendation: ...`), which the page shows, and returns
-the rest. The payloads are unchanged, so either side may deploy first: an orch with the header works against a
-Worker that ignores it.
+orch built before the header would post the redacted `text`, so a pull without it never returns an accept: it
+settles due accepts as `rejected` (detail `orch on the Mac is too old to accept a recommendation: ...`), which the
+page shows, and returns the other answers. One pull settles up to 50 accepts, so a larger backlog settles over the
+next pulls, and none of it is delivered meanwhile. The payloads are unchanged, so either side may deploy first: an
+orch with the header works against a Worker that ignores it.
 
 ## Size caps
 

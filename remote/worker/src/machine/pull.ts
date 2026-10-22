@@ -15,7 +15,8 @@ const LAST_PULL_RESOLUTION_SECONDS = 60;
  * An accept's `text` is the recommendation as the Worker holds it, redacted on the Mac before the push.
  * An orch that sends this header on its pull answers an accept with the original recommendation from its
  * own mailbox. One that does not (built before the header) would post the redacted copy as the owner's
- * reply, so its pull settles every due accept as rejected instead, and the page says why.
+ * reply, so its pull never selects or stamps an accept: it settles up to a batch of due accepts as rejected
+ * (the page says why), and each later pull settles the next batch.
  */
 export const ACCEPT_HEADER = "X-Work-Trains-Accept";
 export const ACCEPT_FROM_MAILBOX = "mailbox";
@@ -39,12 +40,22 @@ interface PulledAction {
 
 // Times are compared as text: every stored time is the Worker's own `toISOString()`, which sorts
 // in time order. Each FROM clause binds the pull's time once; the SELECT and the delivery stamp share
-// it, so both see the same rows.
-const DUE_ANSWERS_FROM = `
+// it, so both see the same rows. The kind filter sits before the LIMIT, so a batch an old orch's pull
+// selects holds no accept however many are due.
+const ANSWER_KIND_CONDITION = {
+  any: "",
+  notAccept: "AND answers.kind <> 'accept'",
+  accept: "AND answers.kind = 'accept'",
+} as const;
+
+function dueAnswersFrom(kinds: keyof typeof ANSWER_KIND_CONDITION) {
+  return `
   FROM answers JOIN questions ON questions.id = answers.question_id
   WHERE answers.apply_after <= ? AND answers.cancelled_at IS NULL AND answers.outcome IS NULL
+    ${ANSWER_KIND_CONDITION[kinds]}
   ORDER BY answers.created_at, answers.id
   LIMIT ${PULL_LIMIT}`;
+}
 
 const DUE_ACTIONS_FROM = `
   FROM actions
@@ -57,17 +68,17 @@ export async function pullHandler({ db, now, request }: HandlerContext): Promise
   const resolvesAccepts = request.headers.get(ACCEPT_HEADER) === ACCEPT_FROM_MAILBOX;
   // One batch is one D1 transaction, so an Undo commits wholly before it (the row is cancelled, so
   // neither selected nor stamped) or wholly after (the row is delivered, so the Undo is refused). The
-  // reply is built only from rows read inside the transaction that stamps them. A due accept refused to
-  // an old orch is settled first, so the SELECT after it no longer sees it.
+  // reply is built only from rows read inside the transaction that stamps them.
   const refusals = resolvesAccepts ? [] : [refuseDueAccepts(db, at)];
+  const dueAnswers = dueAnswersFrom(resolvesAccepts ? "any" : "notAccept");
   const results = await db.batch([
     ...refusals,
     db
       .prepare(`SELECT answers.id, questions.project_key, answers.question_id, answers.kind, answers.text,
-        answers.created_at ${DUE_ANSWERS_FROM}`)
+        answers.created_at ${dueAnswers}`)
       .bind(at),
     db.prepare(`SELECT id, project_key, kind, created_at ${DUE_ACTIONS_FROM}`).bind(at),
-    markDelivered(db, "answers", `SELECT answers.id ${DUE_ANSWERS_FROM}`, at),
+    markDelivered(db, "answers", `SELECT answers.id ${dueAnswers}`, at),
     markDelivered(db, "actions", `SELECT id ${DUE_ACTIONS_FROM}`, at),
     recordPull(db, now),
   ]);
@@ -91,13 +102,13 @@ function markDelivered(db: CountedDb, table: "answers" | "actions", dueIds: stri
     .bind(at, at);
 }
 
-/** Settles each due accept as rejected, delivered now, so the old orch never sees it and the page says why. */
+/** Settles a batch of due accepts as rejected, delivered now, so the page says why the old orch ignored them. */
 function refuseDueAccepts(db: CountedDb, at: string) {
   return db
     .prepare(
       `UPDATE answers SET delivered_at = COALESCE(delivered_at, ?), outcome = 'rejected', outcome_detail = ?,
          settled_at = ?
-       WHERE kind = 'accept' AND id IN (SELECT answers.id ${DUE_ANSWERS_FROM})`,
+       WHERE id IN (SELECT answers.id ${dueAnswersFrom("accept")})`,
     )
     .bind(at, STALE_ORCH_DETAIL, at, at);
 }

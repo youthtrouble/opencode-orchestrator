@@ -99,6 +99,26 @@ test("an action question has no recommendation, so accept is refused and a typed
   assert.equal(typed.body!.answer.text, "Owner reports done (unverified).");
 });
 
+test("a push whose action question carries a recommendation is 400 invalid_request and stores nothing", async () => {
+  const app = trainsApp();
+  const claim = question("q-3", { recommended: "Done: production migration ran.", ask: "action" });
+  const reply = await app.push([snapshot({ questions: [question("q-1"), claim] })]);
+  assert.equal(reply.status, 400);
+  assert.equal(reply.body!.error, "invalid_request");
+  assert.match(reply.body!.message, /at \/projects\/0\/questions\/1\/recommended: an action question carries no recommendation/);
+  assert.equal((app.db.sqlite.prepare("SELECT count(*) AS n FROM questions").get() as Json).n, 0);
+});
+
+test("accept of an action question is refused even when its row holds a recommendation", async () => {
+  const app = trainsApp();
+  await app.push([snapshot({ questions: [question("q-3", { recommended: null, ask: "action" })] })]);
+  app.db.sqlite.prepare("UPDATE questions SET recommended = 'Done: production migration ran.' WHERE id = 'q-3'").run();
+  const reply = await app.answer("q-3", { kind: "accept", client_key: clientKey(1) });
+  assert.equal(reply.status, 400);
+  assert.match(reply.body!.message, /this question has no recommendation; reply instead/);
+  assert.equal((app.db.sqlite.prepare("SELECT count(*) AS n FROM answers").get() as Json).n, 0);
+});
+
 test("undo_seconds comes from UNDO_SECONDS, defaults to 10 and is clamped to 1..60", async () => {
   for (const [configured, expected] of [[undefined, 10], ["abc", 10], ["0", 1], ["25", 25], ["999", 60]] as const) {
     const app = trainsApp({ env: { UNDO_SECONDS: configured } });

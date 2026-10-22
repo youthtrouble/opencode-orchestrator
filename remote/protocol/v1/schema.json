@@ -312,7 +312,7 @@
           "type": "boolean"
         },
         "ask": {
-          "description": "Absent for a decision the owner may accept; \"action\" for steps the owner must do, which carry no recommendation.",
+          "description": "Absent for a decision the owner may accept; \"action\" for steps the owner must do, which carry no recommendation: the Worker refuses a push whose action question has a non-null recommended, and an accept of an action question.",
           "type": "string",
           "enum": [
             "decision",

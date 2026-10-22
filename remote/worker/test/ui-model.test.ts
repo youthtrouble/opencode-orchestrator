@@ -266,6 +266,20 @@ test("OpenAI credits show on its chip as a balance or unlimited, and in full whe
   assert.deepEqual(absent.detail, ["5-hour 64%", "Weekly 100% · resets Mon 08:04"]);
 });
 
+test("credits the Mac reported show when the vendor's usage has no reading, on the chip and when it opens", () => {
+  const credits = { balance: "195.62", has_credits: true, unlimited: false, plan_limit_reached: false, banked_resets: 0 };
+  const [, openai] = chipsOf({
+    anthropic: null,
+    openai: { level: "unknown", five_hour_pct: null, weekly_pct: null, resets_at: null, window: "five_hour", credits },
+  });
+  assert.deepEqual(openai, {
+    vendor: "openai",
+    level: "unknown",
+    text: "OpenAI · no reading · credits 195.62",
+    detail: ["No recent budget reading from the Mac", "credits 195.62 left"],
+  });
+});
+
 test("Resume is offered for a paused project and Pause otherwise", () => {
   assert.equal(model.controlActionFor("paused"), "resume");
   for (const state of ["working", "needs_you", "failed", "done", "idle"])

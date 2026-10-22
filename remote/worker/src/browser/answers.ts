@@ -7,6 +7,7 @@ import type { CountedDb } from "../queries.ts";
 import type { HandlerContext } from "../routes.ts";
 import { conflict, invalidRequest, notFound } from "./errors.ts";
 import { applyAfter, cancelWithinWindow, insertOnce, liveStatus, tooLate, type Lifecycle } from "./lifecycle.ts";
+import type { QuestionAsk } from "../machine/wire.ts";
 import type { AnswerKind, AnswerRequest } from "./wire.ts";
 
 /** Counted in UTF-16 units, as the page counts them; the schema's cap counts code points. */
@@ -17,6 +18,7 @@ const CONTROL_EXCEPT_TAB_AND_NEWLINE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f
 interface StoredQuestion {
   id: string;
   recommended: string | null;
+  ask: QuestionAsk | null;
   closed_at: string | null;
 }
 
@@ -39,7 +41,7 @@ export async function createAnswerHandler(ctx: HandlerContext): Promise<Response
   if (earlier !== null) return jsonResponse(200, answerResponse(sameTap(earlier, params.id, request), now));
 
   const question = await db
-    .prepare("SELECT id, recommended, closed_at FROM questions WHERE id = ?")
+    .prepare("SELECT id, recommended, ask, closed_at FROM questions WHERE id = ?")
     .bind(params.id)
     .first<StoredQuestion>();
   if (question === null) throw notFound("question");
@@ -73,10 +75,15 @@ export async function undoAnswerHandler({ db, now, params }: HandlerContext): Pr
   return jsonResponse(200, answerResponse(answer, now));
 }
 
-/** Accept sends the recommendation the Worker stored, never text from the client (plan D6.1). */
+/**
+ * Accept sends the recommendation the Worker stored, never text from the client (plan D6.1). An action
+ * question offers no Accept whatever its row holds: accepting steps would claim the owner did them.
+ */
 function answerText(request: AnswerRequest, question: StoredQuestion): string {
   if (request.kind === "accept") {
-    if (question.recommended === null) throw invalidRequest("this question has no recommendation; reply instead");
+    if (question.recommended === null || question.ask === "action") {
+      throw invalidRequest("this question has no recommendation; reply instead");
+    }
     return question.recommended;
   }
   if (request.text === undefined) throw invalidRequest("a typed answer needs text");

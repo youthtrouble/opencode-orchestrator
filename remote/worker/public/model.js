@@ -61,14 +61,20 @@ export function budgetChips(budget, nowMs, format = {}) {
   return Object.entries(VENDOR_LABELS).map(([vendor, label]) => {
     const posture = budget?.[vendor] ?? null;
     const level = posture?.level ?? "unknown";
-    if (!hasReading(posture)) {
-      return { vendor, level, text: `${label} · no reading`, detail: ["No recent budget reading from the Mac"] };
-    }
+    if (!hasReading(posture)) return { vendor, level, ...unreadChip(label, posture) };
     return { vendor, level, text: chipText(label, posture, nowMs, format), detail: chipDetail(posture, nowMs, format) };
   });
 }
 
-/** A posture of level unknown with no percentage says nothing (the vendor's usage was unavailable). */
+/** A vendor whose usage the Mac could not read still shows the credits it did report. */
+function unreadChip(label, posture) {
+  return {
+    text: [`${label} · no reading`, ...chipCredits(posture)].join(" · "),
+    detail: ["No recent budget reading from the Mac", ...detailCredits(posture)],
+  };
+}
+
+/** A posture of level unknown with no percentage has no usage reading (the vendor's usage was unavailable). */
 function hasReading(posture) {
   if (posture === null) return false;
   return posture.level !== "unknown" || posture.five_hour_pct !== null || posture.weekly_pct !== null;
@@ -81,19 +87,27 @@ function chipText(label, posture, nowMs, format) {
   const parts = [`${label}${weekly ? " weekly" : ""}${pct === null ? "" : ` ${Math.round(pct)}%`}`];
   const phrase = resetsAt === null ? null : resetPhrase(resetsAt, nowMs, format);
   if (phrase !== null) parts.push(`resets ${phrase}`);
-  const credits = posture.credits ? creditsShort(posture.credits) : null;
-  if (credits !== null) parts.push(credits);
-  return parts.join(" · ");
+  return [...parts, ...chipCredits(posture)].join(" · ");
 }
 
 function chipDetail(posture, nowMs, format) {
-  const lines = [
+  return [
     windowLine("5-hour", posture.five_hour_pct, posture.resets_at, nowMs, format),
     windowLine("Weekly", posture.weekly_pct, posture.weekly_resets_at ?? null, nowMs, format),
+    ...detailCredits(posture),
   ];
-  const credits = posture.credits ? creditsText(posture.credits) : "";
-  if (credits !== "") lines.push(credits);
-  return lines;
+}
+
+/** The chip's credits part, when the posture reports any to show: none or one. */
+function chipCredits(posture) {
+  const credits = posture?.credits ? creditsShort(posture.credits) : null;
+  return credits === null ? [] : [credits];
+}
+
+/** The open chip's credits line, when the posture reports any: none or one. */
+function detailCredits(posture) {
+  const credits = posture?.credits ? creditsText(posture.credits) : "";
+  return credits === "" ? [] : [credits];
 }
 
 /** "5-hour 28% · resets 22:50 (in 2 h 10 min)", "Weekly 41% · resets Mon 08:04". */

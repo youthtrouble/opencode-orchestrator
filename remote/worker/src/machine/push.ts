@@ -9,7 +9,7 @@
 // at its next poll. It keeps in hand the queries that must run after its projects: the first-push
 // stamp's and the OnPushAccepted hook's (the notifier's NOTIFY_QUERIES_PER_PUSH; see reservedQueries).
 import { readJsonBody } from "../body.ts";
-import { jsonResponse } from "../http.ts";
+import { HttpError, jsonResponse } from "../http.ts";
 import { parseBody } from "../protocol.ts";
 import type { CountedDb } from "../queries.ts";
 import type { HandlerContext } from "../routes.ts";
@@ -91,6 +91,7 @@ const FIRST_PUSH_STAMP_QUERIES = 1;
 export function pushHandler(onPushAccepted: OnPushAccepted) {
   return async (ctx: HandlerContext): Promise<Response> => {
     const push = parseBody<PushRequest>("PushRequest", await readJsonBody(ctx.request));
+    refuseRecommendedActions(push);
     const isFirstPush = await recordMachinePush(ctx, push);
     const run: PushRun = {
       ctx,
@@ -112,6 +113,21 @@ export function pushHandler(onPushAccepted: OnPushAccepted) {
     if (run.accepted.length > 0) await onPushAccepted.run(ctx, run.accepted);
     return jsonResponse(200, { v: 1, server_time: ctx.now.toISOString(), projects });
   };
+}
+
+/**
+ * An action question asks the owner to do steps, so it carries no recommendation (WT25): one would offer an
+ * Accept that claims the steps were done. The schema cannot say this, so the push is refused whole, as a
+ * schema error refuses it; every orch already sends null.
+ */
+function refuseRecommendedActions({ projects }: PushRequest): void {
+  for (const [projectIndex, { questions }] of projects.entries()) {
+    const questionIndex = questions.findIndex((question) => question.ask === "action" && question.recommended !== null);
+    if (questionIndex === -1) continue;
+    const where = `/projects/${projectIndex}/questions/${questionIndex}/recommended`;
+    const message = `request body is invalid at ${where}: an action question carries no recommendation`;
+    throw new HttpError(400, "invalid_request", message);
+  }
 }
 
 function awaitsRetry(project: ProjectPushResult): boolean {
