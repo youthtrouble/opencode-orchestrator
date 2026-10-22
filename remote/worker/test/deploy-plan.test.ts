@@ -18,7 +18,9 @@ case "$1 $2" in
     if [[ -n "\${STUB_NO_DEPLOYMENTS:-}" ]]; then echo "The Worker work-trains has no deployments." >&2; exit 1; fi
     if [[ -n "\${STUB_AUTH_FAILS:-}" ]]; then echo "Authentication error [code: 10000]" >&2; exit 1; fi
     echo "$STUB_STATUS" ;;
-  "versions view") echo "{\\"id\\": \\"$3\\", \\"annotations\\": {\\"workers/message\\": \\"$STUB_MESSAGE\\"}}" ;;
+  "versions view")
+    if [[ -n "\${STUB_VIEW_FAILS:-}" ]]; then echo "Authentication error [code: 10000]" >&2; exit 1; fi
+    echo "{\\"id\\": \\"$3\\", \\"annotations\\": {\\"workers/message\\": \\"$STUB_MESSAGE\\"}}" ;;
   *) echo "unexpected wrangler $*" >&2; exit 2 ;;
 esac
 `;
@@ -156,4 +158,13 @@ test("a wrangler failure other than no deployments fails the plan", (t) => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Authentication error/);
   assert.deepEqual(result.outputs, {});
+});
+
+test("a failed version lookup fails the plan instead of skipping its safeguards", (t) => {
+  const { commit, plan } = scratchRepo(t);
+  const edited = commit({ "remote/worker/migrations/0001_init.sql": "create table a (x, y);" });
+  const result = plan(edited, "workflow_run", { STUB_VIEW_FAILS: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Authentication error/);
+  assert.equal(result.outputs.skip, undefined, "no decision is written");
 });

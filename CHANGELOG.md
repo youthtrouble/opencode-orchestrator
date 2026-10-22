@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- remote: the deploy workflow rolls back a `wrangler deploy` that fails after its version went live. Wrangler
+  4.118 makes the new version live before it sets up the custom domain and triggers, so a failure there exited
+  nonzero with the new code serving, and neither the smoke check nor the rollback ran. The rollback step
+  (`remote/worker/scripts/roll-back.sh`) now also runs after a failed deploy, reads the live version back, and
+  rolls back to the plan's previous version if it changed. The plan step now fails when `wrangler versions view`
+  fails; before, it read as a version naming no commit and deployed without the migration check or the
+  older-commit guard. See `remote/README.md`, "Deploy from GitHub Actions".
 - remote: a pull from an orch built before `X-Work-Trains-Accept` can no longer receive an accept (Sol review B).
   Its pull settled only the first 50 due accepts as rejected, so with a larger backlog the same pull selected the
   next ones and delivered them, and the old orch would post the redacted recommendation as the owner's reply. Such a

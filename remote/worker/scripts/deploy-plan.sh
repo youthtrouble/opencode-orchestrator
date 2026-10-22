@@ -19,31 +19,22 @@ set -euo pipefail
 
 config=wrangler.deploy.jsonc
 repo_root=$(git rev-parse --show-toplevel)
+scripts_dir=$(dirname "${BASH_SOURCE[0]}")
 
 output() { echo "$1=$2" >>"$GITHUB_OUTPUT"; }
-
-# The version serving all traffic now, or nothing for a Worker never deployed or mid gradual rollout.
-current_version() {
-  local status errors
-  errors=$(mktemp)
-  if ! status=$(wrangler deployments status --json -c "$config" 2>"$errors"); then
-    if grep -q "has no deployments" "$errors"; then return 0; fi
-    cat "$errors" >&2
-    return 1
-  fi
-  jq -r 'if (.versions | length) == 1 and .versions[0].percentage == 100 then .versions[0].version_id else "" end' <<<"$status"
-}
 
 # The commit a version was deployed from, if its message is one this repository has.
 deployed_commit() {
   local message
-  message=$(wrangler versions view "$1" --json -c "$config" | jq -r '.annotations["workers/message"] // ""')
+  # Called in a command substitution, where bash drops `set -e`, so a failed lookup is returned explicitly.
+  # Read as "names no commit" it would deploy without the migration check or the older-commit guard.
+  message=$(wrangler versions view "$1" --json -c "$config" | jq -r '.annotations["workers/message"] // ""') || return 1
   if [[ $message =~ ^[0-9a-f]{40}$ ]] && git -C "$repo_root" cat-file -e "$message^{commit}" 2>/dev/null; then
     echo "$message"
   fi
 }
 
-previous_version=$(current_version)
+previous_version=$("$scripts_dir/live-version.sh")
 deployed_sha=""
 if [[ -n $previous_version ]]; then deployed_sha=$(deployed_commit "$previous_version"); fi
 output previous_version "$previous_version"

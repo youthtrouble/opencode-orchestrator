@@ -180,20 +180,16 @@ jobs:
           done
           exit 1
 
-      - name: Roll back after a failure following the deploy
-        if: failure() && steps.deploy.outcome == 'success'
+      # `wrangler deploy` makes the new version live before it sets up routes and custom domains, so a failed
+      # deploy step may have left it live too; the script reads the live version back before rolling that back.
+      - name: Roll back a new version that went live in a failed run
+        if: failure() && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure')
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PREVIOUS_VERSION: ${{ steps.plan.outputs.previous_version }}
-        run: |
-          if [[ -z $PREVIOUS_VERSION ]]; then
-            echo "::error::A step after the deploy of $TARGET_SHA failed and there is no single previous version to roll back to; roll back by hand (remote/README.md)"
-            exit 1
-          fi
-          wrangler rollback "$PREVIOUS_VERSION" -c wrangler.deploy.jsonc -y -m "checks failed after deploying $TARGET_SHA" 2>&1 |
-            sed -E "$HIDE_WORKERS_DEV"
-          echo "::error::A step after the deploy of $TARGET_SHA failed; rolled back to version $PREVIOUS_VERSION. D1 migrations, if any ran, stay applied."
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+        run: scripts/roll-back.sh 2>&1 | sed -E "$HIDE_WORKERS_DEV"
 
       - name: Summary
         if: always()

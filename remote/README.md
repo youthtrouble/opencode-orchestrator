@@ -145,7 +145,10 @@ which commit is live: every CI deploy stores its commit as the version's message
 Otherwise the run applies D1 migrations (`wrangler d1 migrations apply --remote`), deploys, and runs a smoke
 check that uses no credentials. The check passes when `GET /` redirects to `*.cloudflareaccess.com` and
 `GET /api/v1/machine/pull` is refused. If the smoke check, or reading the live version after the deploy, fails,
-the run rolls back to the version that was live before and fails. The run's summary has the commit and version ids.
+the run rolls back to the version that was live before and fails. So does a `wrangler deploy` that fails after its
+version went live: wrangler makes the new version live before it sets up the custom domain, so the rollback step
+reads the live version back and rolls back only if it changed. A failed lookup of the live version's commit fails
+the run rather than deploying without the migration check. The run's summary has the commit and version ids.
 A push whose commit the live one already contains (two runs finishing out of order) deploys nothing.
 
 **What the smoke check does not catch.** Access answers both of its requests before the Worker runs, so a
