@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROLL_BACK = fileURLToPath(new URL("../scripts/roll-back.sh", import.meta.url));
+const WORKFLOW = new URL("../../../.github/workflows/remote-deploy.yml", import.meta.url);
 const TARGET_SHA = "a".repeat(40);
 const PREVIOUS = "version-previous";
 const NEW = "version-new";
@@ -107,4 +108,27 @@ test("a new version live with no single previous version fails for a rollback by
   assert.equal(result.status, 1);
   assert.equal(rollbackCommand(), undefined);
   assert.match(result.stdout, /^::error::Not rolled back: the deploy of a{40} failed after its version went live, and there is no single previous version/m);
+});
+
+// The tests above call the script directly, so they stay green if the workflow stops running it; this pins the
+// workflow step itself. A line-based read of one step, not a YAML parser: the step's keys sit at a fixed indent.
+function workflowStepRunning(script: string) {
+  const steps = readFileSync(WORKFLOW, "utf8").split(/\n(?= {6}- )/);
+  const step = steps.find((lines) => lines.includes(`run: ${script}`));
+  assert.ok(step, `no workflow step runs ${script}`);
+  const key = (name: string) => step.match(new RegExp(`^ {8}${name}: (.*)$`, "m"))?.[1];
+  const env = Object.fromEntries([...step.matchAll(/^ {10}([A-Z_]+): (.*)$/gm)].map(([, name, value]) => [name, value]));
+  return { if: key("if"), run: key("run"), env };
+}
+
+test("the workflow rolls back after a failure whether the deploy step succeeded or failed", () => {
+  const step = workflowStepRunning("scripts/roll-back.sh");
+  assert.equal(step.if, "failure() && (steps.deploy.outcome == 'success' || steps.deploy.outcome == 'failure')");
+  assert.match(step.run ?? "", /^scripts\/roll-back\.sh /);
+  assert.deepEqual(step.env, {
+    CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}",
+    CLOUDFLARE_ACCOUNT_ID: "${{ secrets.CLOUDFLARE_ACCOUNT_ID }}",
+    PREVIOUS_VERSION: "${{ steps.plan.outputs.previous_version }}",
+    DEPLOY_OUTCOME: "${{ steps.deploy.outcome }}",
+  });
 });
