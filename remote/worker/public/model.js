@@ -79,7 +79,8 @@ function chipText(label, posture, nowMs, format) {
   const pct = weekly ? posture.weekly_pct : posture.five_hour_pct;
   const resetsAt = weekly ? (posture.weekly_resets_at ?? null) : posture.resets_at;
   const parts = [`${label}${weekly ? " weekly" : ""}${pct === null ? "" : ` ${Math.round(pct)}%`}`];
-  if (resetsAt !== null) parts.push(`resets ${resetPhrase(resetsAt, nowMs, format)}`);
+  const phrase = resetsAt === null ? null : resetPhrase(resetsAt, nowMs, format);
+  if (phrase !== null) parts.push(`resets ${phrase}`);
   const credits = posture.credits ? creditsShort(posture.credits) : null;
   if (credits !== null) parts.push(credits);
   return parts.join(" · ");
@@ -98,10 +99,9 @@ function chipDetail(posture, nowMs, format) {
 /** "5-hour 28% · resets 22:50 (in 2 h 10 min)", "Weekly 41% · resets Mon 08:04". */
 function windowLine(name, pct, resetsAt, nowMs, format) {
   const parts = [pct === null ? name : `${name} ${Math.round(pct)}%`];
-  if (resetsAt !== null) {
-    const { relative, clock } = resetWhen(resetsAt, nowMs, format);
-    parts.push(`resets ${relative === null || clock === null ? (relative ?? clock) : `${clock} (${relative})`}`);
-  }
+  const { relative, clock } = resetsAt === null ? UNKNOWN_RESET : resetWhen(resetsAt, nowMs, format);
+  if (relative !== null && clock !== null) parts.push(`resets ${clock} (${relative})`);
+  else if (relative !== null || clock !== null) parts.push(`resets ${relative ?? clock}`);
   return parts.join(" · ");
 }
 
@@ -109,16 +109,21 @@ function windowLine(name, pct, resetsAt, nowMs, format) {
  * When a window resets, as its chip says it: "due" once past (the Mac's reading may be 30 min old),
  * "in < 1 min", "in 42 min", "in 2 h 10 min" within a day (minutes rounded up, so never "in 0 min"),
  * then the local weekday and time, "Mon 08:04", with the date from six days on, "Mon 27 Oct 08:04".
+ * Null for a time that is not a date: the schema checks only its shape, so "2026-13-45T99:99:99Z" passes.
  */
 export function resetPhrase(resetsAtIso, nowMs, format = {}) {
   const { relative, clock } = resetWhen(resetsAtIso, nowMs, format);
   return relative ?? clock;
 }
 
-/** The relative phrase (within a day) and the local clock time (null once due). */
+/** A reset nobody can place in time: the page says nothing about it rather than fail the render. */
+const UNKNOWN_RESET = Object.freeze({ relative: null, clock: null });
+
+/** The relative phrase (within a day) and the local clock time (null once due); both null for an invalid time. */
 function resetWhen(resetsAtIso, nowMs, format) {
   const at = new Date(resetsAtIso);
   const deltaMs = at.getTime() - nowMs;
+  if (Number.isNaN(deltaMs)) return UNKNOWN_RESET;
   if (deltaMs <= 0) return { relative: "due", clock: null };
   if (deltaMs < MINUTE_MS) return { relative: "in < 1 min", clock: clockTime(at, format) };
   if (deltaMs < DAY_MS) {

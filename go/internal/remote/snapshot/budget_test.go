@@ -70,6 +70,23 @@ func TestBudgetNamesTheDrivingWindowAndBothResets(t *testing.T) {
 	}
 }
 
+// A weekly window that is red but carries no reset still drives the level; the page then shows no
+// weekly reset rather than borrowing the 5-hour one.
+func TestBudgetNamesTheWeeklyWindowWithoutItsReset(t *testing.T) {
+	file := writeUsage(t, `{"generated_at":"2026-10-20T11:31:00.000Z",
+		"claude":{"ok":true,"session":{"pct":30,"resets_at":"2026-10-20T13:00:00Z"},"weekly":{"pct":100}},
+		"codex":{"ok":false}}`)
+	budget, err := Budget(testUsageConfig(t, file))
+	if err != nil || budget == nil {
+		t.Fatalf("Budget = %v, %v", budget, err)
+	}
+	got, _ := json.Marshal(budget.Anthropic)
+	want := `{"level":"red","five_hour_pct":30,"weekly_pct":100,"resets_at":"2026-10-20T13:00:00.000Z","window":"weekly"}`
+	if string(got) != want {
+		t.Errorf("Anthropic = %s\nwant %s", got, want)
+	}
+}
+
 func TestBudgetIsNullWithoutAFreshCache(t *testing.T) {
 	cases := map[string]string{
 		"no cache":            filepath.Join(t.TempDir(), "absent.json"),

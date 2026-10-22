@@ -297,7 +297,7 @@ function budgetChip(chip) {
       chip.text,
       el("span", { class: "vh" }, ` (${chip.level})`),
     ),
-    el("div", { class: "chip-detail", id: detailId, hidden: !open }, ...chip.detail.map((line) => el("p", {}, line))),
+    el("div", { class: `chip-detail level-${chip.level}`, id: detailId, hidden: !open }, ...chip.detail.map((line) => el("p", {}, line))),
   );
 }
 

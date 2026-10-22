@@ -1,6 +1,6 @@
 // Summaries the screenshot script (remote/e2e/screens.ts) serves to the page, one per state worth seeing.
 // Every name, URL and id is made up: no real project, owner or machine can reach a screenshot. Times are
-// offsets from `nowMs`, so "24 s ago" on the page is exact whenever the shot is taken.
+// offsets from `nowMs`, the fixed instant screens.ts serves them at and freezes the page's clock at.
 import type { Json } from "../phone.ts";
 
 export type Fixture = (nowMs: number) => Json;

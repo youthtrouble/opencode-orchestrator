@@ -151,6 +151,40 @@ test("a reset's clock time is the viewer's zone, 24-hour even where the locale's
 type Chip = { vendor: string; level: string; text: string; detail: string[] };
 const chipsOf = (budget: unknown): Chip[] => model.budgetChips(budget, NOW, UTC_GB);
 
+// The relative part counts real elapsed time and the clock part is the wall clock at the reset, so on
+// the day the clocks go back the two disagree by an hour, and the repeated hour reads as itself.
+test("on a day the clocks change, a reset's relative time is elapsed time and its clock is the local one", () => {
+  const londonDetail = (resetsAt: string) =>
+    model.budgetChips(
+      { anthropic: { level: "green", five_hour_pct: 10, weekly_pct: null, resets_at: resetsAt, window: "five_hour" }, openai: null },
+      Date.parse("2026-10-24T23:00:00Z"), // Sun 25 Oct 00:00 BST; at 01:00 UTC 02:00 BST becomes 01:00 GMT
+      { locale: "en-GB", timeZone: "Europe/London" },
+    )[0].detail[0];
+  assert.equal(londonDetail("2026-10-25T00:30:00Z"), "5-hour 10% · resets 01:30 (in 1 h 30 min)");
+  assert.equal(londonDetail("2026-10-25T01:30:00Z"), "5-hour 10% · resets 01:30 (in 2 h 30 min)");
+  assert.equal(londonDetail("2026-10-25T03:00:00Z"), "5-hour 10% · resets 03:00 (in 4 h)");
+
+  const losAngeles = { locale: "en-US", timeZone: "America/Los_Angeles" };
+  const midnightPdt = Date.parse("2026-11-01T07:00:00Z"); // Sun 1 Nov 00:00 PDT; at 09:00 UTC 02:00 PDT becomes 01:00 PST
+  assert.equal(model.resetPhrase("2026-11-01T10:30:00Z", midnightPdt, losAngeles), "in 3 h 30 min");
+  assert.equal(model.resetPhrase("2026-11-02T16:00:00Z", Date.parse("2026-10-28T12:00:00Z"), losAngeles), "Mon 08:00");
+});
+
+// The schema checks an ISO time's shape only, so a time that is not a date can reach the page.
+test("a reset time that is not a date, or no clock to measure it by, says nothing rather than fail", () => {
+  for (const resetsAt of ["garbage", "", "2026-13-45T99:99:99Z"]) {
+    assert.equal(model.resetPhrase(resetsAt, NOW, UTC_GB), null, resetsAt);
+    const [anthropic] = model.budgetChips(
+      { anthropic: { level: "amber", five_hour_pct: 80, weekly_pct: 41, resets_at: resetsAt, weekly_resets_at: resetsAt, window: "five_hour" }, openai: null },
+      NOW,
+      UTC_GB,
+    );
+    assert.equal(anthropic.text, "Anthropic 80%", resetsAt);
+    assert.deepEqual(anthropic.detail, ["5-hour 80%", "Weekly 41%"], resetsAt);
+  }
+  assert.equal(model.resetPhrase(IN_2H10, Number.NaN, UTC_GB), null);
+});
+
 test("with no budget, or a vendor the Mac could not read, a chip says there is no reading", () => {
   const unread = { level: "unknown", five_hour_pct: null, weekly_pct: null, resets_at: null, window: "five_hour" };
   for (const budget of [null, { anthropic: null, openai: null }, { anthropic: unread, openai: unread }]) {

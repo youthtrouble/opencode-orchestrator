@@ -7,7 +7,8 @@
 // carrying the Worker's own security headers so a CSP violation shows as it would live. No Worker, D1, Access
 // or orch runs, so no real data can reach a shot. Chrome is driven headless over the DevTools protocol with
 // Node's global WebSocket: no dependencies. Chrome is not iOS Safari (no Dynamic Type, no safe-area insets,
-// different font rasterising); the real-phone check is the owner's.
+// different font rasterising); the real-phone check is the owner's. Every shot is taken at one fixed instant
+// in one zone and locale (SHOT_NOW_MS, pinPageClock), so a re-run produces the same PNGs.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -44,6 +45,11 @@ const DEVICE_SCALE_FACTOR = 2;
 /** The zone and locale every shot renders reset times in (the owner's), whatever the host's. */
 const SHOT_TIME_ZONE = "Europe/London";
 const SHOT_LOCALE = "en-GB";
+/**
+ * The instant every shot is taken at, on the fixture server and in the page alike, so a reset's clock time
+ * ("resets 14:00", "Sat 14:50") and every "ago" are the same on each run and a re-run is byte-identical.
+ */
+const SHOT_NOW_MS = Date.parse("2026-10-20T11:50:00Z");
 
 const CHROME_START_TIMEOUT_MS = 15_000;
 /** How long Chrome gets to exit after SIGTERM before it is SIGKILLed. */
@@ -113,6 +119,7 @@ async function main(): Promise<void> {
     const foreignRequests = await watchForeignRequests(tab, fixtureServer.origin);
     const shots: { file: string; png: Buffer }[] = [];
     await pinLocaleAndTimeZone(tab);
+    await pinPageClock(tab);
     for (const [state, { fixture, click }] of Object.entries(SCREEN_STATES)) {
       fixtureServer.serve(fixture);
       for (const device of DEVICES) {
@@ -160,9 +167,8 @@ function findChrome(): string {
 /** Every fixture must be a Summary the Worker could send; one that drifted from the protocol fails the run. */
 function validateFixtures(): void {
   const validate = compileSchema(JSON.parse(readFileSync(SCHEMA_URL, "utf8")));
-  const nowMs = Date.now();
   const failures = Object.entries(SCREEN_STATES).flatMap(([state, { fixture }]) => {
-    const result = validate("Summary", fixture(nowMs));
+    const result = validate("Summary", fixture(SHOT_NOW_MS));
     return result.ok ? [] : result.errors.map(({ path, message }) => `${state}: ${path || "/"} ${message}`);
   });
   if (failures.length > 0) throw new ScreensError(`fixtures are not valid Summaries:\n${failures.join("\n")}`);
@@ -184,7 +190,7 @@ function startFixtureServer(): Promise<FixtureServer> {
     const headers = { ...SECURITY_HEADERS, "Cache-Control": "no-store" };
     if (request.method === "GET" && path === "/api/v1/summary" && current !== null) {
       response.writeHead(200, { ...headers, "Content-Type": "application/json" });
-      response.end(JSON.stringify(current(Date.now())));
+      response.end(JSON.stringify(current(SHOT_NOW_MS)));
       return;
     }
     const asset = publicAsset(path);
@@ -420,6 +426,23 @@ async function watchForeignRequests(tab: Tab, origin: string): Promise<string[]>
 async function pinLocaleAndTimeZone(tab: Tab): Promise<void> {
   await tab.send("Emulation.setLocaleOverride", { locale: SHOT_LOCALE });
   await tab.send("Emulation.setTimezoneOverride", { timezoneId: SHOT_TIME_ZONE });
+}
+
+/**
+ * Freezes the page's Date at SHOT_NOW_MS before any page script runs: `Date.now()` and `new Date()` return
+ * it, while `new Date(value)`, `Date.parse` and timers behave as ever. DevTools injects the script, so the
+ * page's CSP does not apply to it, and the page itself is served unchanged.
+ */
+async function pinPageClock(tab: Tab): Promise<void> {
+  const source = `(() => {
+    const frozenMs = ${SHOT_NOW_MS};
+    const RealDate = Date;
+    globalThis.Date = class extends RealDate {
+      constructor(...args) { if (args.length === 0) super(frozenMs); else super(...args); }
+      static now() { return frozenMs; }
+    };
+  })();`;
+  await tab.send("Page.addScriptToEvaluateOnNewDocument", { source });
 }
 
 /**

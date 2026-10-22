@@ -208,11 +208,38 @@ p {
 button.chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: var(--space-2);
   border-radius: var(--radius-l);
   padding: var(--space-1) var(--space-3);
   font-size: var(--text-small);
   text-align: start;
+}
+
+button.chip:is(:hover, :active):not(:disabled) {
+  background: var(--tint);
+}
+
+/* The chevron says the chip opens; it points up while open. At the end of a full-width phone chip. */
+button.chip::after {
+  content: "";
+  flex: none;
+  inline-size: 0.375rem;
+  block-size: 0.375rem;
+  margin-inline-start: auto;
+  border-inline-end: 1.5px solid var(--ink-3);
+  border-block-end: 1.5px solid var(--ink-3);
+  transform: translateY(-25%) rotate(45deg);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+button.chip[aria-expanded="true"]::after {
+  transform: translateY(25%) rotate(-135deg);
+}
+
+/* An open chip and its detail are one card, so two open details cannot be read as each other's. */
+button.chip[aria-expanded="true"] {
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
 }
 
 /* On a phone the chips stack full width, so a long one wraps inside its own row. */
@@ -223,15 +250,17 @@ button.chip {
   }
 }
 
-/* As wide as its chip and no wider (it adds nothing to the row's width), so opening it moves no other chip. */
+/* As wide as its chip and no wider (it adds nothing to the row's width), so opening it moves no other chip.
+   Joined to its chip (no gap, no top border), with a rule in the chip's level colour. */
 .chip-detail {
   inline-size: 0;
   min-inline-size: 100%;
-  margin-top: var(--space-1);
   padding: var(--space-2) var(--space-3);
   background: var(--surface);
   border: var(--divider);
-  border-radius: var(--radius-m);
+  border-block-start: none;
+  border-inline-start: 3px solid var(--tone);
+  border-radius: 0 0 var(--radius-l) var(--radius-l);
   font-size: var(--text-small);
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
