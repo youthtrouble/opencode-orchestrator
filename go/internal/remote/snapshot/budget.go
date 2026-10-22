@@ -87,10 +87,12 @@ func postureOf(posture routing.VendorPosture, fiveHourWindow string) *wire.Postu
 	}
 }
 
-// drivingWindow names the window whose reset lifts the vendor's level. The weekly window counts
-// toward the level only once it is red (routing's weeklyBlock), and when both are red its reset
-// is the one that unblocks the vendor; otherwise, and when nothing is known, it is the 5-hour one.
+// drivingWindow names the window whose reset lifts the vendor's level. A weekly-only plan
+// always uses weekly; otherwise weekly counts only once red (routing's weeklyBlock).
 func drivingWindow(posture routing.VendorPosture) string {
+	if fiveHour, _ := posture.Window("five_hour"); fiveHour == routing.NotApplicable {
+		return wire.WindowWeekly
+	}
 	if weekly, ok := posture.Window("weekly"); ok && weekly == routing.Red {
 		return wire.WindowWeekly
 	}

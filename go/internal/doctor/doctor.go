@@ -251,7 +251,15 @@ func (c *checks) feedsAndRouting() error {
 		if err != nil {
 			return err
 		}
-		c.pushDetail(OK, "Codex usage feed", "5h "+fiveHour+"% weekly "+weekly+"% plan "+field(codex, "plan"))
+		fiveHour += "%"
+		weekly += "%"
+		if jsjson.Path(codex, "five_hour", "applicable") == false {
+			fiveHour = "n/a"
+		}
+		if jsjson.Path(codex, "weekly", "applicable") == false {
+			weekly = "n/a"
+		}
+		c.pushDetail(OK, "Codex usage feed", "5h "+fiveHour+" weekly "+weekly+" plan "+field(codex, "plan"))
 	} else {
 		c.pushDetail(Fail, "Codex usage feed", jsjson.Path(codex, "error"))
 	}

@@ -226,13 +226,48 @@ func NormalizeCodex(c CodexAccount) *jsjson.Object {
 	out := jsjson.NewObject()
 	out.Set("ok", true)
 	out.Set("plan", orNull(firstTruthy(jsjson.Path(c.Account, "account", "planType"), jsjson.Path(rl, "planType"))))
-	out.Set("five_hour", codexWindow(jsjson.Path(rl, "primary")))
-	out.Set("weekly", codexWindow(jsjson.Path(rl, "secondary")))
+	windows := codexWindows(rl)
+	out.Set("five_hour", windows[0])
+	out.Set("weekly", windows[1])
 	out.Set("rate_limit_reached", orNull(jsjson.Path(rl, "rateLimitReachedType")))
 	out.Set("ordinary_usage_allowed", jsjson.Path(limits, "ordinaryUsageAllowed"))
 	out.Set("reset_credits_available", nullish(jsjson.Path(limits, "rateLimitResetCredits", "availableCount"), 0.0))
 	out.Set("credits", orNull(jsjson.Path(rl, "credits")))
 	return out
+}
+
+func codexWindows(rl any) [2]*jsjson.Object {
+	candidates := [2]*jsjson.Object{}
+	slots := [2]int{0, 1}
+	labeled := false
+	for i, key := range []string{"primary", "secondary"} {
+		candidates[i], _ = jsjson.Path(rl, key).(*jsjson.Object)
+		if duration, ok := jsjson.Path(candidates[i], "windowDurationMins").(float64); ok {
+			labeled = true
+			slots[i] = 0
+			if duration >= 1440 {
+				slots[i] = 1
+			}
+		}
+	}
+	// Ambiguous durations retain the legacy positional mapping.
+	if candidates[0] != nil && candidates[1] != nil && slots[0] == slots[1] {
+		slots = [2]int{0, 1}
+	}
+	mapped := [2]*jsjson.Object{}
+	for i, candidate := range candidates {
+		if candidate != nil {
+			mapped[slots[i]] = candidate
+		}
+	}
+	var windows [2]*jsjson.Object
+	for i, candidate := range mapped {
+		windows[i] = codexWindow(candidate)
+		if candidate == nil && labeled {
+			windows[i].Set("applicable", false)
+		}
+	}
+	return windows
 }
 
 func codexWindow(w any) *jsjson.Object {

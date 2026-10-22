@@ -142,6 +142,9 @@ func windowFreshlyReset(detail any, vendor string, now time.Time, graceMin float
 	windowKey := "session"
 	if vendor == routing.OpenAI {
 		windowKey = "five_hour"
+		if jsjson.Path(detail, "five_hour", "applicable") == false {
+			windowKey = "weekly"
+		}
 	}
 	window := jsjson.Path(detail, windowKey)
 	resetsAt := jsjson.Path(window, "resets_at")

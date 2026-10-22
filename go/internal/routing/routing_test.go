@@ -64,6 +64,78 @@ func expect[T comparable](t *testing.T, what string, got, want T) {
 	}
 }
 
+func TestWeeklyOnlyCodexRouting(t *testing.T) {
+	reg := loadRegistry(t)
+	for _, tc := range []struct {
+		pct   any
+		level string
+	}{{10.0, Green}, {thresholdsOf(reg).Amber, Amber}, {thresholdsOf(reg).Red, Red}, {nil, Unknown}} {
+		x := parse(t, `{"ok":true,"plan":"prolite","five_hour":{"pct":null,"resets_at":null,"window_mins":null,"applicable":false},"weekly":{"pct":0,"resets_at":"2099-01-07T20:06:43.000Z","window_mins":10080}}`)
+		jsjson.Path(x, "weekly").(*jsjson.Object).Set("pct", tc.pct)
+		u := usageOf(claudeUsage(t, 10, 10), x)
+		r := ResolveRoles(u, reg, time.Now(), nil, CreditsPolicy{})
+		o := r.Postures.OpenAI
+		expect(t, "overall", o.Overall, tc.level)
+		expect(t, "frontier", o.Frontier, tc.level)
+		five, _ := o.Window("five_hour")
+		expect(t, "five_hour", five, NotApplicable)
+		if tc.pct == nil {
+			if o.Headroom != nil {
+				t.Error("unknown headroom")
+			}
+		} else {
+			expect(t, "headroom", *o.Headroom, 100-tc.pct.(float64))
+		}
+		if strings.Contains(strings.Join(r.Reasons, " "), "not steering") {
+			t.Error("weekly-only amber steers")
+		}
+		if tc.level == Red {
+			for _, role := range r.Roles {
+				if role.Entry != nil {
+					expect(t, role.Role, role.Entry.Vendor, Anthropic)
+				}
+			}
+			expectReason(t, r, `Codex window is red`)
+			r = ResolveRoles(usageOf(claudeUsage(t, 99, 99), x), reg, time.Now(), nil, CreditsPolicy{})
+			expect(t, "both red paused", r.Paused, true)
+		}
+		if tc.level == Green {
+			expect(t, "reviewer usable", r.Role("reviewer").Vendor, OpenAI)
+		}
+	}
+	x := parse(t, `{"ok":true,"five_hour":{"applicable":false},"weekly":{"pct":5},"rate_limit_reached":"primary"}`)
+	expect(t, "locked", VendorPostures(usageOf(nil, x), reg, time.Now()).OpenAI.Overall, Red)
+	x.Set("rate_limit_reached", nil)
+	jsjson.Path(x, "weekly").(*jsjson.Object).Set("resets_at", soon(5))
+	expect(t, "weekly reset soon", VendorPostures(usageOf(nil, x), reg, time.Now()).OpenAI.ResetsSoon, true)
+	expect(t, "n/a never wins", Worst(NotApplicable), Green)
+	for _, x := range []*jsjson.Object{
+		parse(t, `{"ok":true,"five_hour":{"pct":null},"weekly":{"pct":null}}`),
+		parse(t, `{"ok":true,"five_hour":{"pct":null},"weekly":{"pct":null,"applicable":false}}`),
+	} {
+		p := VendorPostures(usageOf(nil, x), reg, time.Now()).OpenAI
+		expect(t, "unreadable", p.Overall, Unknown)
+		five, _ := p.Window("five_hour")
+		expect(t, "unreadable window", five, Unknown)
+	}
+	// Same literals in the JS test pin the new, intentionally post-oracle behavior.
+	x = parse(t, `{"ok":true,"plan":"prolite","five_hour":{"pct":null,"resets_at":null,"window_mins":null,"applicable":false},"weekly":{"pct":0,"resets_at":"2099-01-07T20:06:43.000Z","window_mins":10080}}`)
+	u := usageOf(claudeUsage(t, 10, 10), x)
+	r := ResolveRoles(u, reg, time.Now(), nil, CreditsPolicy{})
+	expect(t, "literal windows", r.Postures.OpenAI.Windows[1].Level, Green)
+	expect(t, "prompt", strings.Split(SummarizeForPrompt(r, u), "\n")[1], "Codex (prolite): 5h n/a; weekly 0% [green] resets 2099-01-07T20:06:43.000Z.")
+	jsjson.Path(x, "five_hour").(*jsjson.Object).Set("applicable", true)
+	jsjson.Path(x, "five_hour").(*jsjson.Object).Set("pct", 10.0)
+	jsjson.Path(x, "weekly").(*jsjson.Object).Set("applicable", false)
+	r = ResolveRoles(u, reg, time.Now(), nil, CreditsPolicy{})
+	expect(t, "five-only overall", r.Postures.OpenAI.Overall, Green)
+	weekly, _ := r.Postures.OpenAI.Window("weekly")
+	expect(t, "five-only weekly", weekly, NotApplicable)
+	if !strings.Contains(SummarizeForPrompt(r, u), "; weekly n/a.") {
+		t.Error("weekly n/a missing")
+	}
+}
+
 // TestRoutingJS ports orchestrator/tests/routing.test.mjs; subtest names are the JS titles.
 func TestRoutingJS(t *testing.T) {
 	reg := loadRegistry(t)

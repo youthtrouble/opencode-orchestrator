@@ -225,6 +225,18 @@ func TestReadCodexAccountAndLimitsSpawnFailure(t *testing.T) {
 
 // The goldens are normalizeCodex's output for the same inputs (testdata/usage/gen.mjs).
 func TestNormalizeCodexMatchesJS(t *testing.T) {
+	// a90ac3eb, plan amendment A1: single-window absence metadata postdates the
+	// 9e3a456 oracle. Keep its golden immutable and account for only this delta.
+	postOracleDeltas := map[string]func(*testing.T, *jsjson.Object){
+		"codex-by-id": func(t *testing.T, golden *jsjson.Object) {
+			t.Helper()
+			weekly := jsjson.Path(golden, "weekly").(*jsjson.Object)
+			if _, present := weekly.Get("applicable"); present {
+				t.Fatal("codex-by-id.golden must stay the 9e3a456 oracle output; do not regenerate it from post-a90ac3eb JS")
+			}
+			weekly.Set("applicable", false)
+		},
+	}
 	cases := map[string]CodexAccount{
 		"codex":       {Account: readFixture(t, "codex-account.json"), Limits: readFixture(t, "codex-ratelimits.json")},
 		"codex-by-id": {Limits: readFixture(t, "codex-ratelimits-by-id.json")},
@@ -232,10 +244,107 @@ func TestNormalizeCodexMatchesJS(t *testing.T) {
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got, want := indented(t, NormalizeCodex(input)), readGolden(t, name+".golden"); got != want {
+			want := readGolden(t, name+".golden")
+			if delta, ok := postOracleDeltas[name]; ok {
+				golden, err := jsjson.Unmarshal([]byte(want))
+				if err != nil {
+					t.Fatal(err)
+				}
+				delta(t, golden.(*jsjson.Object))
+				want = indented(t, golden)
+			}
+			if got := indented(t, NormalizeCodex(input)); got != want {
 				t.Errorf("got\n%s\nwant\n%s", got, want)
 			}
 		})
+	}
+}
+
+func TestNormalizeCodexSingleWindowFeedShapes(t *testing.T) {
+	for _, tc := range []struct{ name, fixture, want string }{
+		{"weekly-only", "codex-ratelimits-weekly-only.json", `{"ok":true,"plan":"prolite","five_hour":{"pct":null,"resets_at":null,"window_mins":null,"applicable":false},"weekly":{"pct":0,"resets_at":"2099-01-07T00:06:43.000Z","window_mins":10080},"rate_limit_reached":null,"ordinary_usage_allowed":null,"reset_credits_available":0,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"}}`},
+		{"five-hour-only", "codex-ratelimits-by-id.json", `{"ok":true,"plan":"pro","five_hour":{"pct":100,"resets_at":"2026-10-19T00:20:19.987Z","window_mins":300},"weekly":{"pct":null,"resets_at":null,"window_mins":null,"applicable":false},"rate_limit_reached":"primary","ordinary_usage_allowed":null,"reset_credits_available":0,"credits":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := readFixture(t, tc.fixture)
+			windowData := jsjson.Path(fixture, "rateLimits")
+			if windowData == nil {
+				windowData = jsjson.Path(fixture, "rateLimitsByLimitId", "codex")
+			}
+			topLevel := jsjson.NewObject()
+			topLevel.Set("rateLimits", windowData)
+			byID := jsjson.NewObject()
+			byID.Set("codex", windowData)
+			fallback := jsjson.NewObject()
+			fallback.Set("rateLimitsByLimitId", byID)
+			var first string
+			for i, limits := range []*jsjson.Object{topLevel, fallback} {
+				got, err := jsjson.Marshal(NormalizeCodex(CodexAccount{Limits: limits}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(got) != tc.want {
+					t.Errorf("shape %d = %s, want %s", i, got, tc.want)
+				}
+				if i == 0 {
+					first = string(got)
+				} else if string(got) != first {
+					t.Error("feed shapes normalize differently")
+				}
+			}
+		})
+	}
+}
+
+func TestNormalizeCodexDurationWindows(t *testing.T) {
+	for _, tc := range []struct{ name, five, weekly, plan string }{
+		{"weekly-only", `{"pct":null,"resets_at":null,"window_mins":null,"applicable":false}`, `{"pct":0,"resets_at":"2099-01-07T00:06:43.000Z","window_mins":10080}`, "prolite"},
+		{"five-hour-only", `{"pct":16,"resets_at":"2099-01-01T05:00:19.000Z","window_mins":300}`, `{"pct":null,"resets_at":null,"window_mins":null,"applicable":false}`, "plus"},
+		{"swapped", `{"pct":16,"resets_at":"2099-01-01T05:00:19.000Z","window_mins":300}`, `{"pct":60,"resets_at":"2099-01-07T00:06:43.000Z","window_mins":10080}`, "plus"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeCodex(CodexAccount{Limits: readFixture(t, "codex-ratelimits-"+tc.name+".json")})
+			for key, want := range map[string]string{"five_hour": tc.five, "weekly": tc.weekly} {
+				encoded, err := jsjson.Marshal(jsjson.Path(got, key))
+				if err != nil || string(encoded) != want {
+					t.Errorf("%s = %s (%v), want %s", key, encoded, err, want)
+				}
+			}
+			if jsjson.Path(got, "plan") != tc.plan {
+				t.Errorf("plan = %v", jsjson.Path(got, "plan"))
+			}
+		})
+	}
+}
+
+func TestNormalizeCodexUnreadableAndAmbiguousWindows(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"rateLimits":{"primary":{"usedPercent":null},"secondary":null}}`, `{"rateLimits":{"primary":7,"secondary":[]}}`} {
+		v, err := jsjson.Unmarshal([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := NormalizeCodex(CodexAccount{Limits: v})
+		for _, key := range []string{"five_hour", "weekly"} {
+			if _, present := jsjson.Lookup(got, key, "applicable"); present {
+				t.Errorf("%s: unreadable window marked absent", raw)
+			}
+		}
+	}
+	for _, duration := range []int{300, 1440, 10080} {
+		raw := fmt.Sprintf(`{"rateLimits":{"primary":{"usedPercent":1,"windowDurationMins":%d},"secondary":{"usedPercent":2,"windowDurationMins":%d}}}`, duration, duration)
+		v, _ := jsjson.Unmarshal([]byte(raw))
+		got := NormalizeCodex(CodexAccount{Limits: v})
+		if jsjson.Path(got, "five_hour", "pct") != 1.0 || jsjson.Path(got, "weekly", "pct") != 2.0 {
+			t.Errorf("collision did not retain position: %s", indented(t, got))
+		}
+	}
+	v, _ := jsjson.Unmarshal([]byte(`{"rateLimits":{"primary":{"usedPercent":null,"windowDurationMins":1440}}}`))
+	got := NormalizeCodex(CodexAccount{Limits: v})
+	if jsjson.Path(got, "five_hour", "applicable") != false {
+		t.Error("1440 minutes must map to weekly")
+	}
+	if _, present := jsjson.Lookup(got, "weekly", "applicable"); present {
+		t.Error("present window with null percentage must not be n/a")
 	}
 }
 

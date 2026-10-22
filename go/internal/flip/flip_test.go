@@ -39,6 +39,27 @@ func postures(t *testing.T, openai, anthropic string, openaiResetInMin int) rout
 	}
 }
 
+func TestWeeklyOnlyCodexFlip(t *testing.T) {
+	reg := parse(t, `{"conductor":{"home":"opencode","green_grace_minutes":10,"flip_cooldown_minutes":10},"thresholds":{"amber":60,"red":85,"soon_minutes":20}}`)
+	for _, tc := range []struct {
+		pct, claudePct, resetIn int
+		active, action, to      string
+	}{
+		{0, 10, 10080 - 5, "claude", ActionStay, ""},
+		{0, 10, 10080 - 60, "claude", ActionHandback, DoorOpencode},
+		{85, 10, 10080, "opencode", ActionFlip, DoorClaude},
+		{85, 99, 10080, "opencode", ActionPause, ""},
+		{0, 10, 10080, "opencode", ActionStay, ""},
+	} {
+		u := parse(t, fmt.Sprintf(`{"claude":{"ok":true,"session":{"pct":%d},"weekly":{"pct":10}},"codex":{"ok":true,"plan":"prolite","five_hour":{"pct":null,"resets_at":null,"window_mins":null,"applicable":false},"weekly":{"pct":%d,"resets_at":%q,"window_mins":10080}}}`, tc.claudePct, tc.pct, isoIn(tc.resetIn)))
+		p := routing.VendorPostures(u, reg, now)
+		d := Decide(Input{Active: tc.active, Postures: p, Registry: reg, Now: now})
+		if d.Action != tc.action || (tc.to != "" && d.To != tc.to) {
+			t.Errorf("%+v: got %+v", tc, d)
+		}
+	}
+}
+
 // TestFlipJS ports orchestrator/tests/flip.test.mjs; subtest names are the JS titles.
 func TestFlipJS(t *testing.T) {
 	reg := parse(t, `{"conductor": {"home": "opencode", "green_grace_minutes": 10, "flip_cooldown_minutes": 10}}`)

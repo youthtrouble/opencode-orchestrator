@@ -166,6 +166,18 @@ OK   no plugin errors in recent log
 	}
 }
 
+func TestWeeklyOnlyCodexFeedDetail(t *testing.T) {
+	m := healthy(t)
+	x := jsjson.Path(m.routing.Usage, "codex").(*jsjson.Object)
+	x.Set("plan", "prolite")
+	x.Set("five_hour", jsjson.NewObject())
+	jsjson.Path(x, "five_hour").(*jsjson.Object).Set("applicable", false)
+	jsjson.Path(x, "weekly").(*jsjson.Object).Set("pct", 0.0)
+	if got := lines(Check(m.deps())); !strings.Contains(got, "OK   Codex usage feed  —  5h n/a weekly 0% plan prolite\n") {
+		t.Errorf("rows:\n%s", got)
+	}
+}
+
 func TestNothingInstalledFailsEveryProbe(t *testing.T) {
 	m := &machine{routeErr: errors.New("ENOENT: no such file or directory, open '/h/models.json'")}
 	rows := Check(m.deps())
