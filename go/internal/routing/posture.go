@@ -19,6 +19,8 @@ const (
 	Unknown = "unknown"
 	Amber   = "amber"
 	Red     = "red"
+	// NotApplicable describes only a window, never a vendor's overall/frontier level.
+	NotApplicable = "n/a"
 )
 
 // Thresholds are registry.thresholds: percent-used levels, the "resets soon" horizon and the
@@ -92,8 +94,8 @@ type VendorPosture struct {
 	Available bool
 	Overall   string
 	Frontier  string
-	// Headroom is 100 minus the used percentage of the 5-hour window (Claude session, Codex
-	// five_hour); nil (JSON null) when that percentage is unknown. Only written for available
+	// Headroom is 100 minus the used percentage of the driving window (Claude session, Codex
+	// five_hour or weekly on a weekly-only plan); nil when unknown. Only written for available
 	// vendors. A non-numeric percentage gives NaN, as numeric strings are not modelled.
 	Headroom *float64
 	Windows  []Window
@@ -218,6 +220,20 @@ func openAIPosture(codex any, th Thresholds, now time.Time) VendorPosture {
 	fiveHourPct := jsjson.Path(codex, "five_hour", "pct")
 	fiveHour := PostureFromPct(fiveHourPct, th, jsjson.Truthy(jsjson.Path(codex, "rate_limit_reached")))
 	weekly := PostureFromPct(jsjson.Path(codex, "weekly", "pct"), th, false)
+	if jsjson.Path(codex, "five_hour", "applicable") == false {
+		weeklyPct := jsjson.Path(codex, "weekly", "pct")
+		weekly = PostureFromPct(weeklyPct, th, jsjson.Truthy(jsjson.Path(codex, "rate_limit_reached")))
+		return VendorPosture{
+			Available: true, Overall: weekly, Frontier: weekly,
+			Headroom:   headroomOf(weeklyPct),
+			Windows:    []Window{{"five_hour", NotApplicable}, {"weekly", weekly}},
+			ResetsSoon: resetsSoon(jsjson.Path(codex, "weekly", "resets_at"), th, now),
+			Detail:     codex,
+		}
+	}
+	if jsjson.Path(codex, "weekly", "applicable") == false {
+		weekly = NotApplicable
+	}
 	return VendorPosture{
 		Available:  true,
 		Overall:    Worst(fiveHour, weeklyBlock(weekly)),

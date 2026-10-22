@@ -71,6 +71,8 @@ func TestGate(t *testing.T) {
 			`{"allowed":false,"level":"red","resets_at":"2026-10-18T23:00:00Z","note":"anthropic budget is red; refusing to start (pass --force to override). Resets 2026-10-18T23:00:00Z."}`},
 		{"openai falls back from the 5-hour to the weekly reset", unknownFeed, codexRed, "openai", false, false,
 			`{"allowed":false,"level":"red","resets_at":"2026-10-24T00:00:00.000Z","note":"openai budget is red; refusing to start (pass --force to override). Resets 2026-10-24T00:00:00.000Z."}`},
+		{"weekly-only red names the weekly reset", unknownFeed, `{"ok":true,"five_hour":{"pct":null,"resets_at":null,"applicable":false},"weekly":{"pct":85,"resets_at":"2026-10-24T00:00:00.000Z"}}`, "openai", false, false,
+			`{"allowed":false,"level":"red","resets_at":"2026-10-24T00:00:00.000Z","note":"openai budget is red; refusing to start (pass --force to override). Resets 2026-10-24T00:00:00.000Z."}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

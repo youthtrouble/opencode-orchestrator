@@ -32,6 +32,19 @@ func TestBudgetMapsTheCachedPostures(t *testing.T) {
 	}
 }
 
+func TestBudgetWeeklyOnlyAmber(t *testing.T) {
+	file := writeUsage(t, `{"generated_at":"2026-10-20T11:31:00.000Z","codex":{"ok":true,"five_hour":{"pct":null,"resets_at":null,"applicable":false},"weekly":{"pct":60,"resets_at":"2026-10-26T08:04:00Z"}}}`)
+	budget, err := Budget(testUsageConfig(t, file))
+	if err != nil || budget == nil || budget.OpenAI == nil {
+		t.Fatalf("Budget = %v, %v", budget, err)
+	}
+	got, _ := json.Marshal(budget.OpenAI)
+	want := `{"level":"amber","five_hour_pct":null,"weekly_pct":60,"resets_at":null,"weekly_resets_at":"2026-10-26T08:04:00.000Z","window":"weekly"}`
+	if string(got) != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
 func TestBudgetCarriesTheOpenAICreditsFact(t *testing.T) {
 	file := writeUsage(t, `{"generated_at":"2026-10-20T11:31:00.000Z",
 		"claude":{"ok":true,"session":{"pct":10},"weekly":{"pct":null}},

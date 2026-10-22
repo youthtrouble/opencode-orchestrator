@@ -54,10 +54,15 @@ func codexLine(codex any, posture *VendorPosture) string {
 		return "Codex usage: unavailable (" + jsjson.OrText(jsjson.Path(codex, "error"), "no data") + ")."
 	}
 	return "Codex (" + jsjson.OrText(jsjson.Path(codex, "plan"), "subscription") + "): " +
-		"5h " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "five_hour", "pct")) + "% [" + jsjson.TemplateStringOf(posture.Window("five_hour")) + "] " +
-		"resets " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "five_hour", "resets_at")) + "; " +
-		"weekly " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "weekly", "pct")) + "% [" + jsjson.TemplateStringOf(posture.Window("weekly")) + "] " +
-		"resets " + jsjson.TemplateStringOf(jsjson.Lookup(codex, "weekly", "resets_at")) + creditsSuffix(codex) + "."
+		codexWindowText(codex, posture, "five_hour", "5h") + "; " +
+		codexWindowText(codex, posture, "weekly", "weekly") + creditsSuffix(codex) + "."
+}
+
+func codexWindowText(codex any, posture *VendorPosture, key, label string) string {
+	if jsjson.Path(codex, key, "applicable") == false {
+		return label + " n/a"
+	}
+	return label + " " + jsjson.TemplateStringOf(jsjson.Lookup(codex, key, "pct")) + "% [" + jsjson.TemplateStringOf(posture.Window(key)) + "] resets " + jsjson.TemplateStringOf(jsjson.Lookup(codex, key, "resets_at"))
 }
 
 // creditsSuffix is "; <credits text>" when Codex reported credits or banked resets.

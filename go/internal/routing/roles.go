@@ -327,7 +327,8 @@ func reasons(postures *Postures, coder *RoleEntry, paused bool, credits CreditsP
 	if coder != nil && coder.Balanced {
 		out = append(out, "Coder balanced to "+coder.Vendor+": it has more 5-hour headroom (Claude "+usedText(a)+"% vs Codex "+usedText(o)+"% used).")
 	}
-	if weeklyAmber(a) || weeklyAmber(o) {
+	fiveHour, _ := o.Window("five_hour")
+	if weeklyAmber(a) || (weeklyAmber(o) && fiveHour != NotApplicable) {
 		out = append(out, "A weekly cap is amber: shown for planning, not steering; only a red weekly blocks a vendor.")
 	}
 	if o.Available && o.Overall == Red {
