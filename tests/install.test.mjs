@@ -28,6 +28,17 @@ const present = (file) => {
   }
 };
 
+// A fake orch: `doctor` logs ["doctor", <its own path>], leaves runtime state in the config and
+// exits FAIL_DOCTOR; anything else prints the version line.
+const fakeOrch = (versionLine) => `#!/bin/sh
+if [ "$1" = "doctor" ]; then
+  printf '["doctor","%s"]\\n' "$0" >> "$TEST_LOG"
+  printf '%s' 'fake runtime state' > "$HOME/.config/opencode/service.json"
+  exit "\${FAIL_DOCTOR:-0}"
+fi
+echo "${versionLine}"
+`;
+
 function fixture(t) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator install ")));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -51,11 +62,7 @@ function fixture(t) {
   fs.mkdirSync(path.join(checkout, "go", "internal", "version"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "go", "go.mod"), "module fixture\n");
   fs.writeFileSync(path.join(checkout, "go", "internal", "version", "VERSION"), "0.5.0\n");
-  fs.mkdirSync(path.join(checkout, "orchestrator", "bin"));
-  fs.writeFileSync(
-    path.join(checkout, "orchestrator", "bin", "doctor.mjs"),
-    "// Placeholder: the fixture Node command stubs doctor invocation.\n",
-  );
+  fs.writeFileSync(path.join(checkout, "orchestrator", "models.json"), "{}");
   // Only fixtures are installed; external commands never reach real services/auth.
   const external = `#!/bin/sh
 if [ "$1" = "--version" ]; then exit 0; fi
@@ -67,14 +74,13 @@ printf '%s\\n' '["opencode","reload"]' >> "$TEST_LOG"
     path.join(bin, "node"),
     `#!/bin/sh
 if [ "$1" = "-" ]; then exec "$TEST_NODE" "$@"; fi
-[ "$1" = "$HOME/.config/opencode/orchestrator/bin/doctor.mjs" ] || exit 2
-printf '["doctor","%s"]\\n' "$1" >> "$TEST_LOG"
-printf '%s' 'fake runtime state' > "$HOME/.config/opencode/service.json"
-exit "\${FAIL_DOCTOR:-0}"
+exit 2
 `,
     { mode: 0o755 },
   );
-  // The fake go "builds" a script that reports FAKE_ORCH_VERSION, so no real toolchain runs.
+  // The fake go "builds" a fake orch that reports FAKE_ORCH_VERSION, so no real toolchain runs.
+  const builtOrch = path.join(root, "built orch");
+  fs.writeFileSync(builtOrch, fakeOrch("${FAKE_ORCH_VERSION:-0.5.0} (fake)"));
   fs.writeFileSync(
     path.join(bin, "go"),
     `#!/bin/sh
@@ -89,7 +95,7 @@ done
 printf '["go","build","%s","%s"]\\n' "$(pwd -P)" "$out" >> "$TEST_LOG"
 if [ "\${FAIL_BUILD:-0}" = "1" ]; then exit 1; fi
 if [ -n "\${RACE_ORCH:-}" ]; then /bin/mkdir -p "\${RACE_ORCH%/*}"; printf '%s' "user's own orch" > "$RACE_ORCH"; fi
-printf '#!/bin/sh\\necho "\${FAKE_ORCH_VERSION:-0.5.0} (fake)"\\n' > "$out"
+/bin/cp "$FAKE_ORCH_BUILD" "$out"
 `,
     { mode: 0o755 },
   );
@@ -101,6 +107,8 @@ printf '#!/bin/sh\\necho "\${FAKE_ORCH_VERSION:-0.5.0} (fake)"\\n' > "$out"
     PATH: bin,
     TEST_LOG: log,
     TEST_NODE: process.execPath,
+    FAKE_ORCH_BUILD: builtOrch,
+    ORCH_BIN: "",
     FAIL_RELOAD: "0",
     FAIL_DOCTOR: "0",
     FAIL_BUILD: "0",
@@ -157,7 +165,7 @@ function previousTarget(f, type) {
 }
 
 const releaseAsset = `orch_0.5.0_${process.platform}_${{ arm64: "arm64", x64: "amd64" }[process.arch]}`;
-const releasedOrch = '#!/bin/sh\necho "0.5.0 (release)"\n';
+const releasedOrch = fakeOrch("0.5.0 (release)");
 const sha256 = (content) => crypto.createHash("sha256").update(content).digest("hex");
 
 // Removes go and serves a release from a local directory through a fake curl (no network).
@@ -241,7 +249,7 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
       assert.deepEqual(commands, [
         ["go", "build", path.join(f.checkout, "go"), path.join(f.state, "active", "orch")],
         ["opencode", "reload"],
-        ["doctor", path.join(f.target, "orchestrator", "bin", "doctor.mjs")],
+        ["doctor", f.binary],
       ]);
       assertPlacedOrch(f);
       success(await f.run(path.relative(f.checkout, path.join(f.target, "uninstall.sh"))));
@@ -429,26 +437,78 @@ describe("installer (isolated temporary homes)", { concurrency: 16 }, () => {
     assertNothingChanged(f);
   });
 
-  test("--skip-binary installs without go and records no binary", async (t) => {
+  const skipBinaryRefusal =
+    /--skip-binary needs an existing orch \(ORCH_BIN, ~\/\.local\/bin\/orch or PATH\); nothing changed\./;
+  const outputLines = (result) => result.stdout.split("\n");
+
+  test("--skip-binary uses an existing orch on PATH, runs its doctor and records no binary", async (t) => {
     const f = fixture(t);
-    fs.rmSync(path.join(f.checkout, "go"), { recursive: true });
     fs.unlinkSync(path.join(f.bin, "go"));
+    const existing = path.join(f.bin, "orch");
+    fs.writeFileSync(existing, fakeOrch("0.5.0 (existing)"), { mode: 0o755 });
     const installed = await f.run("install.sh", ["--skip-binary"]);
     success(installed);
-    assert.match(installed.stdout, /orch: skipped \(--skip-binary\)/);
+    assert.ok(outputLines(installed).includes(`orch: ${existing} (existing; not managed by this install)`));
+    assert.doesNotMatch(installed.stdout, /Note:/);
+    assert.deepEqual(logged(f), [
+      ["opencode", "reload"],
+      ["doctor", existing],
+    ]);
     assert.equal(f.receipt().binary, null);
     assert.equal(present(f.binary), false);
-    assert.equal(fs.readFileSync(f.log, "utf8").includes('"go"'), false);
     success(await f.run("uninstall.sh"));
+    assert.equal(present(existing), true);
     assert.equal(present(path.join(f.archives()[0], "removed-binary")), false);
   });
 
-  test("--skip-binary with go present runs no build", async (t) => {
+  test("--skip-binary prefers ~/.local/bin/orch over PATH", async (t) => {
     const f = fixture(t);
+    fs.mkdirSync(path.dirname(f.binary), { recursive: true });
+    fs.writeFileSync(f.binary, fakeOrch("0.5.0 (local)"), { mode: 0o755 });
+    fs.writeFileSync(path.join(f.bin, "orch"), fakeOrch("0.5.0 (path)"), { mode: 0o755 });
     success(await f.run("install.sh", ["--skip-binary"]));
-    assert.equal(fs.readFileSync(f.log, "utf8").includes('"go"'), false);
+    assert.deepEqual(logged(f).at(-1), ["doctor", f.binary]);
     assert.equal(f.receipt().binary, null);
-    assert.equal(present(f.binary), false);
+  });
+
+  for (const [name, existingOrch] of [
+    ["no orch", null],
+    ["an orch whose version fails", "#!/bin/sh\nexit 3\n"],
+  ]) {
+    test(`--skip-binary with ${name} is refused before mutations`, async (t) => {
+      const f = fixture(t);
+      if (existingOrch) fs.writeFileSync(path.join(f.bin, "orch"), existingOrch, { mode: 0o755 });
+      failure(await f.run("install.sh", ["--skip-binary"]), skipBinaryRefusal);
+      assertNothingChanged(f);
+      assert.equal(present(f.log), false);
+    });
+  }
+
+  test("--skip-binary with a non-executable ORCH_BIN is refused without falling through to PATH", async (t) => {
+    const f = fixture(t);
+    fs.writeFileSync(path.join(f.bin, "orch"), fakeOrch("0.5.0 (path)"), { mode: 0o755 });
+    const notExecutable = path.join(f.root, "orch");
+    fs.writeFileSync(notExecutable, fakeOrch("0.5.0 (not executable)"), { mode: 0o644 });
+    failure(await f.run("install.sh", ["--skip-binary"], { ORCH_BIN: notExecutable }), skipBinaryRefusal);
+    assertNothingChanged(f);
+  });
+
+  test("--skip-binary notes an ORCH_BIN whose version differs from the checkout", async (t) => {
+    const f = fixture(t);
+    const older = path.join(f.root, "older orch");
+    fs.writeFileSync(older, fakeOrch("0.4.9 (older)"), { mode: 0o755 });
+    const installed = await f.run("install.sh", ["--skip-binary"], { ORCH_BIN: older });
+    success(installed);
+    assert.ok(outputLines(installed).includes(`orch: ${older} (existing; not managed by this install)`));
+    assert.ok(outputLines(installed).includes(`Note: ${older} reports 0.4.9; this checkout is 0.5.0.`));
+    assert.deepEqual(logged(f).at(-1), ["doctor", older]);
+  });
+
+  test("a missing orchestrator/models.json is refused before mutations", async (t) => {
+    const f = fixture(t);
+    fs.unlinkSync(path.join(f.checkout, "orchestrator", "models.json"));
+    failure(await f.run("install.sh"), /Release registry is missing; nothing changed\./);
+    assertNothingChanged(f);
   });
 
   test("no go and no curl refuses before mutations", async (t) => {

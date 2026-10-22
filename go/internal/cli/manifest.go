@@ -44,7 +44,7 @@ func Manifest(args []string, stdio Stdio) int {
 func manifestCreate(root string, parsed cliargs.ManifestArgs, stdio Stdio) int {
 	task, author, out := parsed.Values["task"], parsed.Values["author"], parsed.Values["out"]
 	if task == "" || author == "" || out == "" || len(parsed.Positional) == 0 {
-		fmt.Fprintln(stdio.Err, "usage: manifest.mjs create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>")
+		fmt.Fprintln(stdio.Err, "usage: orch manifest create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>")
 		return 2
 	}
 	m, err := manifest.Build(manifest.Request{

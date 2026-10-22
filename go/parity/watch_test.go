@@ -138,7 +138,7 @@ func (h *harness) testWatch(t *testing.T) {
 			}, "--cwd")
 		})
 	}
-	t.Run("questions/orch-on-path-PE-26", func(t *testing.T) {
+	t.Run("questions/orch-reply-hint-unconditional-PE-19", func(t *testing.T) {
 		t.Parallel()
 		h.compareReplyHintWithOrchOnPath(t, invocation{
 			js:        []string{h.node, filepath.Join(h.orchJS, "bin", "watch.mjs")},

@@ -1,25 +1,24 @@
 # orch: Go runtime of the orchestrator
 
-`orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one,
-released as [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0)
-(2026-10-19). Every script is ported, `install.sh` installs `orch` (see [Install](#install)), and the
-plugin runs on it when its runtime is `go` (see [Plugin runtime](#plugin-runtime)). The JS runtime
-stays the default and both share the same `.orchestrator/` and usage state, so they can run side
-by side. What remains is removing the JS (S12), planned for 0.6.0 behind a human gate.
+`orch` is the only runtime in **0.6.0 (unreleased)**: one Go binary, installed by `install.sh`
+(see [Install](#install)), that runs every plugin tool and hook. The JS runtime, libraries and
+their tests are removed. The last JS release is
+[v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0) (2026-10-19);
+the parity oracle is the later pre-S12 commit `9e3a456`, pinned in `go/parity/js-ref`.
 
 For what the orchestrator does and how to use it, see the [root README](../README.md); for the
 scripts' own behaviour and state files, [orchestrator/README.md](../orchestrator/README.md).
 
-Commands (every `bin/*.mjs` script):
+Commands (ported from the JS at that parity reference; differences are listed below):
 
-| Command | Replaces | Behaviour |
+| Command | Ported from (JS) | Behaviour |
 |---|---|---|
 | `orch version` | — | Release number plus VCS revision. |
 | `orch usage [--refresh] [--json]` | `bin/usage.mjs` | Byte-identical output; reads and writes the same usage cache, so either runtime can read what the other wrote. A failed vendor reading (a 429 from the Claude usage endpoint, a codex error) is replaced by the last good cached one, marked `last_good_at` (when it was read) and `read_error`, if the cache was written less than 30 minutes ago. The window rolls: each failed refresh rewrites the cache, so refreshes that keep failing less than 30 minutes apart keep a reading of any age (as in the JS); check `last_good_at`. |
 | `orch routing [--refresh \| --cached] [--json]` | `getRouting()` in `lib/usage.mjs` | The routing prompt text, or `{usage, registry, channels, resolved, prompt}` with `--json`. `--cached` never collects and exits 3 when there is no cache; bad flags exit 2. |
 | `orch budget gate --vendor anthropic\|openai [--force] [--frontier]` | `budgetGate()` in `lib/budget.mjs` | Compact `{allowed, level, resets_at, note}`; exit 0 whether or not the work is allowed, 2 on bad flags or an unknown vendor. It never draws ChatGPT credits: only `orch codex-exec` does (see `openai_credits` in [orchestrator/README.md](../orchestrator/README.md#openai-credits)). |
 | `orch effort --role ROLE [--size SIZE]` | `effortFor()` in `lib/routing.mjs` | The effort-policy value as plain text, or `null`; exit 2 on bad flags or without `--role`. |
-| `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --kind question` requires a non-empty `--recommended TEXT` and takes `--blocking true\|false` (default and bare: true), written as `"recommended"` and `"blocking"` after `"thread"`; a missing recommendation, another `--blocking` value or either option on another kind prints `mailbox post: <usage>` on stderr and exits 2 with nothing written. `--ask decision\|action` (WT25): `decision` is the default and is not written; an `action` question takes no `--recommended` and is written as `"blocking"` then `"ask":"action"`; `--recommended` with `--ask action`, a recommendation that opens (after the JS `trim()`, ASCII case aside) with a completion claim (`completed`, `all done`, `i ran`, `i've done`, `i have done` or `i did`, then a word boundary; `done` then `:` `,` `.` `!` `—`, the end or a clause cue; `ran`, `created`, `installed`, `finished`, `deployed` or `rebuilt` then `:` `,` or a clause cue; a clause cue is `[ \t]+` then `it`, `the`, `that`, `this`, `successfully`, `ok` or `all` and a word boundary; a guard rail, not a guarantee), another `--ask` value, or `--ask` on another kind exits 2 the same way; `inbox` ends a blocking question's header with ` (blocking)` and prints its `recommended:` line (first 200 UTF-16 units) under the body. `post --json` prints the whole message instead of `{id, at}` (PE-3). `inbox` names `orch mailbox reply` in its reply hint when `orch` is on `PATH` (PE-26). A `reply` to the message that the human gate's `awaiting_human.question` (a non-empty string in `flip.json`, a full id or a prefix) resolves to, as the reply's own id is resolved, clears the gate as `orch flip gate --clear` does and prints `cleared the human gate; the supervisor relaunches the <door> conductor within a minute` (`cleared the human gate` when the kept `pending_launch` names no door); a question that resolves to no single message is reported on stderr as `could not match the human gate's question: <ambiguous message id prefix X \| no message with id X>` and clears nothing; a `flip.json` that exists but cannot be read or parsed is reported on stderr as `could not check for a human gate: ...`; the reply still exits 0. Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
+| `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --kind question` requires a non-empty `--recommended TEXT` and takes `--blocking true\|false` (default and bare: true), written as `"recommended"` and `"blocking"` after `"thread"`; a missing recommendation, another `--blocking` value or either option on another kind prints `mailbox post: <usage>` on stderr and exits 2 with nothing written. `--ask decision\|action` (WT25): `decision` is the default and is not written; an `action` question takes no `--recommended` and is written as `"blocking"` then `"ask":"action"`; `--recommended` with `--ask action`, a recommendation that opens (after the JS `trim()`, ASCII case aside) with a completion claim (`completed`, `all done`, `i ran`, `i've done`, `i have done` or `i did`, then a word boundary; `done` then `:` `,` `.` `!` `—`, the end or a clause cue; `ran`, `created`, `installed`, `finished`, `deployed` or `rebuilt` then `:` `,` or a clause cue; a clause cue is `[ \t]+` then `it`, `the`, `that`, `this`, `successfully`, `ok` or `all` and a word boundary; a guard rail, not a guarantee), another `--ask` value, or `--ask` on another kind exits 2 the same way; `inbox` ends a blocking question's header with ` (blocking)` and prints its `recommended:` line (first 200 UTF-16 units) under the body. `post --json` prints the whole message instead of `{id, at}` (PE-3). `inbox` names `orch mailbox reply` in its reply hint (PE-19). A `reply` to the message that the human gate's `awaiting_human.question` (a non-empty string in `flip.json`, a full id or a prefix) resolves to, as the reply's own id is resolved, clears the gate as `orch flip gate --clear` does and prints `cleared the human gate; the supervisor relaunches the <door> conductor within a minute` (`cleared the human gate` when the kept `pending_launch` names no door); a question that resolves to no single message is reported on stderr as `could not match the human gate's question: <ambiguous message id prefix X \| no message with id X>` and clears nothing; a `flip.json` that exists but cannot be read or parsed is reported on stderr as `could not check for a human gate: ...`; the reply still exits 0. Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
 | `orch manifest create\|verify\|diff` | `bin/manifest.mjs` | Byte-identical output, exit codes and manifest files: the same walk (symlinks, FIFOs and other non-regular entries inside a walked directory are skipped and never opened; an explicit symlink argument is followed), UTF-16 key order and `manifest_sha256`. `create` replaces its output through a private (0600) temp file and a rename, the same in both runtimes, so a symlink at `--out` is replaced, never followed. Each runtime draws its own random temp name, so a failed rename (a directory at `--out`) prints the same error line except for that name's `.tmp-<random>` suffix, which the parity check normalizes. Uncaught JS errors print only their error line. |
 | `orch incident record\|list\|report\|share` | `bin/incident.mjs` | Byte-identical output, exit codes, incident log lines and share bundle: the same redaction (home directory, `/Users/<name>`, `/home/<name>`, emails, tokens, uuids, `ses_` ids, with JS white space and a 2000-unit cut), fingerprint (JS `toLowerCase`, final sigma included) and report order (V8's TimSort, `internal/jssort`, so ties and incomparable timestamps order as in Node). Appends to `~/.local/state/opencode/orchestrator/incidents.jsonl` like the mailbox does; an explicitly empty `HOME` is kept as Node keeps it (the log is then relative to the working directory and redaction uses an empty home), never replaced by the account's home. Entries carry `orch`'s version instead of the checkout's git HEAD (PE-4). `share` writes no `project` key and uploads nothing. `record --request -` (orch only, PE-25) reads the whole incident as one JSON object on stdin, so no summary or context reaches argv. |
 | `orch policy show\|set key=value...\|unattended [--cwd DIR]` | `bin/policy.mjs` | Byte-identical output, exit codes and `.orchestrator/policy.json`: the registry's `autonomy` (without `$comment`) overridden by the project file; `set` refuses `key=never` except `force_push`, any `force_push` other than `never`, an `openai_credits` other than `off` or `on`, and an `openai_credits_floor` that is not a number, 0 or more. The registry is read as `JSON.parse` of the file, then `.autonomy`, as the JS does (Node's fs errors, a `SyntaxError`, a `TypeError` for `null`, no autonomy for any other shape); `set` has written its file when that fails. A `policy.json` holding an array makes `set` fail instead (PE-6). |
@@ -29,10 +28,17 @@ Commands (every `bin/*.mjs` script):
 | `orch worker start --brief FILE --harness claude\|codex\|opencode [--lane L] [--model M] [--effort E] [--sandbox S] [--permission-mode P] [--allowed-tools T] [--max-turns N] [--timeout-min N] [--resume ID] [--agent A] [--breadth B] [--run-id ID] [--log-path F] [--force] [--detach] [--cwd DIR] \| status [--lane L] [--cwd DIR] \| stop --lane L [--cwd DIR]` | `bin/worker.mjs` | Byte-identical output and exit codes over the same `.orchestrator/workers/<lane>.json` and `<lane>.lock`. `start` (foreground) validates as the JS does (usage, `brief must be an existing .md file`, `harness must be codex, claude or opencode`, exit 2), reads the brief before it claims the lock (an unreadable brief is the JS error, exit 1, and leaves no lock or state, even on a locked lane), claims the lock (`{"error":"lane locked",...,"hint":...}` on stderr, exit 3, a stale lock is not reclaimed), publishes the state with the JS keys in the JS order (`state_storage` from the second write, `last_state_write_error` after a failed one), runs `orch <harness>-exec` (the JS runs `node <harness>-exec.mjs`) in a session of its own with the same arguments and the same prompt on stdin (the preamble and the brief, or the brief alone for the `conductor` lane), relays the bridge's stderr to stdout while recording `session_id`, `last_progress_at` and `last_tool`, and ends deferred (exit 75 or `budget_red`: limit incident, `deferred` message), finished (no message) or failed (incident, `blocked` message with the run record as ref), then prints `{lane, status, session_id, exit_code}` (exit 0 for finished or deferred, else 1). SIGINT and SIGTERM publish `interrupted` and are passed on to the bridge's process group. `status` lists the given lane, or every `*.json` in byte order, each state spread as the JS spreads it (any JSON value; unreadable or falsy as `{lane, status: "unknown"}`) with `process_alive` (Node's `process.kill(pid, 0)` coercion: an integer in the int32 range, EPERM alive) and `lock_present`; `stop` sends SIGINT to the stored pid's process group, else to the pid. Lane names are the JS values (a bare `--lane` is the lane `true`, no `--lane` on `stop` reads `undefined.json`); a lane containing `/` is refused by `start` (after the harness check), `status` and `stop` with `lane must not contain "/"` on stderr, exit 2, before anything is read or written (both runtimes; `.` and `..` stay names inside `workers/`). Differences: `stop` signals only a pid of at least 2 (PE-14) that the lane's lock holds (PE-23); the state is written owner-only through a private temp and a rename, and `workers/` and `logs/` are 0700 (PE-21); a failed `start` writes `<token>` for token-shaped text in the state's `errors` and the blocked message (PE-24); `start` survives a bridge that never reads its prompt (PE-13), waits at most 10 s for the bridge's pipes once it exits and never kills it (PE-10), records the Go bridge's report of an interrupted run (PE-11) and cuts UTF-16 text as PE-1 says. `start --detach` first refuses a lane whose lock holds a live pid synchronously, as `flip.mjs run` relies on (`{"error":"lane locked","lane":...,"previous":...}` with `alive: true` and no `hint` on stderr, nothing on stdout, exit 3), removes a lock whose holder is gone (or whose text is no pid), creates `.orchestrator/logs/<lane>-<first 8 of the run id>.log` (exclusive, 0600), and launches `orch worker` with the same arguments minus every exact `--detach` token plus `--log-path`, `--run-id` and `--cwd <absolute project root>` (last, so a relative `--cwd` is not applied twice; both runtimes) in the project root, in a session of its own, stdin on `/dev/null` and stdout and stderr on the log; it prints `{lane, runner_pid, log_path, run_id, keep_awake}` and exits 0 (`runner_pid` is left out when the runner cannot be started, as the JS never sees that error). Keep-awake wraps the runner in `caffeinate -i -s` (macOS) or `systemd-inhibit --what=idle:sleep --why=opencode-orchestrator` (Linux) when `which` finds it, unless the registry's `runtime.keep_awake` is `false` (any registry error leaves it on); `keep_awake` reports whether it was wrapped. |
 | `orch flip decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] [--brief FILE] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | `bin/flip.mjs` | Byte-identical stdout, stderr, exit codes, `.orchestrator/flip.json` (indent 2; both replace it through a temp file and a rename, orch's private and owner-only, the JS's the fixed `flip.json.tmp`, PE-21), mailbox lines and, for `run`, the repository's `info/exclude`, the continue brief and everything the launched conductor worker writes. `flip.json` is read as `JSON.parse` of the file, any failure being no record, so every JSON value is handled as the JS handles it: `status` prints the record or `{"state": "never flipped"}` for a falsy one; `pause` creates `.orchestrator/` and writes `{...previous, paused: {at, door, reason[, brief]}}` (`brief` only for a non-empty `--brief`; a string spreads into index keys, a number or `true` into nothing, an existing `paused` keeps its position, `awaiting_human` is kept) and posts a `handoff` to `supervisor`; `gate` reads `flip.json` first, then creates `.orchestrator/` and sets `awaiting_human: {at, door, reason, question}` (an existing one keeps its position; an array `flip.json` is replaced by an object holding the gate, not by `--clear`, which writes an array back unchanged), deletes `paused` and posts a `handoff` to `human` whose subject keeps 80 UTF-16 units of the reason; `gate --clear` deletes `awaiting_human` and writes any other shape back as it is; when an object held a truthy `awaiting_human`, it also sets `pending_launch: {to, from, reason: "human gate cleared", resume: null, at}` with `to` and `from` the gate's door (`opencode` when it has none), so the supervisor relaunches that conductor, unless a truthy `pending_launch` is already queued (a flip queued before the gate), which is kept; it prints `{"awaiting_human":false,"relaunch":"<door>"}` with the door of the queued launch (when it has a truthy `to`) instead of `{"awaiting_human":false}`; `--no-relaunch` (kickoff) never queues one and removes any queued `pending_launch` and `paused`. `decide` prints `{"action":"gate","to":null,"reason":"awaiting human: <reason>"}` when `flip.json` is an object with a truthy `awaiting_human` (`<reason>` is `${awaiting_human.reason}`, so `undefined` without one), without reading or collecting usage; otherwise it prints `{action, to, reason}` (`flip`, `handback`, `stay` or `pause`) from the cached routing (collecting when the cache is missing or stale, as `getRouting` does) and the time of the last flip (`flip_cooldown_minutes`); `--active` absent or empty prints `--active opencode\|claude required` (exit 2), and a non-door (`true`, `gemini`, `constructor`, `__proto__`) is red with the JS reason text (`undefined`, or the inherited Object.prototype text). `run` refuses a `--to` other than `opencode` or `claude` (`--to opencode\|claude required`, exit 2, nothing written); otherwise, in this order, it adds `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir) when the project has a git repository (a `.git` file that is not `gitdir: <path>` naming a directory, or whose git dir's `commondir` names no directory, is none, and nothing is written) and no line of the file is `.orchestrator` or `.orchestrator/` (lines end at `\n` and one trailing `\r` is dropped, as Git reads the file; a lone `\r`, U+2028 or U+2029 is part of a line, so such a "line" does not count and the line is appended; a newline is added first unless the file is empty or ends in one), writes `.orchestrator/briefs/conductor-continue.md` (atomically, 0600, PE-21; it launches the brief a kickoff saved instead of writing the continue brief, and names it in the handoff, when the record it replaces has one: `paused.brief`, else `pending_launch.brief`, a non-empty string naming an existing file), replaces `flip.json` with `{at, from, to, reason, previous: {at, to}}` (clearing `paused` and `awaiting_human`), posts a `handoff` from `conductor-<from>` to `conductor-<to>`, and launches the conductor by running this executable as `orch worker start --brief .orchestrator/briefs/conductor-continue.md --lane conductor --harness <to> --agent conductor --breadth broad --cwd <root> --detach` (plus `--permission-mode auto` for claude, `--resume`, `--force`) to completion, so a Go-driven flip runs the conductor on `orch worker` and the Go bridges (the JS runs `node worker.mjs`). It prints `{flipped, to, from, launcher}` with 400 UTF-16 units of the launcher's trimmed output, exit 0 when the launcher exited 0, else 1. A launcher that cannot be started (no executable path, or the start fails) gives `{"flipped":false,...,"launcher":""}` and exit 1 with no diagnostic, as the JS `spawnSync` error result has no status and no output. When the launcher refuses with `lane locked` (usually because the calling conductor holds the lane), `flip.json` gains `pending_launch: {to, from, reason, resume, at[, brief]}` for the supervisor (`brief`: the saved brief this run launched, kept for the retry) and `run` prints `{"flipped":false,"pending":true,...}`, exit 0. Option values are the JS ones: a bare `--active`, `--from`, `--reason`, `--question` or `--resume` is `true` in the file, the mailbox and stdout (`--resume true` reaches the conductor). A routing failure prints `orch flip: <error>` and exits 1, as `orch usage` does (the JS dies of the rejection with Node's crash output). Any other command prints `commands: decide \| run \| pause \| gate [--clear [--no-relaunch]] \| status` (exit 2). Differences: PE-15 (the date formats of `at`), PE-1 (the gate subject and `launcher` cuts), PE-2 (a launcher crash quoted in `launcher` as its error line only), PE-10 (`run` waits at most 10 s for the launcher's pipes), PE-20 (a launcher whose output passes 1 MiB is stopped), PE-21 (`flip.json` and the continue brief) and PE-22 (the launcher runs in a process group of its own). |
 | `orch supervisor start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | `bin/supervisor.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/supervisor-acks.json` (indent 2, written through a temp file and renamed, as the JS `writeJson` does; PE-21). `status` prints `supervisor-state.json` as `JSON.parse` reads it, whatever the value (`null`, a number, a string, an array), or `{"status": "not_started"}` when it cannot be read or parsed (missing, a directory, unparsable, a BOM), and never writes. `stop` writes an empty `.orchestrator/supervisor.stop` and prints `stop requested; workers are unaffected`, whether or not a supervisor runs. `ack` refuses with `unknown event id` (exit 1) unless `--event` is truthy and names a truthy property of the state's `events`, read as a JS property: an Object.prototype name (`constructor`, `toString`, `__proto__`, ...) is present (mirrored); then it sets `acks[<event>] = {by: <--by or coordinator>, at}` (an existing key keeps its position; a bare `--event` is the key `true`, a bare `--by` writes `true`; `__proto__` without an own key of that name adds nothing and rewrites the file unchanged, as the JS prototype setter does) and prints `acknowledged (receipt, not acceptance)`. Usage: no command prints `commands: start \| serve \| status \| stop \| ack --event ID` (exit 2); any other command prints nothing and exits 0 (mirrored). `start` creates `.orchestrator/logs/` (0700), prints `{"started":false,"reason":"already running","pid":N}` when the pid in `supervisor.lock` is alive, else removes `supervisor.stop`, launches this executable as `orch supervisor serve --cwd <root>` in a session of its own (wrapped in `caffeinate -i -s` or `systemd-inhibit` unless the registry's `runtime.keep_awake` is `false`) with its output appended to `logs/supervisor.log` (0600; a symlink there fails `start` with ELOOP, PE-21), and prints `{"started":true,"supervisor_pid":N,"log":"<path>"}` (`supervisor_pid` left out when the command cannot be started). `serve` claims `supervisor.lock` (created exclusively, 0600, with its pid; a stale lock is replaced atomically through a private temp, PE-21; a lock whose pid is dead is taken over; a live one prints `a supervisor already owns this project`, exit 1), then every 5 s after each tick: looks at every worker lane (phases, the two-phase intent, events), re-dispatches budget-deferred lanes as `orch worker start --detach`, wakes the coordinator through the configured channels (`command`, `codex-queue`, `opencode-run`, `claude-resume` as `orch claude-exec`), evaluates the conductor flip (relaunching through `orch flip decide\|run`), and records the outcome in `supervisor-state.json` (a failed tick: `storage_error` persisted once by the next successful write, `storage_failures` counting). The stop file makes it record `status: "stopped"` and `stopped_at`, release the lock and exit 0; it has no signal handlers of its own, so a killed serve leaves its lock for the next one. While it waits for a child (a channel, a flip, a re-dispatch), RunSync relays a SIGINT, SIGTERM or SIGHUP to that child's process group, and serve then dies of the signal once the child is reaped, at most 10 s later (PE-22), still leaving its lock. A state that is `null` or a primitive crashes as in the JS (C1). Differences: PE-16 (hand-edited non-object shapes), PE-17 (a missing `opencode`), PE-10 (a child that ignores the channel timeout's SIGTERM is killed 10 s later), PE-20 (a child whose output passes 1 MiB is stopped), PE-21 (state, acks, lock and log) and PE-22 (every child it waits for runs in a process group of its own). |
-| `orch doctor` | `bin/doctor.mjs` | The same rows in the same order with the same texts (`OK  `/`WARN`/`FAIL`, name, `  —  detail` when the detail is truthy) and exit code (1 if any row is FAIL). Each probe (`opencode`/`codex`/`claude`/`node --version`, `codex login status`, `claude auth status`, `opencode auth list\|plugin list\|debug agents`) runs with a 20 s timeout and reads stdout then stderr; the usage feeds and routing come from a refreshed `orch usage`, rows pushed before a failure are kept and the failure adds `FAIL usage/routing`; the last 400 lines of `~/.local/share/opencode/log/opencode.log` are scanned for orchestrator `ERROR`s, the last three joined, redacted as an incident is (home, emails, tokens, uuids, `ses_` ids) and cut at 300 (cuts in UTF-16 units). Both print `orch binary` after `node present`. Differences: PE-18 (`orch self-test` row; `unit tests` runs the Go tests; the JS warns when it finds no binary); each probe stops at 1 MiB of output (PE-20) and runs in a process group of its own (PE-22). |
-| `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command (`orch mailbox reply` when `orch` is on `PATH`, PE-26), the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
+| `orch doctor` | `bin/doctor.mjs` | The same rows in the same order with the same texts (`OK  `/`WARN`/`FAIL`, name, `  —  detail` when the detail is truthy) and exit code (1 if any row is FAIL). Each probe (`opencode`/`codex`/`claude`/`node --version`, `codex login status`, `claude auth status`, `opencode auth list\|plugin list\|debug agents`) runs with a 20 s timeout and reads stdout then stderr; the usage feeds and routing come from a refreshed `orch usage`, rows pushed before a failure are kept and the failure adds `FAIL usage/routing`; the last 400 lines of `~/.local/share/opencode/log/opencode.log` are scanned for orchestrator `ERROR`s, the last three joined, redacted as an incident is (home, emails, tokens, uuids, `ses_` ids) and cut at 300 (cuts in UTF-16 units). Both print `orch binary` after `node present`. Differences: PE-18 (a missing `node` is a WARN, `needed only by install.sh and uninstall.sh`; an `orch on PATH` row after `orch binary`; `orch self-test` row; `unit tests` runs the Go tests; the JS warns when it finds no binary); each probe stops at 1 MiB of output (PE-20) and runs in a process group of its own (PE-22). |
+| `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command (`orch mailbox reply`, PE-19), the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
 | `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b> (looked in <root>; cd into the project or pass --cwd <project dir>)` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else the preflight below, the prompt written to `.orchestrator/briefs/conductor-kickoff.md`, `orch flip pause --active <home> --brief .orchestrator/briefs/conductor-kickoff.md` with its answer, and the message, exit 75, so the supervisor's relaunch at the reset starts from that brief; when `orch supervisor start` exits non-zero (before the brief) or the pause does, `Both vendors are red, but the supervisor did not start\|the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.` on stderr, exit 1), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear --no-relaunch`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir); `--dry-run` skips it and prints `supervisor: not started (dry-run)` instead, so it changes nothing in the project, though its routing read still refreshes the shared usage cache), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (the brief is written atomically, 0600, PE-21; the lane's trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). Differences: the captured self-execs stop at 1 MiB of output (PE-20) and run in a process group of their own (PE-22). |
 | `orch session beat --door opencode\|claude [--state working\|waiting\|done\|ended] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | `bin/session.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/sessions/<door>.json` (indent 2; the directory 0700, an existing one this user owns tightened to 0700, the file 0600, written through a private temp file and a rename in both runtimes). `beat` keeps each field not given, clears `--now`, `--slice` or `--session` given as `""` (`--progress` must always be `N/M`), defaults the state to `working` and refreshes `updated_at`; `--now` is cut to 200 UTF-16 units and `--slice` to 40 (a split surrogate pair becomes U+FFFD in both). Bad options exit 2. `--hook` reads a Claude Code hook's JSON on stdin (`session_id`, `cwd`, `hook_event_name` only; never the prompt): `UserPromptSubmit` and `SessionStart` record `working`, `Stop` `waiting`, `SessionEnd` `ended`, any other event writes nothing; it never exits 2 (every failure is one `session beat: ...` line and exit 1; a `cwd` with a NUL character is refused before any filesystem call) and never creates `.orchestrator/`. `show` prints `{door: record}` (indent 2) and refuses to run outside a project. |
+
+Comments citing `bin/*.mjs` or `lib/*.mjs` name the JS at parity reference `9e3a456`
+(`go/parity/js-ref`), not files in this checkout; the last JS release is tag `v0.5.0`.
+
+On weekly-only Codex plans, usage and doctor show `5h n/a`; the weekly window alone drives
+routing, flip grace, headroom and the remote snapshot. Amber steers and red blocks; unreadable
+data stays unknown. See PE-27 for the deliberate post-oracle difference.
 
 Outside a project: `mailbox list|ack|reply|inbox`, `watch` (with or without `--follow`), `flip
 status`, `flip gate --clear`, `worker status|stop`, `supervisor status|stop|ack` and `session show`, run where
@@ -148,7 +154,7 @@ lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected
 - `budget`: both vendors' postures from the cached usage reading and the registry's thresholds;
   `null` when there is no cache or it is more than 30 minutes old. Each posture carries both
   windows' resets (`resets_at` for the 5-hour one, `weekly_resets_at`) and `window`, the one that
-  drives its level: `weekly` when the weekly window is red, else `five_hour`. It runs no program: unlike
+   drives its level: `weekly` when the weekly window is red or Codex is weekly-only, else `five_hour`. It runs no program: unlike
   `orch routing`, it does not detect opencode's channels (`sqlite3`, `opencode auth list`).
 
 The sync loop (`once` runs one cycle; `serve` repeats them):
@@ -263,15 +269,17 @@ the Go runtime requires on darwin; that is as static as a macOS binary gets. `bi
 gitignored.
 
 The release number lives in `internal/version/VERSION` (embedded). `orch version` appends the
-VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b+dirty)`; a build
-outside a git checkout (a source tarball or `git archive`) records none and prints `0.5.0`.
+VCS revision Go records at build time, e.g. `0.6.0 (5ae996b)` or `0.6.0 (5ae996b+dirty)`; a build
+outside a git checkout (a source tarball or `git archive`) records none and prints `0.6.0`.
 
 ## Install
 
 `../install.sh` builds `orch` from the checkout when Go 1.25+ is on `PATH` (`CGO_ENABLED=0 go build
 -trimpath -ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches
 `internal/version/VERSION`, and places it at `~/.local/bin/orch`, recorded in the install receipt.
-`ORCH_BIN_DIR` (absolute) chooses another directory; `--skip-binary` installs without `orch`.
+`ORCH_BIN_DIR` (absolute) chooses another directory; `--skip-binary` requires an existing executable
+`orch` (`ORCH_BIN`, else `~/.local/bin/orch`, else `PATH`) whose `version` succeeds, before any
+mutation. Its receipt records no binary and uninstall leaves that existing binary alone.
 
 Without Go it downloads, with `curl`, `orch_<VERSION>_<darwin|linux>_<arm64|amd64>` and
 `checksums.txt` from
@@ -289,7 +297,7 @@ need `ORCH_BIN=<path>`. Uninstall moves a recorded `orch` into its archive; see
 [orchestrator/README.md](../orchestrator/README.md#install-update-uninstall-and-recovery) for
 uninstall, upgrading from 0.4.x and recovery.
 
-Without a checkout:
+Without a checkout, the last published release (not this unreleased checkout):
 
 ```sh
 go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
@@ -301,23 +309,20 @@ it only through `ORCH_BIN` or `PATH`.
 
 ## Plugin runtime
 
-`plugins/orchestrator.ts` has two runtimes. `js` (the default) imports `orchestrator/lib/*.mjs` and
-runs `orchestrator/bin/*.mjs`. `go` runs every tool and hook through `orch` and never loads the JS:
+`plugins/orchestrator.ts` runs every tool and hook through `orch` and never loads the removed JS:
 routing, effort, the budget gate, the mailbox, manifests and incidents are `orch` subcommands, and
 delegate, the workers, the supervisor and the usage-limit flip spawn `orch <script>` with the
 arguments the script gets.
 
-- **Select** with `ORCH_RUNTIME=go` in the environment of the opencode process that loads the
-  plugin; this is the supported switch. For the background service:
-  `opencode service set env ORCH_RUNTIME go`, then `opencode service restart` (undo with
-  `opencode service unset env ORCH_RUNTIME` and another restart); the S10 live check confirmed
-  both. The value is trimmed and case-insensitive; anything other than `js` or `go` is a
-  configuration error.
+- **Runtime:** `go` is the default and only accepted value (trimmed, case-insensitive).
+  `ORCH_RUNTIME=js` or a `runtime: "js"` option is a configuration error naming its removal in
+  0.6.0 and telling you to remove the option or variable. For a service previously set to JS,
+  run `opencode service unset env ORCH_RUNTIME`, then `opencode service restart`.
 - **Plugin options (known limitation):** the plugin also reads `runtime` and `binary` options, and
   an option wins over the environment. In the S10 live check, object-form options in a project
   `opencode.jsonc` (`[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]`)
   did not reach the plugin: the js runtime answered and `opencode plugin list` showed no plugins.
-  This is probably an upstream opencode issue; use `ORCH_RUNTIME` (and `ORCH_BIN`) until it is
+  This is probably an upstream opencode issue; use `ORCH_BIN` until it is
   resolved.
 - **Binary:** the option `binary` (a leading `~` is expanded), then `ORCH_BIN`, then
   `~/.local/bin/orch`, then each `PATH` entry. An explicit `binary` or `ORCH_BIN` that is not an
@@ -351,22 +356,23 @@ arguments the script gets.
     says `a question needs a recommended answer`. Go mode needs an `orch` from this release or
     later: questions pass `mailbox post --recommended/--blocking`, and the conductor heartbeat runs
     `orch session beat`. An older binary fails both (a tool error; a recorded incident per beat).
-- **Rollback:** unset `ORCH_RUNTIME` (or set it, or the option, to `js`) and reload or restart.
+- **Rollback:** JS selection is not a rollback; it fails. Restoring JS requires restoring a
+  pre-0.6.0 checkout and restarting the service under the human cutover/rollback runbook.
 - **Which runtime answered:** `orch_usage_status` metadata carries `runtime` and `orch` (the binary
-  path); a new incident's `version` is the `orch` version in go mode (`0.5.0 (<rev>)`, or a bare
-  `0.5.0` for a binary built outside a checkout), and in js mode the checkout's `.git/HEAD` text
-  (for example `ref: refs/heads/main`) or `unknown`.
+  path); `runtime` is `go`. A new incident's `version` is the `orch` version (`0.6.0 (<rev>)`, or
+  a bare `0.6.0` for a binary built outside a checkout).
 
-`../tests/plugin-routing.test.mjs` and `../tests/plugin-tools.test.mjs` drive both runtimes through
-a fake opencode context against fakes; `../tests/plugin-orch-parity.test.mjs` runs each lib-backed
-tool and hook in both runtimes against the real `orch` (built into a temp dir, or `ORCH_TEST_BIN`)
-and compares the results. It skips only when neither `go` nor `ORCH_TEST_BIN` is available.
+`../tests/plugin-routing.test.mjs` and `../tests/plugin-tools.test.mjs` drive the plugin through
+a fake opencode context and a fake `orch`, with pinned routing documents and argv expectations.
+The former JS-vs-Go plugin differential is deleted; the command parity harness remains.
 
 ## Release checklist (maintainer, human-gated)
 
 Tagging and publishing are a human gate: no agent runs these steps.
 
-Written for version `X.Y.Z`; 0.5.0 was released this way on 2026-10-19.
+For 0.6.0, complete the human cutover and live smoke before release; deferred release-blocking
+findings must be closed by cross-vendor review. Keep `## 0.6.0 — unreleased` until publishing.
+The steps below use `X.Y.Z = 0.6.0` (0.5.0 was released this way on 2026-10-19).
 
 1. Bump `internal/version/VERSION` to `X.Y.Z`.
 2. Date the release heading in `../CHANGELOG.md` (`## X.Y.Z — <YYYY-MM-DD>`).
@@ -393,6 +399,8 @@ Written for version `X.Y.Z`; 0.5.0 was released this way on 2026-10-19.
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
 | `ORCH_REMOTE_CONFIG` | `~/.config/orch/remote.json` | The `orch remote` config file. |
 | `ORCH_NO_POST_RUN_REFRESH` | unset | `1` stops `orch claude-exec` and `orch codex-exec` from starting their detached post-run usage refresh (PE-12). Set only by the parity harness. |
+| `ORCH_JS` | unset | Parity only: the JS `orchestrator/` tree `parity/run.sh` compares against. Set, it wins over `ORCH_JS_REF` and nothing is extracted. |
+| `ORCH_JS_REF` | the commit in `go/parity/js-ref` | Parity only: the commit-ish (e.g. `v0.5.0`) whose `orchestrator/` `parity/run.sh` extracts from git when `ORCH_JS` is unset. |
 | `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
 
 ## Checks
@@ -403,19 +411,37 @@ go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...
 go vet -tags parity ./parity
 # chosen groups; ./parity/run.sh runs them all
 ./parity/run.sh --only \
-  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session
+  json,usage,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session,jsref
 ```
+
+The unit tests need no JS tree. The parity reference is the pre-S12 JS: `orchestrator/` at the
+commit in `go/parity/js-ref` (`9e3a456`), extracted from git by `parity/run.sh` (see
+[Parity harness](#parity-harness)).
 
 `.github/workflows/go.yml` runs build, vet, gofmt, tests and the `json`, `mailbox`, `manifest`,
 `incident`, `policy`, `bridges`, `worker`, `flip`, `supervisor`, `doctor`, `watch`, `kickoff` and `session`
-parity groups
-on macOS and Linux with `CGO_ENABLED=0` and Node 26 installed. Malformed prompt byte tests also compare
+parity groups and `jsref`
+on macOS and Linux with `CGO_ENABLED=0` and Node 26 installed; it fetches the pinned commit into its
+shallow checkout first. Malformed prompt byte tests also compare
 against Node when it is available; fixed byte expectations run even without Node.
 
 ## Parity harness
 
 Use Node 26 (`referenceNodeMajor`), as CI does: on Node 22 or 24 one case reports SKIP by
 design (PE-5).
+
+The JS side is the reference, not the checkout: `parity/run.sh` extracts `orchestrator/` at the commit
+in `go/parity/js-ref` (`9e3a456`, the last main commit before S12, the JS the port was checked
+against) with `git archive` into a temp directory, sets `ORCH_JS` to it and removes it on exit. It is
+a full SHA, not the `v0.5.0` tag, because the JS changed after the tag (`git diff v0.5.0 9e3a456 --
+orchestrator/` is 34 files) and the Go port follows the later JS. `ORCH_JS` (a JS tree) or
+`ORCH_JS_REF` (any commit-ish) override it. A shallow clone lacks the commit; fetch it with
+`git fetch --no-tags --depth=1 origin "$(cat go/parity/js-ref)"` (on a full clone, drop `--depth=1`).
+Without `--only`, `run.sh` also runs `TestJSReference`, which checks the texts the unit tests pin as
+literals (the flip brief, the exec help headers, kickoff's prompt, usage and watch hint, and
+`runrecord.Write` against `lib/run-record.mjs`) against that JS source. With `--only`, name `jsref`
+to run it: `--only jsref` runs it alone, `--only json,jsref` runs it after the `json` group (two
+`go test` invocations; `run.sh` exits with the first non-zero status).
 
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
@@ -432,7 +458,7 @@ stderr and every file under the project `.orchestrator/`, the HOME state dir and
 
 Groups:
 
-- `json`: JSON.stringify compatibility over `testdata/json/*.json` and the checkout's
+- `json`: JSON.stringify compatibility over `testdata/json/*.json` and the reference's
   `models.json`, compact and indent 2.
 - `usage`: `orch usage` against `bin/usage.mjs` over the cache fixtures in
   `testdata/usage/parity-caches.json` and over channel sources (sqlite, `opencode auth list`,
@@ -742,8 +768,9 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   and an email (`log-errors-redacted`: both print `<token>`, `~` and `<email>`), the log a directory (no row) and the registry missing
   (a copied JS tree without `models.json`: Node's `ENOENT` line as `FAIL usage/routing`). Each
   case passes `ORCH_BIN=<orch>` to the JS, so both `orch binary` rows are compared, and asserts
-  PE-18 (JS `OK   unit tests  —  pass N`; orch's `orch self-test` row and `WARN unit tests  —  not
-  run (...)`, no `go` being on the parity PATH), masks or removes those rows and compares the rest.
+  PE-18 (JS `OK   unit tests  —  pass N`; orch's `WARN orch on PATH  —  not on PATH; ...`, no `orch`
+  being on the parity PATH, its `orch self-test` row and `WARN unit tests  —  not run (...)`, no `go`
+  being on it either), masks or removes those rows and compares the rest.
   `no-binary` runs the JS without `ORCH_BIN`, with no `~/.local/bin/orch` and no `orch` on the parity
   PATH: its row is `WARN orch binary  —  not found (runtime js only; see README "Go runtime")`,
   masked against orch's own OK row. Normalised: the usage cache's `generated_at`.
@@ -1088,14 +1115,55 @@ The other documented differences, each asserted by its own parity case:
   differences: orch adds `orch self-test` right before `unit tests`: in-process checks that write
   nothing (a JSON round trip against embedded golden bytes, the registry resolving every role
   over an embedded all-green usage document, the executable path), detail `json, routing,
-  executable` or the first failure (FAIL). Its `unit tests` row runs `go test ./...` in
+  executable` or the first failure (FAIL). Without Node, orch prints `WARN node missing  —  needed
+  only by install.sh and uninstall.sh` where the JS prints `FAIL node missing  —  install it`:
+  orch runs without Node, which only the installer scripts still need. Right after `orch binary`
+  (when its executable is known) orch adds `orch on PATH`, which resolves `orch` through `PATH`
+  and compares it with its executable, both through `filepath.EvalSymlinks`: `OK` with the PATH
+  path when they are the same file; `WARN not on PATH; agent commands "orch ..." will fail; add
+  <dir of the executable> to PATH` when nothing resolves; `WARN PATH orch is <path> (<first line
+  of its version>, or version failed), not <executable>` when another binary resolves (its
+  `version` runs with the 20 s probe timeout). The row never FAILs, so the installer's
+  post-install doctor does not fail on a PATH layout. Parity has no case without `node` (the JS
+  needs it to run), so the node WARN is asserted by unit tests only; every case asserts orch's
+  `not on PATH` warning, there being no `orch` on the parity PATH, and removes it. Its `unit tests` row runs `go test ./...` in
   `<ORCH_HOME>/../go` (120 s timeout) when `go` is on PATH and `go.mod` exists there, instead of
   `node --test`: OK `go test ./... passed`; FAIL with the first `FAIL` or `--- FAIL` line (or
   `exit N`); WARN `go test timed out after 120 s`; else WARN `not run (no go toolchain or module
   at <dir>)`. With the registry missing both runtimes FAIL their test row (the JS unit tests
   need `models.json`; orch's self-test fails `routing: ENOENT: ...`). Asserted by every
   `doctor` parity case and by `internal/doctor` unit tests.
-- PE-19 is reserved for S12 (removing the JS); the gap is deliberate.
+- PE-19: every command line orch writes for agents and humans reads `orch <cmd> ...` (package
+  `internal/cmdref`): supervisor reminders, the worker preamble, `flip run`'s
+  `conductor-continue.md`, the `flip gate` message, kickoff's usage line and watch hint, the reply
+  and clear hints of `mailbox inbox` and `watch`, and the usage lines of `manifest create`,
+  `mailbox reply` and `worker`. The JS writes `node ~/.config/opencode/orchestrator/bin/<cmd>.mjs`
+  or `<cmd>.mjs`. Why: 0.6.0 removes the JS, so its command strings would name deleted files. The
+  harness rewrites the JS side only (stdout, stderr and file contents, after the `$PROJECT`
+  placeholder and before each case's normalizers): first
+  `node ~/.config/opencode/orchestrator/bin/(<name>)\.mjs`, then `\b(<name>)\.mjs\b`, to
+  `orch <name>`, where `<name>` is one of claude-exec, codex-exec, opencode-exec, worker,
+  supervisor, flip, mailbox, manifest, incident, usage, doctor, kickoff, watch and policy.
+  Special cases, each asserted:
+  - `--help` of `claude-exec` and `codex-exec` prints the JS header as orch help: the trailing
+    `import` line dropped, each line's leading `// ` or `//` stripped, the names mapped and the
+    usage line's continuation lines re-aligned under its first `[`. The `bridges` `help` cases
+    derive the expected text from the JS output, and `TestJSReference` from the JS source.
+  - The bridge budget-red incident's summary is `orch <bridge> refused: budget red` (was
+    `<bridge>.mjs refused: budget red`), so its `fp` changes. The harness masks `fp` on incident
+    lines with `"component":"bridge","kind":"limit"` and that summary only, on both sides, and
+    asserts that orch's is `incident.Fingerprint` of its summary; every other `fp` stays compared.
+  - A run record's `prompt_head` keeps 400 UTF-16 units of the prompt, so the JS head, cut from
+    a prompt with longer command strings, is shorter after the mapping or ends inside a command
+    it could not map. When it holds a mapped command or such a partial one, the partial is
+    dropped and both heads are compared as the JS's remaining text, which must be a strict
+    prefix of orch's.
+
+  Unit tests in `go/parity/pe19_test.go` (no build tag) pin the mapping (the 14 names in both
+  forms; `notascript.mjs`, `session.mjs` and `orchestrator/models.json` untouched), the help
+  derivation, the fingerprint mask and the `prompt_head` alignment. PE-19 normalizes nothing
+  beyond the name mapping, the help derivation, the budget-red `fp` mask and the `prompt_head`
+  alignment above.
 - PE-20: `procs.RunSync` (every spawnSync orch mirrors: `flip run`'s launcher, kickoff's
   children, the supervisor's channels and `flip`/`worker start` children, the doctor's probes;
   orch also captures kickoff's `policy unattended` and `flip gate --clear`, which the JS runs
@@ -1183,12 +1251,21 @@ The other documented differences, each asserted by its own parity case:
   unknown key, a value of another type, invalid JSON or a non-object is a usage error (exit 2, one
   line on stderr); a missing summary fails as `record` does. Asserted by the `incident` parity cases
   `record/request-PE-25` and `record/request-equals-flags-PE-25`.
-- PE-26: the reply hint of `orch mailbox inbox` and `orch watch` reads
-  `orch mailbox reply <id> "..."` when `orch` resolves on `PATH`, else the JS text
-  (`node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply <id> "..."`). Superseded by PE-19
-  at S12. Asserted by `internal/cmdref` and `internal/watch` unit tests and the parity cases
-  `mailbox/inbox/orch-on-path-PE-26` and `watch/questions/orch-on-path-PE-26`, which put a stub
-  `orch` on `PATH`; without it both runtimes stay byte-identical.
+- PE-26: the reply hint of `orch mailbox inbox` and `orch watch` read `orch mailbox reply` only
+  when `orch` resolved on `PATH`. Superseded by PE-19: the hint is always
+  `orch mailbox reply <id> "..."`. The parity cases
+  `mailbox/inbox/orch-reply-hint-unconditional-PE-19` and
+  `watch/questions/orch-reply-hint-unconditional-PE-19` keep a stub `orch` on `PATH` and compare
+  the pair byte for byte under PE-19, hint included.
+- PE-27: Codex windows are mapped by duration (owner bug a90ac3eb), which the `9e3a456` JS
+  predates. A duration-labeled single-window reading appends `applicable: false` to its missing
+  slot; two-window and unreadable outputs are unchanged. This applies equally to `rateLimits`
+  and `rateLimitsByLimitId.codex`. The only existing oracle golden affected is `codex-by-id`:
+  `postOracleDeltas` in `internal/usage/codex_test.go` first asserts the golden has no
+  `weekly.applicable`, then adds `false` for comparison. The golden stays the immutable oracle
+  output; do not regenerate it from later JS. Hand-written unit tests and raw fixtures cover
+  weekly-only, five-hour-only and swapped windows, routing, prompt, doctor, flip, budget reset
+  and snapshot behavior. The parity reference and generated caches are unchanged.
 
 Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
 events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure
@@ -1198,7 +1275,7 @@ write; a stale foreground lock is never reclaimed (only `--detach` reclaims it);
 --detach` reclaims a stale lock by reading it and then unlinking it, so a lock that another
 launcher's runner claims in between is removed too, leaving two runners on one lane;
 and the worker posts only `blocked` and `deferred` messages, never the `release` its header
-comment mentions (the agent posts its own). These are fixed in JS and Go together after S12
+comment mentions (the agent posts its own). These are to be fixed in Go (S13 plan)
 (Q-S6-6).
 
 Those `orch flip` mirrors: the script's header comment lists only decide, run and status;
@@ -1206,7 +1283,7 @@ Those `orch flip` mirrors: the script's header comment lists only decide, run an
 it; a bare `--reason` on `gate` posts no human message (the gate is then invisible in the
 mailbox, Q-S7-5); a bare `--active`, `--from`, `--reason`, `--question` or `--resume` writes
 `true` into `flip.json` and the mailbox, and `run` passes `--resume true` to the conductor
-(Q-S7-4). These are fixed in JS and Go together after S12. (`run` and kickoff dying of ENOTDIR in
+(Q-S7-4). These are to be fixed in Go (S13 plan). (`run` and kickoff dying of ENOTDIR in
 a git worktree or submodule, Q-S7-2, is fixed: Sol R13.)
 
 Those `orch supervisor` mirrors (S8a part): any command other than `start`, `serve`, `status`,
@@ -1221,7 +1298,7 @@ tick when its note cannot be posted; a lane entry of a vanished worker is never 
 (reading 'created_at')` while pruning, so the supervisor records nothing but that
 `storage_error` until the entry is removed by hand. The flip evaluation (S8b) relaunches a
 `pending_launch` at every evaluation (once a minute) without a cooldown while `flip run` fails
-before clearing it. These are fixed in JS and Go together after S12 (Q-S8-3).
+before clearing it. These are to be fixed in Go (S13 plan, Q-S8-3).
 
 Those `orch doctor` mirrors: the JS row texts (`claude login` has no detail, `codex login` prints
 the whole trimmed output, the anthropic row is OK either way); a registry read failure worded as
@@ -1230,24 +1307,26 @@ registry); a role whose tier has no string `opencode` model fails `usage/routing
 TypeError (`Cannot read properties of undefined (reading 'split')`) where an empty one prints
 `undefined`.
 
-Those `orch watch` mirrors (plan go-s9 3.4, incidents recorded, fixed in JS and Go together after
-S12): a `flip.json` holding only `awaiting_human` (what `flip gate` writes on a project that never
+Those `orch watch` mirrors (plan go-s9 3.4, incidents recorded, to be fixed in Go (S13 plan)):
+a `flip.json` holding only `awaiting_human` (what `flip gate` writes on a project that never
 flipped) crashes a single render with `TypeError: Cannot read properties of undefined (reading
 'slice')` and makes `--follow` print that message every interval without ever drawing a frame; the
 `next:` line takes the rest of the `## Next action` heading line, so `## Next action (exact)`
 prints `next: (exact)`. A role whose model is not a string throws as in `orch doctor`.
 
-Those `orch kickoff` mirrors (plan go-s9 3.4, incidents recorded, fixed in JS and Go together after
-S12): `--door` is not validated, so an unknown door (or a bare `--door`, the text `true`) crashes
+Those `orch kickoff` mirrors (plan go-s9 3.4, incidents recorded, to be fixed in Go (S13 plan)):
+`--door` is not validated, so an unknown door (or a bare `--door`, the text `true`) crashes
 with `TypeError: Cannot read properties of undefined (reading 'overall')` after the preflight (with
-`--dry-run`, which skips the preflight, before any write); the both-red path says the
-supervisor will relaunch but does not start it. One divergence is not mirrored: when `orch`
+`--dry-run`, which skips the preflight, before any write). The formerly mirrored both-red
+supervisor-start defect is fixed: kickoff preflights and records a pause naming its saved brief,
+or exits 1 if either step fails. One divergence is not mirrored: when `orch`
 cannot find its own executable (`os.Executable()` fails), each self-exec has no status and no
 output, so orch prints an empty `supervisor: ` line (and, headless, an empty answer and exit 1)
 where the JS, whose `spawnSync` result would then hold `null` output, dies of a `TypeError` on
 `.trim()`.
 
-`ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree.
+`ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree, and
+`ORCH_JS_REF=<commit-ish> ./parity/run.sh` against `orchestrator/` at another commit.
 
 ## JSON compatibility
 
@@ -1291,10 +1370,13 @@ v26.5.1) from the `*.json` inputs beside them: `<name>.compact.golden` is
 `JSON.stringify(JSON.parse(input))` and `<name>.indent2.golden` the same with indent 2, without a
 trailing newline. Regenerate after adding an input and commit inputs and goldens together.
 
-`testdata/usage/*.golden` are generated by `node testdata/usage/gen.mjs` through the JS
+`testdata/usage/*.golden` are generated by `ORCH_JS=<tree> node testdata/usage/gen.mjs` through the JS
 normalizers, from the redacted feed recordings beside them (no tokens, no account identifiers).
+The `routing`, `usage` and `incident` generators load the JS libs from `ORCH_JS`, an `orchestrator/`
+tree such as the reference: `git archive $(cat go/parity/js-ref) orchestrator | tar -x -C <dir>`,
+then `ORCH_JS=<dir>/orchestrator`.
 
-`testdata/incident/corpus.json` is generated by `node testdata/incident/gen.mjs` (last run with
+`testdata/incident/corpus.json` is generated by `ORCH_JS=<tree> node testdata/incident/gen.mjs` (last run with
 Node v26.5.1) through `lib/incident.mjs`, with `HOME` set to a fixture path inside the script:
 redaction and fingerprint cases and seeded, tie-heavy `summarize` inputs with their outputs.
 `testdata/incident/mixed-at-80.jsonl` is the cross-vendor reviewer's fixture: Python's

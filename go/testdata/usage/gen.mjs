@@ -1,11 +1,16 @@
-// Regenerates the *.golden files beside it from the JS normalizers in this checkout:
-//   node go/testdata/usage/gen.mjs
+// Regenerates the *.golden files beside it from the JS normalizers in the tree $ORCH_JS:
+//   ORCH_JS=<tree> node go/testdata/usage/gen.mjs
 // Each golden is JSON.stringify(normalized, null, 2) without a trailing newline.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeClaudeUsage } from "../../../orchestrator/lib/claude-usage.mjs";
-import { normalizeCodex } from "../../../orchestrator/lib/usage.mjs";
+
+if (!process.env.ORCH_JS) {
+  console.error("ORCH_JS is unset; run ORCH_JS=<tree> node gen.mjs, where <tree> is an orchestrator/ tree (git archive $(cat go/parity/js-ref) orchestrator | tar -x -C <dir> gives one)");
+  process.exit(2);
+}
+const { normalizeClaudeUsage } = await import(path.resolve(process.env.ORCH_JS, "lib", "claude-usage.mjs"));
+const { normalizeCodex } = await import(path.resolve(process.env.ORCH_JS, "lib", "usage.mjs"));
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (name) => JSON.parse(fs.readFileSync(path.join(here, name), "utf8"));

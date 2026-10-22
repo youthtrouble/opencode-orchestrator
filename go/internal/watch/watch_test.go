@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
@@ -23,7 +22,6 @@ type project struct {
 	t          *testing.T
 	root, home string
 	alivePids  map[float64]bool
-	orchOnPath bool
 }
 
 func newProject(t *testing.T) *project {
@@ -44,12 +42,11 @@ func (p *project) write(rel, content string) {
 
 func (p *project) deps() Deps {
 	return Deps{
-		Root:       p.root,
-		Home:       p.home,
-		Now:        func() time.Time { return now },
-		Routing:    func() (*usage.Routing, error) { return fixtureRouting(p.t), nil },
-		Alive:      func(pid any) bool { n, _ := pid.(float64); return p.alivePids[n] },
-		OrchOnPath: func() bool { return p.orchOnPath },
+		Root:    p.root,
+		Home:    p.home,
+		Now:     func() time.Time { return now },
+		Routing: func() (*usage.Routing, error) { return fixtureRouting(p.t), nil },
+		Alive:   func(pid any) bool { n, _ := pid.(float64); return p.alivePids[n] },
 	}
 }
 
@@ -128,8 +125,8 @@ func TestEveryGroup(t *testing.T) {
 		"flip: opencode->claude at 14:05Z",
 		"lanes: a[claude] running last Bash 15:00Z | undefined[undefined] undefined  Z | d[codex] starting (DEAD)  Z",
 		"QUESTIONS FOR YOU (1):",
-		"  [q1234567] " + strings.Repeat("a", 99) + "\uFFFD\n     reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply q1234567 \"...\"",
-		"AWAITING HUMAN: push?  (clear: node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear)",
+		"  [q1234567] " + strings.Repeat("a", 99) + "\uFFFD\n     reply: orch mailbox reply q1234567 \"...\"",
+		"AWAITING HUMAN: push?  (clear: orch flip gate --clear)",
 		"mailbox (last 3):",
 		"  15:10Z question conductor -> human: " + astral,
 		"  15:11Z question conductor -> coder: not for you",
@@ -153,32 +150,15 @@ func writeIncidents(t *testing.T, home string, lines ...string) {
 	}
 }
 
-// PE-26: with orch on PATH the question's reply hint names orch.
-func TestReplyHintNamesOrchWhenOnPath(t *testing.T) {
+// The question's reply hint names orch.
+func TestReplyHintNamesOrch(t *testing.T) {
 	p := newProject(t)
-	p.orchOnPath = true
 	p.write("mailbox/messages.jsonl", `{"id":"q1234567890","at":"2026-10-19T15:10:00.000Z","from":"conductor","to":"human","kind":"question","subject":"ship?"}`+"\n")
 	got, err := p.render()
 	if err != nil {
 		t.Fatal(err)
 	}
 	const hint = "\n     reply: orch mailbox reply q1234567 \"...\"\n"
-	if !strings.Contains(got, hint) {
-		t.Errorf("Render lacks %q:\n%s", hint, got)
-	}
-}
-
-// A nil OrchOnPath means orch is not on PATH: the hint names the node script, no panic.
-func TestNilOrchOnPathMeansNodeHint(t *testing.T) {
-	p := newProject(t)
-	p.write("mailbox/messages.jsonl", `{"id":"q1234567890","at":"2026-10-19T15:10:00.000Z","from":"conductor","to":"human","kind":"question","subject":"ship?"}`+"\n")
-	deps := p.deps()
-	deps.OrchOnPath = nil
-	got, err := Render(deps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hint := "\n     reply: " + cmdref.MailboxReply(false) + " q1234567 \"...\"\n"
 	if !strings.Contains(got, hint) {
 		t.Errorf("Render lacks %q:\n%s", hint, got)
 	}

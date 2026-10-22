@@ -38,7 +38,7 @@ func (h *harness) testCodexExec(t *testing.T) {
 		{name: "flags/empty-values", args: []string{"--model", "", "--effort", "", "--sandbox", "", "--resume", "", "--schema", "", "--add-dir", "", "--cwd", "", "--prompt", "p"}, script: ok},
 		{name: "flags/unknown-keys-are-flags", args: []string{"--frobnicate", "x", "--prompt", "p"}, script: ok},
 		{name: "quiet", args: []string{"--quiet", "--prompt", "p"}, script: ok},
-		{name: "help", args: []string{"--prompt", "p", "--help"}},
+		{name: "help", args: []string{"--prompt", "p", "--help"}, help: true},
 
 		// Prompt sources; the prompt reaches codex on stdin.
 		{name: "prompt/positional", args: []string{"fix", "the", "bug"}, script: ok},

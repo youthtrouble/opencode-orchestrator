@@ -192,7 +192,7 @@ func (h *harness) pathWithoutGoOrOrch(t *testing.T) string {
 var (
 	jsUnitTestsRow     = regexp.MustCompile(`(?m)^OK   unit tests  —  pass \d+$`)
 	jsUnitTestsFailRow = regexp.MustCompile(`(?m)^FAIL unit tests  —  fail [1-9]\d*$`)
-	orchBinaryRow      = regexp.MustCompile(`(?m)^OK   orch binary  —  \S.* at /\S*\n`)
+	orchBinaryRow      = regexp.MustCompile(`(?m)^OK   orch binary  —  \S.* at (/\S*)\n`)
 	orchSelfTestRow    = "OK   orch self-test  —  json, routing, executable\n"
 )
 
@@ -205,20 +205,25 @@ func maskJSUnitTests(t *testing.T, stdout string) string {
 	return jsUnitTestsRow.ReplaceAllString(stdout, "<unit tests>")
 }
 
-// maskOrchRows requires orch's rows (its binary, which compareOutcomes then compares, and PE-18's
-// selfTestRow and Go unit-test row not run, there being no go on pathWithoutGoOrOrch), removes
-// selfTestRow and masks the unit-test row.
+// maskOrchRows requires orch's rows (its binary, which compareOutcomes then compares, PE-18's
+// `orch on PATH` warning, there being no orch on pathWithoutGoOrOrch, and its selfTestRow and Go
+// unit-test row not run, there being no go either), removes the PATH row and selfTestRow and
+// masks the unit-test row.
 func maskOrchRows(t *testing.T, stdout, repo, selfTestRow string) string {
 	t.Helper()
+	binary := orchBinaryRow.FindStringSubmatch(stdout)
+	if binary == nil {
+		t.Errorf("orch: no orch binary row in %q", stdout)
+		return stdout
+	}
+	notOnPath := `WARN orch on PATH  —  not on PATH; agent commands "orch ..." will fail; add ` + filepath.Dir(binary[1]) + " to PATH\n"
 	notRun := "WARN unit tests  —  not run (no go toolchain or module at " + filepath.Join(repo, "go") + ")"
-	for _, want := range []string{selfTestRow, notRun} {
+	for _, want := range []string{notOnPath, selfTestRow, notRun} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("orch: no %q in %q", want, stdout)
 		}
 	}
-	if !orchBinaryRow.MatchString(stdout) {
-		t.Errorf("orch: no orch binary row in %q", stdout)
-	}
+	stdout = strings.Replace(stdout, notOnPath, "", 1)
 	stdout = strings.Replace(stdout, selfTestRow, "", 1)
 	return strings.Replace(stdout, notRun, "<unit tests>", 1)
 }

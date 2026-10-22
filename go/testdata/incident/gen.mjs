@@ -1,15 +1,20 @@
 // Writes corpus.json, the lib/incident.mjs reference package incident is tested against:
-//   node go/testdata/incident/gen.mjs > go/testdata/incident/corpus.json
+//   ORCH_JS=<tree> node go/testdata/incident/gen.mjs > go/testdata/incident/corpus.json
 // HOME is replaced by a fixture before the library loads, so no real home path is read or
 // written; the fixture holds regexp metacharacters and "$" to prove they are matched literally.
 // The emptyHome cases set HOME to "" (os.homedir() then returns "") around pure redact and
 // fingerprint calls only; nothing touches the incident log.
 import fs from "node:fs";
+import path from "node:path";
+if (!process.env.ORCH_JS) {
+  console.error("ORCH_JS is unset; run ORCH_JS=<tree> node gen.mjs, where <tree> is an orchestrator/ tree (git archive $(cat go/parity/js-ref) orchestrator | tar -x -C <dir> gives one)");
+  process.exit(2);
+}
 const HOME = "/opt/h o$me.dir";
 process.env.HOME = HOME;
 const os = await import("node:os");
 if (os.homedir() !== HOME) throw new Error(`os.homedir() is ${os.homedir()}, not the fixture`);
-const { redact, fingerprint, summarize } = await import("../../../orchestrator/lib/incident.mjs");
+const { redact, fingerprint, summarize } = await import(path.resolve(process.env.ORCH_JS, "lib", "incident.mjs"));
 
 const ws = ["\t", "\n", "\v", "\f", "\r", " ", " ", " ", " ", " ", " ", " ", " ", " ", "　", "﻿"];
 const notWs = ["\u0085", "᠎", "​"]; // NEL, MONGOLIAN VOWEL SEPARATOR, ZERO WIDTH SPACE

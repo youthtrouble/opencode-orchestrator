@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const repo = path.dirname(path.dirname(new URL(import.meta.url).pathname));
-const heartbeat = "node ~/.config/opencode/orchestrator/bin/session.mjs beat --door claude --hook";
+const heartbeat = "orch session beat --door claude --hook";
 
 // The command hooks of the conductor's frontmatter, by event. A reader for the one documented shape
 // (event, then `- hooks:`, then `- type: command` entries), not YAML in general.
@@ -37,13 +37,16 @@ test("each frontmatter hook command records its event's state in the project the
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "conductor-hooks-"));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   fs.mkdirSync(path.join(project, ".orchestrator"));
-  // The installed path, pointed at this checkout.
-  const [, ...args] = heartbeat.replace("~/.config/opencode/orchestrator", path.join(repo, "orchestrator")).split(" ");
+  // The hook runs `orch` from PATH; this test runs an orch built from this checkout instead.
+  const orch = path.join(project, "orch");
+  const build = spawnSync("go", ["build", "-o", orch, "./cmd/orch"], { cwd: path.join(repo, "go"), encoding: "utf8" });
+  assert.equal(build.status, 0, build.stderr);
+  const [, ...args] = heartbeat.split(" ");
   const expected = { UserPromptSubmit: "working", Stop: "waiting", SessionEnd: "ended" };
   for (const [event, commands] of Object.entries(frontmatterHooks())) {
     assert.deepEqual(commands, [heartbeat]);
     const input = JSON.stringify({ session_id: "s1", cwd: project, hook_event_name: event, prompt: "do not store" });
-    const run = spawnSync(process.execPath, args, { input, encoding: "utf8" });
+    const run = spawnSync(orch, args, { input, encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
     assert.equal(run.stdout, "", "UserPromptSubmit stdout would be added to the conversation");
     const record = JSON.parse(fs.readFileSync(path.join(project, ".orchestrator/sessions/claude.json"), "utf8"));

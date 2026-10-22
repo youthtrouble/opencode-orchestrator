@@ -7,7 +7,7 @@ Run a retrospective over `.orchestrator/runs/`, `.orchestrator/reviews/` and the
 !`ls -t .orchestrator/runs 2>/dev/null | head -40`
 
 Incidents:
-!`node ~/.config/opencode/orchestrator/bin/incident.mjs report`
+!`orch incident report`
 
 Report: runs per harness/model with success rate, tokens and estimated cost; review findings by
 severity and how many were real; where routing was wrong (a cheap model struggled, a dear model did

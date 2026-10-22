@@ -10,14 +10,14 @@ and a date. Never guess a model id; verify it exists in the live catalog.
 ## 1. Snapshot the current state
 ```
 cd ~/.config/opencode && git status --short && git log --oneline -5
-node orchestrator/bin/usage.mjs --refresh
-node orchestrator/bin/doctor.mjs
+orch usage --refresh
+orch doctor
 cat orchestrator/models.json
 ```
 
 ## 1b. Read the incident log first
 ```
-node ~/.config/opencode/orchestrator/bin/incident.mjs report --since <last audit date>
+orch incident report --since <last audit date>
 ```
 Every fingerprint with count >= 2, and every `human-correction`, becomes a candidate fix in this
 audit: a contract wording change, a routing/threshold change, or a code fix with a regression test.
@@ -36,18 +36,18 @@ Record what you fixed in CHANGELOG.md and leave the log intact (it is history, n
 - Community signal on strengths (balanced, dated): Artificial Analysis, METR, SWE-bench Pro / Terminal-Bench posts, r/ClaudeAI, r/codex, HN. Record only claims with a source.
 
 ## 4. Decide and apply
-For each role in models.json ask: is there a newer tier at the same or lower cost? did a default effort change? did a context window change? did a CLI flag the bridges use change (`claude -p`, `codex exec`)? did the usage endpoints change shape (`lib/claude-usage.mjs`, `lib/codex-appserver.mjs`)?
+For each role in models.json ask: is there a newer tier at the same or lower cost? did a default effort change? did a context window change? did a CLI flag the bridges use change (`claude -p`, `codex exec`)? did the usage endpoints change shape (`go/internal/usage/{claude,codex}.go`)?
 - Edit `orchestrator/models.json` (bump `last_verified`, keep notes with the source).
 - Edit `agents/*.md` and `opencode.jsonc` static models to match.
 - Edit `AGENTS.md` role table if roles changed.
-- If a bridge flag changed, fix `bin/claude-exec.mjs` / `bin/codex-exec.mjs` and re-run the smoke tests.
+- If a bridge flag changed, fix `go/internal/bridge/{claude,codex}.go` in the checkout, rebuild `orch`, re-run the smoke tests.
 
 ## 5. Verify
 ```
-cd ~/.config/opencode/orchestrator && node --test tests/*.test.mjs
-node bin/usage.mjs --refresh
-node bin/codex-exec.mjs --model gpt-6-luna --effort low --sandbox read-only --prompt "Reply OK"
-node bin/claude-exec.mjs --model claude-haiku-5-5 --max-turns 1 --permission-mode plan --prompt "Reply OK"
+orch doctor
+orch usage --refresh
+orch codex-exec --model gpt-6-luna --effort low --sandbox read-only --prompt "Reply OK"
+orch claude-exec --model claude-haiku-5-5 --max-turns 1 --permission-mode plan --prompt "Reply OK"
 opencode service restart && opencode debug agents | head -c 400 && opencode plugin list | grep orchestrator
 ```
 

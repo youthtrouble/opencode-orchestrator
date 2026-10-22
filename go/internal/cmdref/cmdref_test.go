@@ -1,174 +1,114 @@
 package cmdref
 
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
+import "testing"
 
-// The JS supervisor writes this exact command into its reminders.
-func TestScriptIsTheInstalledNodeCommand(t *testing.T) {
-	const want = "node ~/.config/opencode/orchestrator/bin/mailbox.mjs"
-	if got := Script("mailbox"); got != want {
-		t.Errorf("Script(mailbox) = %q, want %q", got, want)
+func TestCommandIsOrchAndTheSubcommand(t *testing.T) {
+	if got := Command("mailbox"); got != "orch mailbox" {
+		t.Errorf("Command(mailbox) = %q, want %q", got, "orch mailbox")
 	}
 }
 
-// Without orch on PATH, bin/mailbox.mjs inbox's exact command precedes each question's id prefix.
-func TestMailboxReplyWithoutOrchIsTheJSInboxHint(t *testing.T) {
-	const want = "node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply"
-	if got := MailboxReply(false); got != want {
-		t.Errorf("MailboxReply(false) = %q, want %q", got, want)
-	}
-}
-
-// PE-26: with orch on PATH the hint names orch itself.
-func TestMailboxReplyWithOrchNamesOrch(t *testing.T) {
+// mailbox inbox and watch print this command before each question's id prefix.
+func TestMailboxReplyNamesOrch(t *testing.T) {
 	const want = "orch mailbox reply"
-	if got := MailboxReply(true); got != want {
-		t.Errorf("MailboxReply(true) = %q, want %q", got, want)
+	if got := MailboxReply(); got != want {
+		t.Errorf("MailboxReply() = %q, want %q", got, want)
 	}
 }
 
-func TestOrchOnPathFollowsPATH(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("PATH", dir)
-	if OrchOnPath() {
-		t.Fatal("OrchOnPath() = true with an empty PATH directory")
-	}
-	if err := os.WriteFile(filepath.Join(dir, "orch"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if !OrchOnPath() {
-		t.Error("OrchOnPath() = false with an executable orch on PATH")
-	}
-}
-
-// bin/flip.mjs gate names this exact command in the human's message body.
+// flip gate names this exact command in the human's message body.
 func TestFlipGateClearIsTheGateMessageCommand(t *testing.T) {
-	const want = "node ~/.config/opencode/orchestrator/bin/flip.mjs gate --clear"
+	const want = "orch flip gate --clear"
 	if got := FlipGateClear(); got != want {
 		t.Errorf("FlipGateClear() = %q, want %q", got, want)
 	}
 }
 
-// flip.mjs run writes its brief from a template literal (l.74) whose only escapes are \n and
-// whose only substitutions are to, from and the reason. Rendering that literal from the
-// source pins the text byte for byte.
-func TestConductorContinueBriefIsTheFlipTemplate(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "flip.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, after, found := strings.Cut(string(source), "fs.writeFileSync(brief, `")
-	template, _, closed := strings.Cut(after, "`);")
-	if !found || !closed {
-		t.Fatal("flip.mjs no longer writes the brief from one template literal")
-	}
-	rendered := strings.NewReplacer(
-		`${to}`, "claude",
-		`${from}`, "opencode",
-		`${opts.reason || "vendor budget flip"}`, "handback: home door",
-		`\n`, "\n",
-	).Replace(template)
-	if strings.Contains(rendered, "${") || strings.Contains(rendered, `\`) {
-		t.Fatalf("the template has a substitution or escape this test does not render: %q", rendered)
-	}
-	if got := ConductorContinueBrief("claude", "opencode", "handback: home door"); got != rendered {
-		t.Errorf("ConductorContinueBrief differs from flip.mjs\n got: %q\nwant: %q", got, rendered)
+// flip run writes this brief; TestJSReference (go/parity) renders it from the JS source
+// through PE-19.
+func TestConductorContinueBriefIsTheFlipBrief(t *testing.T) {
+	const want = "# Continue as conductor (claude door)\n\n" +
+		"You are taking over this project from the opencode conductor (handback: home door).\n" +
+		"Read .orchestrator/STATE.md and the mailbox, verify recorded facts against the tree, then execute the exact next action and keep following the loop.\n" +
+		"At each brief boundary run: orch flip decide --active claude\n" +
+		"If it says handback or flip: update STATE.md, post a handoff, run orch flip run --to <door> --from claude, and stop.\n" +
+		"If it says gate: the project is waiting for the human; update STATE.md and stop, without running orch flip pause, run or gate.\n" +
+		"You cannot ask the human interactively: put each question in the mailbox with the answer you recommend and whether it blocks you (orch mailbox post --from conductor-claude --to human --kind question --subject \"...\" --body \"...\" --recommended \"<a complete reply>\" --blocking true|false) and continue with independent work, or stop at human gates.\n" +
+		"HEADLESS RULE: ending your turn ends this session and kills background subagents. Run every subagent in the FOREGROUND and wait; any background agents from a previous headless session are gone, re-run them in the foreground. " +
+		"Do not finish until the loop is complete or you have handed off with orch flip run/pause, or stopped at a human gate with orch flip gate (never pause for a human gate).\n"
+	if got := ConductorContinueBrief("claude", "opencode", "handback: home door"); got != want {
+		t.Errorf("ConductorContinueBrief differs\n got: %q\nwant: %q", got, want)
 	}
 }
 
-// bin/claude-exec.mjs records its incidents under its own file name.
-func TestScriptFileIsTheScriptBasename(t *testing.T) {
-	if got := ScriptFile("claude-exec"); got != "claude-exec.mjs" {
-		t.Errorf("ScriptFile(claude-exec) = %q", got)
-	}
-}
+// orch claude-exec --help prints the JS bridge's header as orch help; TestJSReference
+// (go/parity) derives it from the JS source through PE-19.
+func TestClaudeExecHelpIsTheScriptHeaderAsOrchHelp(t *testing.T) {
+	const want = `Delegate a bounded task to Claude Code (print mode) on the Claude subscription, structured result back.
 
-// claude-exec.mjs --help prints lines 2-12 of its own source joined by "\n".
-func TestClaudeExecHelpIsTheScriptHeader(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "claude-exec.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := strings.Join(strings.Split(string(source), "\n")[1:12], "\n")
+  orch claude-exec [--model claude-opus-5-5|opus|sonnet|haiku|fable] [--effort low|medium|high|xhigh|max]
+                   [--permission-mode acceptEdits|auto|plan|dontAsk] [--allowed-tools "Read,Edit,Bash(go *)"]
+                   [--max-turns N] [--max-budget-usd X] [--cwd DIR] [--resume SESSION_ID] [--agent NAME]
+                   [--append-system-prompt TEXT] [--json-schema FILE] [--timeout-min 60] [--force] [--quiet]
+                   [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+
+Prints one JSON object on stdout: { ok, session_id, final_message, usage, model_usage, cost_usd,
+num_turns, permission_denials, duration_ms, record }. Exit codes: 0 ok, 1 error, 75 budget refused.`
 	if ClaudeExecHelp != want {
-		t.Errorf("ClaudeExecHelp differs from the script header\n got: %q\nwant: %q", ClaudeExecHelp, want)
+		t.Errorf("ClaudeExecHelp differs\n got: %q\nwant: %q", ClaudeExecHelp, want)
 	}
 }
 
-// codex-exec.mjs --help prints lines 2-12 of its own source joined by "\n".
-func TestCodexExecHelpIsTheScriptHeader(t *testing.T) {
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "codex-exec.mjs"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := strings.Join(strings.Split(string(source), "\n")[1:12], "\n")
+// orch codex-exec --help prints the JS bridge's header as orch help; TestJSReference
+// (go/parity) derives it from the JS source through PE-19.
+func TestCodexExecHelpIsTheScriptHeaderAsOrchHelp(t *testing.T) {
+	const want = `Delegate a bounded task to the Codex CLI on the ChatGPT subscription and get a structured result.
+
+  orch codex-exec [--model gpt-6.1-sol] [--effort low|medium|high|xhigh|max|ultra]
+                  [--sandbox read-only|workspace-write|danger-full-access] [--cwd DIR]
+                  [--resume THREAD_ID] [--schema FILE] [--timeout-min 60] [--force] [--quiet]
+                  [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+
+Prints one JSON object on stdout: { ok, thread_id, final_message, usage, files_changed, commands,
+duration_ms, record } and streams progress lines to stderr. Exit codes: 0 ok, 1 turn failed,
+75 budget gate refused, 2 usage error.`
 	if CodexExecHelp != want {
-		t.Errorf("CodexExecHelp differs from the script header\n got: %q\nwant: %q", CodexExecHelp, want)
+		t.Errorf("CodexExecHelp differs\n got: %q\nwant: %q", CodexExecHelp, want)
 	}
 }
 
-// kickoffSource is bin/kickoff.mjs.
-func kickoffSource(t *testing.T) string {
-	t.Helper()
-	source, err := os.ReadFile(filepath.Join("..", "..", "..", "orchestrator", "bin", "kickoff.mjs"))
-	if err != nil {
-		t.Fatal(err)
+// kickoff.mjs's opening prompt; TestJSReference (go/parity) renders it from the JS source.
+func TestKickoffPromptIsTheKickoffPrompt(t *testing.T) {
+	const head = "Ship a.md. Plan first with the architect (size per the brief), then one slice at a time; flip or hand back per the contract at each brief boundary."
+	const tail = " Record orchestrator defects as incidents."
+	cases := []struct {
+		side []string
+		want string
+	}{
+		{nil, head + tail},
+		{[]string{"b.md"}, head + " When budget allows, also run b.md as side brief(s) with the cheapest adequate role." + tail},
+		{[]string{"b.md", "c.md"}, head + " When budget allows, also run b.md, c.md as side brief(s) with the cheapest adequate role." + tail},
 	}
-	return string(source)
-}
-
-// between returns the text of source between the first start and the end after it.
-func between(t *testing.T, source, start, end string) string {
-	t.Helper()
-	_, after, found := strings.Cut(source, start)
-	text, _, closed := strings.Cut(after, end)
-	if !found || !closed {
-		t.Fatalf("kickoff.mjs no longer contains %q ... %q", start, end)
-	}
-	return text
-}
-
-// kickoff.mjs builds the prompt from one template literal with a nested one for the side
-// briefs; rendering both from the source pins the text byte for byte.
-func TestKickoffPromptIsTheKickoffTemplate(t *testing.T) {
-	source := kickoffSource(t)
-	template := between(t, source, "const prompt = `", "`;\n")
-	head, rest, _ := strings.Cut(template, "${side.length ? `")
-	sideTemplate, tail, _ := strings.Cut(rest, "` : \"\"}")
-	render := func(main string, side []string) string {
-		sideText := ""
-		if len(side) > 0 {
-			sideText = strings.ReplaceAll(sideTemplate, `${side.join(", ")}`, strings.Join(side, ", "))
-		}
-		return strings.ReplaceAll(head, "${main}", main) + sideText + tail
-	}
-	for _, side := range [][]string{nil, {"b.md"}, {"b.md", "c.md"}} {
-		want := render("a.md", side)
-		if strings.Contains(want, "${") || strings.Contains(want, "`") {
-			t.Fatalf("the template has a substitution this test does not render: %q", want)
-		}
-		if got := KickoffPrompt("a.md", side); got != want {
-			t.Errorf("KickoffPrompt(a.md, %q) differs from kickoff.mjs\n got: %q\nwant: %q", side, got, want)
+	for _, c := range cases {
+		if got := KickoffPrompt("a.md", c.side); got != c.want {
+			t.Errorf("KickoffPrompt(a.md, %q)\n got: %q\nwant: %q", c.side, got, c.want)
 		}
 	}
 }
 
-// kickoff.mjs prints its usage line from a string literal.
+// kickoff's usage line; TestJSReference (go/parity) reads it from the JS source through PE-19.
 func TestKickoffUsageIsTheKickoffUsageLine(t *testing.T) {
-	want := between(t, kickoffSource(t), `console.log("usage: `, `");`)
-	if got := KickoffUsage(); got != "usage: "+want {
-		t.Errorf("KickoffUsage() = %q, want %q", got, "usage: "+want)
+	const want = "usage: orch kickoff --brief FILE [--brief FILE2] [--door auto|claude|opencode] [--headless] [--unattended] [--dry-run]"
+	if got := KickoffUsage(); got != want {
+		t.Errorf("KickoffUsage() = %q, want %q", got, want)
 	}
 }
 
-// kickoff.mjs names the watch command in both its headless and interactive hints.
+// kickoff's watch hint; TestJSReference (go/parity) finds it twice in the JS source through
+// PE-19.
 func TestWatchFollowIsTheKickoffHint(t *testing.T) {
-	source := kickoffSource(t)
-	if got := WatchFollow(); strings.Count(source, got) != 2 {
-		t.Errorf("WatchFollow() = %q appears %d times in kickoff.mjs, want 2", got, strings.Count(source, got))
+	const want = "orch watch --follow"
+	if got := WatchFollow(); got != want {
+		t.Errorf("WatchFollow() = %q, want %q", got, want)
 	}
 }

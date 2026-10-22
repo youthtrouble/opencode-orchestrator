@@ -39,7 +39,7 @@ func TestParity(t *testing.T) {
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over
-// every golden input plus the checkout's models.json.
+// every golden input plus the JS reference's models.json.
 func (h *harness) testJSON(t *testing.T) {
 	inputs, err := filepath.Glob("../testdata/json/*.json")
 	if err != nil || len(inputs) == 0 {
@@ -161,6 +161,9 @@ type invocation struct {
 	// daemon runs the command as a supervisor serve: started, stopped through its stop file
 	// once it holds its lock, and waited for (see runDaemon).
 	daemon bool
+	// jsHelp marks a case whose JS stdout is a bridge's --help header, compared as orch help
+	// (PE-19, jsHelpAsOrch).
+	jsHelp bool
 }
 
 // crashClass names how a case that ends in an uncaught JS exception is compared (plan
@@ -205,7 +208,8 @@ func (h *harness) comparePair(t *testing.T, inv invocation) {
 }
 
 // runPair runs each runtime in its own fresh sandbox and returns both normalized outcomes,
-// for cases that assert a documented difference before comparing the rest.
+// for cases that assert a documented difference before comparing the rest. The JS outcome
+// names its commands as orch does (PE-19) before either is normalized.
 func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 	t.Helper()
 	run := func(argv []string) outcome {
@@ -235,12 +239,55 @@ func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 		if inv.projectPaths {
 			o = o.withProjectPlaceholder(t, sb)
 		}
+		o = h.withPE19(t, argv, o, inv.jsHelp)
 		if inv.normalizeWrites != nil {
 			o = inv.normalizeWrites(o, before)
 		}
 		return o.normalized(inv.normalize)
 	}
 	return run(inv.js), run(inv.orch)
+}
+
+// withPE19 applies PE-19 to the outcome of argv: a JS outcome names its commands as orch does
+// (with help, its stdout is a bridge's --help header), and on both sides the budget-red bridge
+// incidents' fingerprints are masked, orch's checked against its summary. Every runner that
+// compares a pair calls it after withProjectPlaceholder and before the case's normalizers.
+func (h *harness) withPE19(t *testing.T, argv []string, o outcome, help bool) outcome {
+	t.Helper()
+	isJS := argv[0] == h.node
+	if isJS {
+		o = o.withJSCommandsAsOrch(t, help)
+	}
+	return o.withBudgetRedFingerprintsMasked(t, !isJS)
+}
+
+// withJSCommandsAsOrch applies PE-19 to a JS outcome: with help, its stdout is a bridge's
+// --help header, turned into orch help first; then every command string is mapped.
+func (o outcome) withJSCommandsAsOrch(t *testing.T, help bool) outcome {
+	t.Helper()
+	if help {
+		header, hasNewline := strings.CutSuffix(o.stdout, "\n")
+		orchHelp, err := jsHelpAsOrch(header)
+		if !hasNewline || err != nil {
+			t.Fatalf("PE-19 help: stdout %q: %v", o.stdout, err)
+		}
+		o.stdout = orchHelp + "\n"
+	}
+	return o.normalized(jsCommandsAsOrch)
+}
+
+// withBudgetRedFingerprintsMasked masks the fp of budget-red bridge incidents (PE-19), whose
+// summary names the bridge as each runtime does. With check, each must be the fingerprint of
+// its summary.
+func (o outcome) withBudgetRedFingerprintsMasked(t *testing.T, check bool) outcome {
+	t.Helper()
+	return o.normalized(func(s string) string {
+		masked, err := maskBudgetRedFingerprints(s, check)
+		if err != nil {
+			t.Error(err)
+		}
+		return masked
+	})
 }
 
 // crashError checks diagnostics independently of stdout and files, which remain exact inputs
@@ -312,7 +359,7 @@ func compareOutcomes(t *testing.T, js, orch outcome) {
 	for name, content := range js.files {
 		if other, ok := orch.files[name]; !ok {
 			t.Errorf("file %s written by js only", name)
-		} else if other != content {
+		} else if content, other = withPromptHeadsAligned(content, other); other != content {
 			t.Errorf("file %s differs\n  js: %q\norch: %q", name, content, other)
 		}
 	}

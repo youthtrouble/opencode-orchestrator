@@ -33,4 +33,26 @@ jobs:
       - run: go build ./...
       - run: go vet ./... && go vet -tags parity ./parity
       - run: go test -count=1 ./...
-      - run: ./parity/run.sh --only json,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session
+      # The parity reference (go/parity/js-ref) is extracted from git history; the shallow
+      # checkout holds only the job's own commit, so fetch the pinned one by its full SHA.
+      - name: Fetch the parity reference commit
+        working-directory: .
+        run: git fetch --no-tags --depth=1 origin "$(cat go/parity/js-ref)"
+      - run: ./parity/run.sh --only json,mailbox,manifest,incident,policy,bridges,worker,flip,supervisor,doctor,watch,kickoff,session,jsref
+
+  node:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5 # the plugin tests may build orch
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - run: node --test tests/*.test.mjs

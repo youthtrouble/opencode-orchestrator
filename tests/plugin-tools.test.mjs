@@ -1,61 +1,51 @@
-// The plugin's state-file tools and script spawns in both runtimes (S10b): mailbox, manifest and
-// incident go through `orch mailbox|manifest|incident` in go mode, and every spawned script
-// (claude-exec, codex-exec, worker, supervisor, flip) runs as `orch <script>` with the argv the
-// JS script gets. Go sandboxes poison every lib/*.mjs and bin/*.mjs, so any JS use is visible.
+// The plugin's state-file tools and process spawns (S10b): mailbox, manifest and incident go
+// through `orch mailbox|manifest|incident`, and every spawned process (claude-exec, codex-exec,
+// worker, supervisor, flip) runs as `orch <subcommand>` with the argv the 0.5 scripts took.
+// Sandboxes hold only models.json and fakes, so nothing JS can run.
 import test, { describe } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { calls, checkoutRegistry, createSandbox, loadPlugin, poisonHits, routingDocument, setAnswers, SPAWNED_SCRIPTS, typescriptSupported, usageFixture, waitFor, writeFakeOrch } from "./plugin-harness.mjs";
+import { calls, checkoutRegistry, createSandbox, loadPlugin, routingFixture, setAnswers, SPAWNED_SCRIPTS, typescriptSupported, waitFor, writeFakeOrch } from "./plugin-harness.mjs";
 
 const skip = typescriptSupported ? false : "Node cannot strip TypeScript types here (needs >= 22.18)";
 
-/** A go sandbox whose fake orch answers routing like the real binary, plus `answers`; `env` adds to the plugin's. */
+/** A sandbox whose fake orch answers routing like the real binary, plus `answers`; `env` adds to the plugin's. */
 async function loadGo(t, answers = {}, env = {}) {
-  return loadGoInto(t, createSandbox(t, { runtime: "go" }), answers, env);
+  return loadGoInto(t, createSandbox(t), answers, env);
 }
 
 async function loadGoInto(t, sandbox, answers, env = {}) {
-  const doc = await routingDocument(usageFixture("green"));
+  const doc = routingFixture("green");
   setAnswers(sandbox, { "routing --json": { stdout: doc }, "routing --json --refresh": { stdout: doc }, "routing --cached --json": { stdout: doc }, ...answers });
-  const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ...env } });
-  return { sandbox, plugin };
-}
-
-async function loadJs(t, answers = {}, env = {}) {
-  const sandbox = createSandbox(t, { runtime: "js" });
-  setAnswers(sandbox, answers);
   const plugin = await loadPlugin(t, sandbox, { env });
   return { sandbox, plugin };
 }
 
-/** The calls made to `orch <first>...` (go) since the log was `from` entries long. */
+/** The calls made to `orch <first>...` since the log was `from` entries long. */
 const orchCalls = (sandbox, first, from = 0) => calls(sandbox).slice(from).filter((c) => c.self === "path" && c.argv[0] === first);
 
-/** Makes crypto.randomInt return `draws` in order (the plugin imports it by name) until the test ends. */
-function stubRandomInt(t, draws) {
-  const original = crypto.randomInt;
-  crypto.randomInt = () => draws.shift();
-  syncBuiltinESMExports();
-  t.after(() => { crypto.randomInt = original; syncBuiltinESMExports(); });
+// Virtualize plugin scheduling, not child-process I/O. Unload before restoring the clock,
+// including on assertion failure, so no trailing callback can run on restored wall time.
+function usePluginClock(t, plugin) {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
+  t.after(async () => {
+    try { await plugin.dispose(); } finally { t.mock.timers.reset(); }
+  });
+  return t.mock.timers;
 }
 
-describe("mailbox_post", { skip }, () => {
-  test("js: a real message line lands in messages.jsonl", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
-    const r = await plugin.callTool("mailbox_post", { from: "coder", subject: "hi", body: "text", refs: ["a.md"] });
-    const lines = fs.readFileSync(path.join(sandbox.project, ".orchestrator", "mailbox", "messages.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    assert.equal(lines.length, 1);
-    assert.deepEqual(r.metadata, lines[0]);
-    assert.equal(r.content, `posted ${lines[0].id}`);
-    assert.deepEqual({ ...lines[0], id: 0, at: 0 }, { id: 0, at: 0, from: "coder", to: "*", kind: "note", subject: "hi", body: "text", refs: ["a.md"], thread: null });
-  });
+test("plugin warm-up waits for the fake process to exit", { skip }, async (t) => {
+  const json = JSON.stringify(routingFixture("green"));
+  const { sandbox } = await loadGo(t, { "routing --json": { stdoutHex: [Buffer.from(json.slice(0, 10)).toString("hex"), Buffer.from(json.slice(10)).toString("hex")] } });
+  const warmUp = orchCalls(sandbox, "routing").find((c) => c.argv.join(" ") === "routing --json");
+  assert.ok(warmUp);
+  assert.throws(() => process.kill(warmUp.pid, 0), { code: "ESRCH" });
+});
 
-  test("go: orch mailbox post with the body on stdin and --json last", async (t) => {
+describe("mailbox_post", { skip }, () => {
+  test("orch mailbox post with the body on stdin and --json last", async (t) => {
     const message = { id: "m-1", at: "2026-10-19T00:00:00.000Z", from: "coder", to: "human", kind: "question", subject: "hi", body: "line 1\n--not-a-flag", refs: ["a.md", "b.md"], thread: "t-1", recommended: "yes", blocking: false };
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: message } });
     const r = await plugin.callTool("mailbox_post", { from: "coder", to: "human", kind: "question", subject: "hi", body: message.body, refs: message.refs, thread: "t-1", recommended: "yes", blocking: false });
@@ -65,10 +55,9 @@ describe("mailbox_post", { skip }, () => {
     assert.equal(call.cwd, fs.realpathSync(process.cwd()));
     assert.equal(r.content, "posted m-1");
     assert.deepEqual(r.metadata, message);
-    assert.deepEqual(poisonHits(sandbox), []);
   });
 
-  test("go: the defaults leave out --thread and send an empty body", async (t) => {
+  test("the defaults leave out --thread and send an empty body", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: { id: "m-2" } } });
     await plugin.callTool("mailbox_post", { from: "coder", subject: "hi" });
     const [call] = orchCalls(sandbox, "mailbox");
@@ -77,68 +66,39 @@ describe("mailbox_post", { skip }, () => {
   });
 
   for (const [field, input] of [["subject", { subject: "--x" }], ["refs", { refs: ["ok", "--x"] }], ["thread", { thread: "--x" }]]) {
-    test(`go: a ${field} beginning with "--" is refused before any spawn`, async (t) => {
+    test(`a ${field} beginning with "--" is refused before any spawn`, async (t) => {
       const { sandbox, plugin } = await loadGo(t);
       const r = await plugin.toolResult("mailbox_post", { from: "coder", subject: "hi", ...input });
       assert.equal(r.status, "error");
-      assert.equal(String(r.error), `OrchCommandError: ${field} may not begin with "--" in the go runtime`);
+      assert.equal(String(r.error), `OrchCommandError: ${field} may not begin with "--"`);
       assert.equal(r.error.subcommand, "mailbox post");
       assert.equal(r.error.code, null);
       assert.deepEqual(orchCalls(sandbox, "mailbox"), []);
     });
   }
 
-  test("js: a question records its recommended answer and blocks by default", async (t) => {
-    const { plugin } = await loadJs(t);
-    const r = await plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "ship?", recommended: "Ship it." });
-    assert.equal(r.metadata.recommended, "Ship it.");
-    assert.equal(r.metadata.blocking, true);
-  });
-
-  test("js: a question without a recommended answer is a tool error and writes nothing", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
-    const r = await plugin.toolResult("mailbox_post", { from: "conductor", kind: "question", subject: "ship?" });
-    assert.equal(r.status, "error");
-    assert.equal(r.error.message, "a question needs a recommended answer");
-    assert.equal(fs.existsSync(path.join(sandbox.project, ".orchestrator", "mailbox", "messages.jsonl")), false);
-  });
-
-  test("js and go: recommended and blocking are ignored on other kinds", async (t) => {
-    const js = await loadJs(t);
-    const posted = await js.plugin.callTool("mailbox_post", { from: "coder", subject: "hi", recommended: "x", blocking: false });
-    assert.equal(Object.hasOwn(posted.metadata, "recommended"), false);
+  test("recommended and blocking are left out on other kinds", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: { id: "m-3" } } });
     await plugin.callTool("mailbox_post", { from: "coder", subject: "hi", recommended: "--x", blocking: false });
     assert.deepEqual(orchCalls(sandbox, "mailbox")[0].argv, ["mailbox", "post", "--root", sandbox.project, "--from", "coder", "--to", "*", "--kind", "note", "--subject", "hi", "--body", "-", "--json"]);
   });
 
-  test("go: a question's recommended beginning with \"--\" is refused before any spawn", async (t) => {
+  test("a question's recommended beginning with \"--\" is refused before any spawn", async (t) => {
     const { sandbox, plugin } = await loadGo(t);
     const r = await plugin.toolResult("mailbox_post", { from: "coder", kind: "question", subject: "hi", recommended: "--x" });
-    assert.equal(String(r.error), 'OrchCommandError: recommended may not begin with "--" in the go runtime');
+    assert.equal(String(r.error), 'OrchCommandError: recommended may not begin with "--"');
     assert.deepEqual(orchCalls(sandbox, "mailbox"), []);
   });
 
-  test("js: an action question records ask and no recommendation; a recommendation that reports work done is a tool error", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
-    const r = await plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "run setup", body: "./setup.sh", ask: "action" });
-    assert.equal(r.metadata.ask, "action");
-    assert.equal(Object.hasOwn(r.metadata, "recommended"), false);
-    const claim = await plugin.toolResult("mailbox_post", { from: "conductor", kind: "question", subject: "set up?", recommended: "Done: scripts ran." });
-    assert.equal(claim.error.message, "a recommended answer is a decision to accept, not a report that work is done");
-    const lines = fs.readFileSync(path.join(sandbox.project, ".orchestrator", "mailbox", "messages.jsonl"), "utf8").trim().split("\n");
-    assert.equal(lines.length, 1);
-  });
-
-  test("go: an action question passes --ask after --blocking; an ask beginning with \"--\" is refused", async (t) => {
+  test("an action question passes --ask after --blocking; an ask beginning with \"--\" is refused", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { stdout: { id: "m-4" } } });
     await plugin.callTool("mailbox_post", { from: "conductor", to: "human", kind: "question", subject: "run setup", body: "./setup.sh", blocking: true, ask: "action" });
     assert.deepEqual(orchCalls(sandbox, "mailbox")[0].argv.slice(-7), ["--blocking", "true", "--ask", "action", "--body", "-", "--json"]);
     const r = await plugin.toolResult("mailbox_post", { from: "conductor", kind: "question", subject: "hi", ask: "--x" });
-    assert.equal(String(r.error), 'OrchCommandError: ask may not begin with "--" in the go runtime');
+    assert.equal(String(r.error), 'OrchCommandError: ask may not begin with "--"');
   });
 
-  test("go: a question without a recommended answer surfaces orch's exit 2", async (t) => {
+  test("a question without a recommended answer surfaces orch's exit 2", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "mailbox post": { code: 2, stderr: 'mailbox post: a question needs --recommended "<the answer you recommend>"\n' } });
     const r = await plugin.toolResult("mailbox_post", { from: "coder", kind: "question", subject: "hi" });
     assert.equal(r.status, "error");
@@ -146,7 +106,7 @@ describe("mailbox_post", { skip }, () => {
     assert.equal(orchCalls(sandbox, "mailbox")[0].argv.includes("--recommended"), false);
   });
 
-  test("go: exit 1 from orch is a tool error with the stderr line", async (t) => {
+  test("exit 1 from orch is a tool error with the stderr line", async (t) => {
     const { plugin } = await loadGo(t, { "mailbox post": { code: 1, stderr: "Error: post needs from and subject\n" } });
     const r = await plugin.toolResult("mailbox_post", { from: "", subject: "hi" });
     assert.equal(r.status, "error");
@@ -155,58 +115,43 @@ describe("mailbox_post", { skip }, () => {
 });
 
 describe("mailbox_list", { skip }, () => {
-  test("go: the content equals js mode's for the same mailbox", async (t) => {
-    const js = await loadJs(t);
-    const mailboxLib = await import(pathToFileURL(path.join(js.sandbox.orchestrator, "lib", "mailbox.mjs")).href);
-    mailboxLib.post(js.sandbox.project, { from: "planner", to: "coder", kind: "brief", subject: "do it", body: "the brief", refs: ["plan.md"] });
-    mailboxLib.post(js.sandbox.project, { from: "coder", subject: "done" });
-    const expected = mailboxLib.list(js.sandbox.project, { to: null, unackedBy: null, kind: null, limit: 30 });
-    const jsResult = await js.plugin.callTool("mailbox_list");
-
-    const { sandbox, plugin } = await loadGo(t, { "mailbox list": { stdout: expected } });
-    const goResult = await plugin.callTool("mailbox_list");
+  // The content is what the 0.5 JS runtime rendered for the same two messages.
+  test("each message renders as its header line, refs and body", async (t) => {
+    const messages = [
+      { id: "m-1", at: "2026-10-22T14:18:30.415Z", from: "planner", to: "coder", kind: "brief", subject: "do it", body: "the brief", refs: ["plan.md"], thread: null, acked_by: [] },
+      { id: "m-2", at: "2026-10-22T14:18:30.415Z", from: "coder", to: "*", kind: "note", subject: "done", body: "", refs: [], thread: null, acked_by: [] },
+    ];
+    const { sandbox, plugin } = await loadGo(t, { "mailbox list": { stdout: messages } });
+    const r = await plugin.callTool("mailbox_list");
     assert.deepEqual(orchCalls(sandbox, "mailbox")[0].argv, ["mailbox", "list", "--root", sandbox.project, "--limit", "30", "--json"]);
-    assert.equal(goResult.content, jsResult.content);
-    assert.deepEqual(goResult.metadata, { count: 2 });
+    assert.equal(r.content, "2026-10-22T14:18:30.415Z [brief] planner -> coder: do it (id m-1)\n  refs: plan.md\n  the brief\n\n2026-10-22T14:18:30.415Z [note] coder -> *: done (id m-2)");
+    assert.deepEqual(r.metadata, { count: 2 });
   });
 
-  test("go: filters become flags", async (t) => {
+  test("filters become flags", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "mailbox list": { stdout: [] } });
     await plugin.callTool("mailbox_list", { to: "coder", unacked_by: "coder", kind: "brief", limit: 5 });
     assert.deepEqual(orchCalls(sandbox, "mailbox")[0].argv, ["mailbox", "list", "--root", sandbox.project, "--to", "coder", "--unacked-by", "coder", "--kind", "brief", "--limit", "5", "--json"]);
   });
 
-  // orch would read `--to --x` as a bare --to and list the whole mailbox; js filters on the literal value.
+  // orch would read `--to --x` as a bare --to and list the whole mailbox.
   for (const field of ["to", "unacked_by", "kind"]) {
-    test(`go: a ${field} filter beginning with "--" is refused before any spawn`, async (t) => {
+    test(`a ${field} filter beginning with "--" is refused before any spawn`, async (t) => {
       const { sandbox, plugin } = await loadGo(t, { "mailbox list": { stdout: [] } });
       const r = await plugin.toolResult("mailbox_list", { [field]: "--x" });
-      assert.equal(String(r.error), `OrchCommandError: ${field} may not begin with "--" in the go runtime`);
+      assert.equal(String(r.error), `OrchCommandError: ${field} may not begin with "--"`);
       assert.deepEqual(orchCalls(sandbox, "mailbox"), []);
     });
   }
 
-  test("go: an empty list is (mailbox empty)", async (t) => {
+  test("an empty list is (mailbox empty)", async (t) => {
     const { plugin } = await loadGo(t, { "mailbox list": { stdout: [] } });
     assert.deepEqual(await plugin.callTool("mailbox_list"), { content: "(mailbox empty)" });
   });
 });
 
 describe("manifest_create and manifest_verify", { skip }, () => {
-  test("js: writes the manifest file, then verify sees OK and MISMATCH", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
-    fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
-    const created = await plugin.callTool("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
-    const out = path.join(sandbox.project, ".orchestrator", "manifests", "t1.json");
-    const manifest = JSON.parse(fs.readFileSync(out, "utf8"));
-    assert.equal(created.content, `manifest .orchestrator/manifests/t1.json: 1 files, sha256 ${manifest.manifest_sha256}`);
-    assert.deepEqual(created.metadata, { path: out, manifest_sha256: manifest.manifest_sha256 });
-    assert.equal((await plugin.callTool("manifest_verify", { manifest: ".orchestrator/manifests/t1.json" })).content, "OK: all 1 files match");
-    fs.writeFileSync(path.join(sandbox.project, "a.txt"), "changed\n");
-    assert.equal((await plugin.callTool("manifest_verify", { manifest: ".orchestrator/manifests/t1.json" })).content, "MISMATCH: changed a.txt; missing -");
-  });
-
-  test("go: orch writes the manifest; the plugin reports it", async (t) => {
+  test("orch writes the manifest; the plugin reports it", async (t) => {
     const out = (sandbox) => path.join(sandbox.project, ".orchestrator", "manifests", "t1.json");
     const { sandbox, plugin } = await loadGo(t, { "manifest create": { stdout: { out: "ignored", file_count: 2, manifest_sha256: "abc123" } } });
     const r = await plugin.callTool("manifest_create", { task: "t1", author: "coder", paths: ["a.txt", "src"], baseline: "base.json" });
@@ -216,95 +161,61 @@ describe("manifest_create and manifest_verify", { skip }, () => {
     assert.equal(fs.existsSync(out(sandbox)), false);
   });
 
-  test("go: no paths surfaces orch's usage error (D-S10-1)", async (t) => {
+  test("no paths surfaces orch's usage error (D-S10-1)", async (t) => {
     const { plugin } = await loadGo(t, { "manifest create": { code: 2, stderr: "usage: orch manifest create --task T --author A --out file.json [--baseline b.json] [--root dir] <paths...>\n" } });
     const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: [] });
     assert.equal(r.status, "error");
     assert.match(r.error.message, /^orch manifest create exited 2: usage: /);
   });
 
-  test("go: a path beginning with \"--\" is refused before any spawn", async (t) => {
+  test("a path beginning with \"--\" is refused before any spawn", async (t) => {
     const { sandbox, plugin } = await loadGo(t);
     const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt", "--root"] });
-    assert.equal(r.error.message, 'paths may not begin with "--" in the go runtime');
+    assert.equal(r.error.message, 'paths may not begin with "--"');
     assert.deepEqual(orchCalls(sandbox, "manifest"), []);
   });
 
-  test("js: a symlink at the manifest path is replaced, never followed (R15)", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
+  test("an .orchestrator outside the project is refused before manifests/ is created (C2-F2)", async (t) => {
+    const { sandbox, plugin } = await loadGo(t);
     fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
-    const victim = path.join(sandbox.root, "victim.txt");
-    fs.writeFileSync(victim, "victim bytes\n");
-    const out = path.join(sandbox.project, ".orchestrator", "manifests", "t1.json");
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.symlinkSync(victim, out);
-    const created = await plugin.callTool("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
-    assert.equal(fs.readFileSync(victim, "utf8"), "victim bytes\n");
-    assert.equal(fs.lstatSync(out).isFile(), true);
-    assert.equal(JSON.parse(fs.readFileSync(out, "utf8")).manifest_sha256, created.metadata.manifest_sha256);
-    assert.deepEqual(fs.readdirSync(path.dirname(out)), ["t1.json"]);
+    const outside = path.join(sandbox.root, "outside");
+    fs.mkdirSync(outside);
+    const state = path.join(sandbox.project, ".orchestrator");
+    fs.rmSync(state, { recursive: true, force: true });
+    fs.symlinkSync(outside, state);
+    const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+    assert.equal(r.status, "error");
+    assert.equal(r.error.message, `manifest directory is outside the project: ${path.join(state, "manifests")}`);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.deepEqual(orchCalls(sandbox, "manifest"), []);
   });
 
-  test("js: a temp-name collision keeps the other writer's temp and still writes (C2-F1)", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
+  test("a manifests directory outside the project is refused (R15)", async (t) => {
+    const { sandbox, plugin } = await loadGo(t);
     fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
-    const out = path.join(sandbox.project, ".orchestrator", "manifests", "t1.json");
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(`${out}.tmp-7`, "another writer's temp\n");
-    stubRandomInt(t, [7, 8]);
-    const created = await plugin.callTool("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
-    assert.equal(fs.readFileSync(`${out}.tmp-7`, "utf8"), "another writer's temp\n");
-    assert.equal(JSON.parse(fs.readFileSync(out, "utf8")).manifest_sha256, created.metadata.manifest_sha256);
-    assert.deepEqual(fs.readdirSync(path.dirname(out)).sort(), ["t1.json", "t1.json.tmp-7"]);
+    const outside = path.join(sandbox.root, "outside");
+    fs.mkdirSync(outside);
+    const dir = path.join(sandbox.project, ".orchestrator", "manifests");
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    fs.symlinkSync(outside, dir);
+    const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+    assert.equal(r.status, "error");
+    assert.equal(r.error.message, `manifest directory is outside the project: ${dir}`);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.deepEqual(orchCalls(sandbox, "manifest"), []);
   });
 
-  for (const runtime of ["js", "go"]) {
-    test(`${runtime}: an .orchestrator outside the project is refused before manifests/ is created (C2-F2)`, async (t) => {
-      const { sandbox, plugin } = runtime === "js" ? await loadJs(t) : await loadGo(t);
+  // The harness skips opencode's schema check, so a non-string task reaches the plugin as-is.
+  for (const task of ["../x", "a/b", "a\\b", "..", ".", "", "a\0b", 42]) {
+    test(`task ${JSON.stringify(task)} is refused and nothing is written`, async (t) => {
+      const { sandbox, plugin } = await loadGo(t);
       fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
-      const outside = path.join(sandbox.root, "outside");
-      fs.mkdirSync(outside);
-      const state = path.join(sandbox.project, ".orchestrator");
-      fs.rmSync(state, { recursive: true, force: true });
-      fs.symlinkSync(outside, state);
-      const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
+      const r = await plugin.toolResult("manifest_create", { task, author: "coder", paths: ["a.txt"] });
       assert.equal(r.status, "error");
-      assert.equal(r.error.message, `manifest directory is outside the project: ${path.join(state, "manifests")}`);
-      assert.deepEqual(fs.readdirSync(outside), []);
+      assert.equal(r.error.message, `manifest task must be a single file name: ${JSON.stringify(task)}`);
       assert.deepEqual(orchCalls(sandbox, "manifest"), []);
+      assert.equal(fs.existsSync(path.join(sandbox.project, ".orchestrator")), false);
     });
-  }
-
-  for (const runtime of ["js", "go"]) {
-    test(`${runtime}: a manifests directory outside the project is refused (R15)`, async (t) => {
-      const { sandbox, plugin } = runtime === "js" ? await loadJs(t) : await loadGo(t);
-      fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
-      const outside = path.join(sandbox.root, "outside");
-      fs.mkdirSync(outside);
-      const dir = path.join(sandbox.project, ".orchestrator", "manifests");
-      fs.mkdirSync(path.dirname(dir), { recursive: true });
-      fs.symlinkSync(outside, dir);
-      const r = await plugin.toolResult("manifest_create", { task: "t1", author: "coder", paths: ["a.txt"] });
-      assert.equal(r.status, "error");
-      assert.equal(r.error.message, `manifest directory is outside the project: ${dir}`);
-      assert.deepEqual(fs.readdirSync(outside), []);
-      assert.deepEqual(orchCalls(sandbox, "manifest"), []);
-    });
-  }
-
-  for (const runtime of ["js", "go"]) {
-    // The harness skips opencode's schema check, so a non-string task reaches the runtime as-is.
-    for (const task of ["../x", "a/b", "a\\b", "..", ".", "", "a\0b", 42]) {
-      test(`${runtime}: task ${JSON.stringify(task)} is refused and nothing is written`, async (t) => {
-        const { sandbox, plugin } = runtime === "js" ? await loadJs(t) : await loadGo(t);
-        fs.writeFileSync(path.join(sandbox.project, "a.txt"), "a\n");
-        const r = await plugin.toolResult("manifest_create", { task, author: "coder", paths: ["a.txt"] });
-        assert.equal(r.status, "error");
-        assert.equal(r.error.message, `manifest task must be a single file name: ${JSON.stringify(task)}`);
-        assert.deepEqual(orchCalls(sandbox, "manifest"), []);
-        assert.equal(fs.existsSync(path.join(sandbox.project, ".orchestrator")), false);
-      });
-    }
   }
 
   // The fake orch answers by the tokens before the first flag, which include the manifest path.
@@ -314,8 +225,8 @@ describe("manifest_create and manifest_verify", { skip }, () => {
     ["MISMATCH on exit 1 with JSON", { code: 1, stdout: '{"ok":false,"checked":2,"mismatched":["a.txt"],"missing":["b.txt"]}\n' }, "MISMATCH: changed a.txt; missing b.txt"],
   ];
   for (const [name, answer, content] of verifyCases) {
-    test(`go: verify gives ${name}`, async (t) => {
-      const sandbox = createSandbox(t, { runtime: "go" });
+    test(`verify gives ${name}`, async (t) => {
+      const sandbox = createSandbox(t);
       const { plugin } = await loadGoInto(t, sandbox, { [verifyKey(sandbox, ".orchestrator/manifests/t1.json")]: answer });
       const r = await plugin.callTool("manifest_verify", { manifest: ".orchestrator/manifests/t1.json" });
       assert.deepEqual(orchCalls(sandbox, "manifest")[0].argv, ["manifest", "verify", path.join(sandbox.project, ".orchestrator", "manifests", "t1.json"), "--root", sandbox.project]);
@@ -324,8 +235,8 @@ describe("manifest_create and manifest_verify", { skip }, () => {
     });
   }
 
-  test("go: verify exit 1 without JSON is an OrchCommandError", async (t) => {
-    const sandbox = createSandbox(t, { runtime: "go" });
+  test("verify exit 1 without JSON is an OrchCommandError", async (t) => {
+    const sandbox = createSandbox(t);
     const { plugin } = await loadGoInto(t, sandbox, { [verifyKey(sandbox, "broken.json")]: { code: 1, stderr: "SyntaxError: Unexpected token\n" } });
     const r = await plugin.toolResult("manifest_verify", { manifest: "broken.json" });
     assert.equal(r.error.name, "OrchCommandError");
@@ -334,16 +245,7 @@ describe("manifest_create and manifest_verify", { skip }, () => {
 });
 
 describe("incident", { skip }, () => {
-  test("js: records into the sandbox incident log", async (t) => {
-    const { sandbox, plugin } = await loadJs(t);
-    const r = await plugin.callTool("incident", { kind: "note", summary: "a note" });
-    const log = path.join(sandbox.home, ".local", "state", "opencode", "orchestrator", "incidents.jsonl");
-    const entry = JSON.parse(fs.readFileSync(log, "utf8").trim());
-    assert.equal(r.content, `recorded incident ${entry.fp}`);
-    assert.deepEqual(entry.context, { agent: "conductor", session: "<session>" }); // ses_ ids are redacted
-  });
-
-  test("go: the whole incident goes to orch on stdin, none of its text in argv", async (t) => {
+  test("the whole incident goes to orch on stdin, none of its text in argv", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: '{"recorded":"fp123","at":"2026-10-19T00:00:00.000Z"}\n' } });
     const r = await plugin.callTool("incident", { kind: "misroute", summary: "wrong lane", detail: "--details--" });
     const [call] = orchCalls(sandbox, "incident");
@@ -352,7 +254,7 @@ describe("incident", { skip }, () => {
     assert.equal(r.content, "recorded incident fp123");
   });
 
-  test("go: execute.after records an orch_* error with a null project when there is no directory", async (t) => {
+  test("execute.after records an orch_* error with a null project when there is no directory", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: '{"recorded":"fp9"}\n' } });
     plugin.api.location = {};
     await plugin.executeAfter({ status: "error", tool: "orch_mailbox_post", error: new Error("boom"), input: { a: 1 }, agent: "build" });
@@ -361,7 +263,7 @@ describe("incident", { skip }, () => {
     assert.deepEqual(JSON.parse(call.stdin), { component: "plugin", kind: "bug", summary: "tool orch_mailbox_post errored: boom", detail: '{"a":1}', context: { agent: "build" }, project: null });
   });
 
-  test("go: flag-like text reaches orch intact, since none of it is argv", async (t) => {
+  test("flag-like text reaches orch intact, since none of it is argv", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: '{"recorded":"fp1"}\n' } });
     await plugin.callTool("incident", { kind: "--x", summary: "--y" });
     const [call] = orchCalls(sandbox, "incident");
@@ -370,25 +272,14 @@ describe("incident", { skip }, () => {
   });
 });
 
-describe("spawn tools: the go argv is the js script argv", { skip }, () => {
-  /** The spawned-script calls, with the sandbox root (and its realpath) replaced by <root>. */
-  function scriptCalls(sandbox) {
+describe("spawn tools: orch <subcommand> takes the argv the 0.5 scripts took", { skip }, () => {
+  /** The spawned-subcommand calls, with the sandbox root (and its realpath) replaced by <root>. */
+  function spawnedCalls(sandbox) {
     const roots = [fs.realpathSync(sandbox.root), sandbox.root];
     const normalize = (s) => roots.reduce((acc, r) => acc.replaceAll(r, "<root>"), s);
     return calls(sandbox)
-      .filter((c) => SPAWNED_SCRIPTS.includes(c.self) || (c.self === "path" && SPAWNED_SCRIPTS.includes(c.argv[0])))
-      .map((c) => ({ argv: (c.self === "path" ? c.argv : [c.self, ...c.argv]).map(normalize), cwd: normalize(c.cwd), stdin: normalize(c.stdin) }));
-  }
-
-  /** Run `drive` against a js and a go sandbox answering `answers`; return both call lists and results. */
-  async function inBothRuntimes(t, answers, drive) {
-    const js = await loadJs(t, answers);
-    const jsResult = await drive(js.plugin);
-    const jsCalls = scriptCalls(js.sandbox);
-    const go = await loadGo(t, answers);
-    const goResult = await drive(go.plugin);
-    assert.deepEqual(poisonHits(go.sandbox), []);
-    return { jsCalls, goCalls: scriptCalls(go.sandbox), jsResult, goResult };
+      .filter((c) => c.self === "path" && SPAWNED_SCRIPTS.includes(c.argv[0]))
+      .map((c) => ({ argv: c.argv.map(normalize), cwd: normalize(c.cwd), stdin: normalize(c.stdin) }));
   }
 
   const effortAnswers = (role, size = "medium") => {
@@ -396,39 +287,61 @@ describe("spawn tools: the go argv is the js script argv", { skip }, () => {
     return { [`effort --role ${role} --size ${size}`]: { stdout: `${effort}\n` } };
   };
   const bridgeOk = { stdout: '{"ok":true,"final_message":"done","session_id":"s-1","duration_ms":2000}\n' };
+  const preface = (role, rule) => `You are acting as the ${role} for an orchestrated project at <root>/project. Work only within this brief, report precisely, mark anything not done or not verified. ${rule}\n\n`;
+  const inProject = (argv, stdin = "") => ({ argv, cwd: "<root>/project", stdin });
 
+  // Each expected call list and result is what the 0.5 JS scripts were given and returned for the same input.
+  // The model ids pinned below (claude-opus-5-5, gpt-6.1-sol) come from the routing fixtures in
+  // tests/fixtures/routing, not from models.json: update them whenever the fixtures are regenerated.
   const cases = [
-    ["delegate claude with max_turns", { ...effortAnswers("coder"), "claude-exec": bridgeOk }, (p) => p.callTool("delegate", { role: "coder", prompt: "build it", harness: "claude", max_turns: 7, resume: "r-1", force: true })],
-    ["delegate codex read-only", { ...effortAnswers("reviewer"), "codex-exec": bridgeOk }, (p) => p.callTool("delegate", { role: "reviewer", prompt: "review it", harness: "codex" })],
-    ["worker_start", { "worker start": { stdout: "started\n" } }, (p) => p.callTool("worker_start", { brief: "b.md", harness: "codex", lane: "l1", model: "m", effort: "high", resume: "r-1", breadth: "broad" })],
-    ["worker_status with a lane", { "worker status": { stdout: "lane l1: running\n" } }, (p) => p.callTool("worker_status", { lane: "l1" })],
-    ["supervisor status", { "supervisor status": { stdout: "running\n" } }, (p) => p.callTool("supervisor", { action: "status" })],
-    ["supervisor ack", { "supervisor ack": { stdout: "acked\n" } }, (p) => p.callTool("supervisor", { action: "ack", event: "e-1" })],
-    ["retry on a conductor limit flips", { "flip decide": { stdout: '{"action":"flip","reason":"red"}\n' }, "flip run": { stdout: "flipped\n" } }, async (p) => {
-      const e = { error: { message: "usage_limit reached" }, agent: "conductor" };
-      await p.retry(e);
-      return e.decision;
-    }],
+    ["delegate claude with max_turns", { ...effortAnswers("coder"), "claude-exec": bridgeOk },
+      async (p) => (await p.callTool("delegate", { role: "coder", prompt: "build it", harness: "claude", max_turns: 7, resume: "r-1", force: true })).content,
+      [inProject(["claude-exec", "--cwd", "<root>/project", "--model", "claude-opus-5-5", "--effort", "medium", "--timeout-min", "90", "--quiet", "--resume", "r-1", "--force", "--permission-mode", "auto", "--max-turns", "7"], preface("CODER", "You may edit files in scope.") + "build it")],
+      "[claude claude-opus-5-5 effort=medium size=medium |ok | 2s | resume=s-1 | record=n/a]\n\ndone"],
+    ["delegate codex read-only", { ...effortAnswers("reviewer"), "codex-exec": bridgeOk },
+      async (p) => (await p.callTool("delegate", { role: "reviewer", prompt: "review it", harness: "codex" })).content,
+      [inProject(["codex-exec", "--cwd", "<root>/project", "--model", "gpt-6.1-sol", "--effort", "medium", "--timeout-min", "90", "--quiet", "--sandbox", "read-only"], preface("REVIEWER", "Do NOT modify files; produce your output as text (or write only to .orchestrator/ if the brief says so).") + "review it")],
+      "[codex gpt-6.1-sol effort=medium size=medium |ok | 2s | resume=s-1 | record=n/a]\n\ndone"],
+    ["worker_start", { "worker start": { stdout: "started\n" } },
+      async (p) => (await p.callTool("worker_start", { brief: "b.md", harness: "codex", lane: "l1", model: "m", effort: "high", resume: "r-1", breadth: "broad" })).content,
+      [inProject(["worker", "start", "--brief", "b.md", "--harness", "codex", "--cwd", "<root>/project", "--detach", "--lane", "l1", "--model", "m", "--effort", "high", "--resume", "r-1", "--breadth", "broad"])],
+      "started"],
+    ["worker_status with a lane", { "worker status": { stdout: "lane l1: running\n" } },
+      async (p) => (await p.callTool("worker_status", { lane: "l1" })).content,
+      [inProject(["worker", "status", "--cwd", "<root>/project", "--lane", "l1"])],
+      "lane l1: running"],
+    ["supervisor status", { "supervisor status": { stdout: "running\n" } },
+      async (p) => (await p.callTool("supervisor", { action: "status" })).content,
+      [inProject(["supervisor", "status", "--cwd", "<root>/project"])],
+      "running"],
+    ["supervisor ack", { "supervisor ack": { stdout: "acked\n" } },
+      async (p) => (await p.callTool("supervisor", { action: "ack", event: "e-1" })).content,
+      [inProject(["supervisor", "ack", "--cwd", "<root>/project", "--event", "e-1"])],
+      "acked"],
+    ["retry on a conductor limit runs flip decide, then flip run", { "flip decide": { stdout: '{"action":"flip","reason":"red"}\n' }, "flip run": { stdout: "flipped\n" } },
+      async (p) => {
+        const e = { error: { message: "usage_limit reached" }, agent: "conductor" };
+        await p.retry(e);
+        return e.decision;
+      },
+      [
+        inProject(["flip", "decide", "--active", "opencode", "--cwd", "<root>/project"]),
+        inProject(["flip", "run", "--to", "claude", "--from", "opencode", "--reason", "opencode conductor hit a usage limit: usage_limit reached", "--cwd", "<root>/project"]),
+      ],
+      { retry: false }],
   ];
-  for (const [name, answers, drive] of cases) {
+  for (const [name, answers, drive, expectedCalls, expectedResult] of cases) {
     test(name, async (t) => {
-      const { jsCalls, goCalls, jsResult, goResult } = await inBothRuntimes(t, answers, drive);
-      assert.ok(jsCalls.length > 0);
-      assert.deepEqual(goCalls, jsCalls);
-      assert.deepEqual(goResult?.content, jsResult?.content);
+      const { sandbox, plugin } = await loadGo(t, answers);
+      assert.deepEqual(await drive(plugin), expectedResult);
+      assert.deepEqual(spawnedCalls(sandbox), expectedCalls);
     });
   }
 
-  test("retry runs flip decide then flip run", async (t) => {
-    const { goCalls } = await inBothRuntimes(t, cases.at(-1)[1], cases.at(-1)[2]);
-    assert.deepEqual(goCalls.map((c) => c.argv.slice(0, 2)), [["flip", "decide"], ["flip", "run"]]);
-  });
-
-  test("delegate exit 75 is Refused in both runtimes", async (t) => {
-    const answers = { ...effortAnswers("coder"), "claude-exec": { code: 75, stdout: '{"note":"anthropic is red","resets_at":"18:00"}\n' } };
-    const { jsResult, goResult } = await inBothRuntimes(t, answers, (p) => p.callTool("delegate", { role: "coder", prompt: "x", harness: "claude" }));
-    assert.match(jsResult.content, /^Refused: anthropic is red\. Resets 18:00\./);
-    assert.equal(goResult.content, jsResult.content);
+  test("delegate exit 75 is Refused", async (t) => {
+    const { plugin } = await loadGo(t, { ...effortAnswers("coder"), "claude-exec": { code: 75, stdout: '{"note":"anthropic is red","resets_at":"18:00"}\n' } });
+    const r = await plugin.callTool("delegate", { role: "coder", prompt: "x", harness: "claude" });
+    assert.equal(r.content, "Refused: anthropic is red. Resets 18:00. Try another role/harness or force=true.");
   });
 });
 
@@ -484,7 +397,7 @@ describe("delegate: write access by role", { skip }, () => {
   });
 });
 
-test("go: a spawn failure is an OrchCommandError result, not a crash (D-S10-7)", { skip }, async (t) => {
+test("a spawn failure is an OrchCommandError result, not a crash (D-S10-7)", { skip }, async (t) => {
   const { sandbox, plugin } = await loadGo(t);
   fs.rmSync(path.join(sandbox.fakebin, "orch"));
   const r = await plugin.toolResult("mailbox_post", { from: "coder", subject: "hi" });
@@ -493,8 +406,8 @@ test("go: a spawn failure is an OrchCommandError result, not a crash (D-S10-7)",
   assert.match(r.error.message, /^orch mailbox post exited -1: .*ENOENT/);
 });
 
-test("go: every tool and hook runs with all JS libs and scripts poisoned", { skip }, async (t) => {
-  const sandbox = createSandbox(t, { runtime: "go" });
+test("every tool and hook runs on orch alone", { skip }, async (t) => {
+  const sandbox = createSandbox(t);
   const { plugin } = await loadGoInto(t, sandbox, {
     ...Object.fromEntries(["planner", "coder", "reviewer"].map((role) => [`effort --role ${role} --size medium`, { stdout: "high\n" }])),
     "budget gate --vendor openai": { stdout: { allowed: true } },
@@ -530,43 +443,40 @@ test("go: every tool and hook runs with all JS libs and scripts poisoned", { ski
   await plugin.executeAfter({ status: "error", tool: "orch_delegate", error: new Error("boom"), input: {}, agent: "conductor" });
   await plugin.retry({ error: { message: "usage_limit" }, agent: "conductor" });
   assert.ok(Object.keys(plugin.syncedAgents()).length > 0);
-  assert.deepEqual(poisonHits(sandbox), []);
   assert.deepEqual(calls(sandbox).filter((c) => c.self !== "path" && c.self !== "codex"), []);
 });
 
 describe("runtime configuration details", { skip }, () => {
   test("the runtime value is trimmed and case-insensitive", async (t) => {
-    const sandbox = createSandbox(t, { runtime: "go" });
-    const doc = await routingDocument(usageFixture("green"));
-    setAnswers(sandbox, { "routing --json": { stdout: doc } });
+    const sandbox = createSandbox(t);
+    setAnswers(sandbox, { "routing --json": { stdout: routingFixture("green") } });
     const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: " GO " } });
     assert.equal((await plugin.callTool("usage_status")).metadata.runtime, "go");
   });
 
   test("option binary expands a leading ~ to the home directory", async (t) => {
-    const sandbox = createSandbox(t, { runtime: "go", fakeOrchOnPath: false });
+    const sandbox = createSandbox(t, { fakeOrchOnPath: false });
     writeFakeOrch(path.join(sandbox.home, "tools", "orch"), "home-tools");
-    const doc = await routingDocument(usageFixture("green"));
-    setAnswers(sandbox, { "routing --json": { stdout: doc } });
+    setAnswers(sandbox, { "routing --json": { stdout: routingFixture("green") } });
     const plugin = await loadPlugin(t, sandbox, { options: { runtime: "go", binary: "~/tools/orch" } });
     assert.equal((await plugin.callTool("usage_status")).metadata.orch, path.join(sandbox.home, "tools", "orch"));
   });
 
   test("a misconfigured runtime is logged once by model sync instead of swallowed", async (t) => {
     const warn = t.mock.method(console, "warn", () => {});
-    const sandbox = createSandbox(t, { runtime: "js" });
-    await loadPlugin(t, sandbox, { options: { runtime: "rust" } });
-    assert.deepEqual(warn.mock.calls.map((c) => c.arguments[0]), ['[orchestrator] model sync skipped: unknown orchestrator runtime "rust" (expected "js" or "go")']);
+    const sandbox = createSandbox(t);
+    await loadPlugin(t, sandbox, { options: { runtime: "rust" }, brokenRuntime: true });
+    assert.deepEqual(warn.mock.calls.map((c) => c.arguments[0]), ['[orchestrator] model sync skipped: unknown orchestrator runtime "rust" (expected "go")']);
   });
 
   test("a misconfigured runtime makes the usage-limit flip warn instead of failing silently", async (t) => {
     const warn = t.mock.method(console, "warn", () => {});
-    const sandbox = createSandbox(t, { runtime: "js" });
-    const plugin = await loadPlugin(t, sandbox, { options: { runtime: "rust", syncModelsFromRegistry: false } });
+    const sandbox = createSandbox(t);
+    const plugin = await loadPlugin(t, sandbox, { options: { runtime: "rust", syncModelsFromRegistry: false }, brokenRuntime: true });
     const e = { error: { message: "usage_limit reached" }, agent: "conductor" };
     await plugin.retry(e);
     assert.deepEqual(e.decision, { retry: false });
-    assert.deepEqual(warn.mock.calls.map((c) => c.arguments[0]), ['[orchestrator] usage-limit flip skipped: unknown orchestrator runtime "rust" (expected "js" or "go")']);
+    assert.deepEqual(warn.mock.calls.map((c) => c.arguments[0]), ['[orchestrator] usage-limit flip skipped: unknown orchestrator runtime "rust" (expected "go")']);
   });
 });
 
@@ -582,11 +492,7 @@ describe("process runner", { skip }, () => {
 
   // Every fake ends by itself (see writeFakeOrch), so a test leaves no process to clean up.
   async function loadGoWith(t, answers, env) {
-    const sandbox = createSandbox(t, { runtime: "go" });
-    const doc = await routingDocument(usageFixture("green"));
-    setAnswers(sandbox, { "routing --json": { stdout: doc }, "routing --json --refresh": { stdout: doc }, "routing --cached --json": { stdout: doc }, ...answers });
-    const plugin = await loadPlugin(t, sandbox, { env: { ORCH_RUNTIME: "go", ...env } });
-    return { sandbox, plugin };
+    return loadGoInto(t, createSandbox(t), answers, env);
   }
 
   // A read-only probe: a pid reused since the log was written can only make it answer wrongly,
@@ -673,7 +579,7 @@ describe("process runner", { skip }, () => {
   });
 
   test("a hung fake ends by itself at the hang ceiling (R16)", bounded, async (t) => {
-    const sandbox = createSandbox(t, { runtime: "go" });
+    const sandbox = createSandbox(t);
     setAnswers(sandbox, { "mailbox list": { hang: true } });
     const env = { ...process.env, PLUGIN_TEST_LOG: sandbox.log, PLUGIN_TEST_ANSWERS: sandbox.answersFile, PLUGIN_TEST_HANG_CEILING_MS: "300" };
     const child = spawn(path.join(sandbox.fakebin, "orch"), ["mailbox", "list"], { env, stdio: ["ignore", "ignore", "pipe"] });
@@ -688,7 +594,8 @@ describe("process runner", { skip }, () => {
     assert.equal(stderr, "fake orch: hang ceiling reached\n");
   });
 
-  // The deadlines are scaled down 20 times; the messages carry the configured values.
+  // Start the deadline clock only after warm-up and wait for fixture readiness before
+  // advancing it. Scaled wall-time deadlines could kill warm-up before the fake even logged.
   const deadlines = [
     ["orch routing", "routing --json --refresh", (p) => p.callTool("usage_status", { refresh: true }), 90],
     ["orch budget gate", "budget gate --vendor openai", (p) => p.callTool("codex_review", {}), 90],
@@ -696,9 +603,13 @@ describe("process runner", { skip }, () => {
   ];
   for (const [name, key, drive, seconds] of deadlines) {
     test(`${name} times out after ${seconds}s`, async (t) => {
-      const { sandbox, plugin } = await loadGoWith(t, { [key]: { hang: true } }, { ORCH_PLUGIN_ORCH_TIMEOUT_SCALE: "0.05" });
+      const { sandbox, plugin } = await loadGoWith(t, { [key]: { hang: true } });
+      const clock = usePluginClock(t, plugin);
       const subcommand = key.split(" --")[0];
-      await assert.rejects(drive(plugin), { name: "OrchCommandError", message: `orch ${subcommand} timed out after ${seconds}s` });
+      const result = assert.rejects(drive(plugin), { name: "OrchCommandError", message: `orch ${subcommand} timed out after ${seconds}s` });
+      assert.ok(await waitFor(() => calls(sandbox).some((c) => c.argv.join(" ").startsWith(key))));
+      clock.tick(seconds * 1000);
+      await result;
       const hung = calls(sandbox).find((c) => c.argv.join(" ").startsWith(key));
       assert.equal(isAlive(hung.pid), false);
     });
@@ -713,40 +624,36 @@ describe("conductor session heartbeat", { skip }, () => {
   const beats = (sandbox) => orchCalls(sandbox, "session").map((c) => `${c.argv[5]} ${c.argv[7]}`);
   const interval = (ms) => ({ ORCH_PLUGIN_BEAT_INTERVAL_MS: String(ms) });
   const idle = (sessionID) => ({ type: "session.idle", data: { sessionID } });
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const OK = { "session beat": { stdout: "" } };
-
-  test("js: a conductor turn beats working, a repeat inside the interval writes nothing, session.idle beats waiting", async (t) => {
-    const { sandbox, plugin } = await loadJs(t, {}, interval(300));
-    makeProject(sandbox);
-    await plugin.context("conductor", "ses_1");
-    assert.ok(await waitFor(() => readBeat(sandbox) !== null));
-    const first = readBeat(sandbox);
-    assert.deepEqual({ ...first, updated_at: 0 }, { door: "opencode", session_id: "ses_1", state: "working", now: null, slice: null, progress: null, updated_at: 0 });
-    await plugin.context("conductor", "ses_1");
-    await sleep(500);
-    assert.equal(readBeat(sandbox).updated_at, first.updated_at);
-    plugin.emit(idle("ses_1"));
-    assert.ok(await waitFor(() => readBeat(sandbox)?.state === "waiting"));
-  });
+  const deliverIdle = async (plugin, sessionID) => {
+    plugin.emit(idle(sessionID));
+    await new Promise(setImmediate);
+  };
+  const assertBeatsRemain = async (sandbox, expected, message) => {
+    // The plugin clock stays frozen throughout this real I/O observation window.
+    // Without it, a wrongly spawned child could log only after a negative assertion.
+    assert.equal(await waitFor(() => beats(sandbox).length > expected.length, 2000), false, message);
+    assert.deepEqual(beats(sandbox), expected, message);
+  };
 
   // R1: opencode 2.0.32's event.subscribe returns an async iterable; a callback is never called.
-  test("go: idle arrives through the event.subscribe async iterable, which unloading ends", async (t) => {
+  test("idle arrives through the event.subscribe async iterable, which unloading ends", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     assert.equal(plugin.subscriptions.length, 1);
     assert.ok(plugin.subscriptions[0].options.signal instanceof AbortSignal);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
+    await deliverIdle(plugin, "ses_1");
+    clock.tick(50);
     assert.ok(await waitFor(() => beats(sandbox).length === 2));
     assert.deepEqual(orchCalls(sandbox, "session").map((c) => c.argv), [beatKey(sandbox, "ses_1", "working").split(" "), beatKey(sandbox, "ses_1", "waiting").split(" ")]);
     await plugin.dispose();
     assert.ok(await waitFor(() => plugin.subscriptions[0].ended), "the pump stops iterating once the plugin unloads");
-    assert.deepEqual(poisonHits(sandbox), []);
   });
 
-  test("go: a failing event subscription is recorded as an incident", async (t) => {
+  test("a failing event subscription is recorded as an incident", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "incident record": { stdout: { recorded: "fp" } } });
     plugin.subscriptions[0].fail(new Error("stream lost"));
     assert.ok(await waitFor(() => orchCalls(sandbox, "incident").length === 1));
@@ -754,55 +661,64 @@ describe("conductor session heartbeat", { skip }, () => {
   });
 
   // R2: state changes used to bypass the limiter, one spawn per transition.
-  test("go: rapid working/waiting transitions write once per interval, the latest state last", async (t) => {
+  test("rapid working/waiting transitions write once per interval, the latest state last", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(1000));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
+    await deliverIdle(plugin, "ses_1");
     await plugin.context("conductor", "ses_1");
-    plugin.emit(idle("ses_1"));
-    await sleep(400);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"]);
-    assert.ok(await waitFor(() => beats(sandbox).length === 2, 3000));
-    await sleep(1200);
-    assert.deepEqual(beats(sandbox), ["ses_1 working", "ses_1 waiting"]);
+    await deliverIdle(plugin, "ses_1");
+    clock.tick(999);
+    await assertBeatsRemain(sandbox, ["ses_1 working"]);
+    clock.tick(1);
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
+    clock.tick(1200);
+    await assertBeatsRemain(sandbox, ["ses_1 working", "ses_1 waiting"]);
   });
 
   // R3: a slow working write used to race the idle write and could land last.
-  test("go: a slow write finishes before the next beat starts", async (t) => {
+  test("a slow write finishes before the next beat starts", async (t) => {
     const { sandbox, plugin } = await loadGo(t, {}, interval(50));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
-    setAnswers(sandbox, { ...sandbox.answers, [beatKey(sandbox, "ses_1", "working")]: { stdoutHex: Array(6).fill("20") }, [beatKey(sandbox, "ses_1", "waiting")]: { stdout: "" } });
-    await plugin.context("conductor", "ses_1");
-    assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
-    await sleep(300);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"], "waiting waits for the working write in flight");
-    assert.ok(await waitFor(() => beats(sandbox).length === 2, 3000));
+    const release = path.join(sandbox.root, "release-working");
+    setAnswers(sandbox, { ...sandbox.answers, [beatKey(sandbox, "ses_1", "working")]: { waitForFile: release, stdout: "" }, [beatKey(sandbox, "ses_1", "waiting")]: { stdout: "" } });
+    try {
+      await plugin.context("conductor", "ses_1");
+      assert.ok(await waitFor(() => beats(sandbox).length === 1));
+      await deliverIdle(plugin, "ses_1");
+      clock.tick(1000);
+      await assertBeatsRemain(sandbox, ["ses_1 working"], "waiting waits for the working write in flight");
+    } finally {
+      fs.writeFileSync(release, "");
+    }
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
     assert.deepEqual(beats(sandbox), ["ses_1 working", "ses_1 waiting"]);
   });
 
   // R4: an idle from a session that no longer owns the door used to overwrite the active one.
-  test("go: an idle from a superseded conductor session is ignored", async (t) => {
+  test("an idle from a superseded conductor session is ignored", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_a");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
     await plugin.context("conductor", "ses_b");
     assert.ok(await waitFor(() => beats(sandbox).length === 2));
-    plugin.emit(idle("ses_a"));
-    await sleep(300);
-    assert.deepEqual(beats(sandbox), ["ses_a working", "ses_b working"]);
-    plugin.emit(idle("ses_b"));
+    await deliverIdle(plugin, "ses_a");
+    clock.tick(300);
+    await assertBeatsRemain(sandbox, ["ses_a working", "ses_b working"]);
+    await deliverIdle(plugin, "ses_b");
     assert.ok(await waitFor(() => beats(sandbox).length === 3));
     assert.equal(beats(sandbox)[2], "ses_b waiting");
   });
 
   // R5: unloading used to return while a beat was still being written, so the unloaded instance's
   // late write could land over the replacement instance's heartbeat.
-  test("go: unloading waits for the beat in flight, so a reloaded plugin's beat is the last word", async (t) => {
-    const sandbox = createSandbox(t, { runtime: "go" });
+  test("unloading waits for the beat in flight, so a reloaded plugin's beat is the last word", async (t) => {
+    const sandbox = createSandbox(t);
     writeDelayedSessionWriter(sandbox, { ses_old: 600, ses_new: 0 });
     const old = await loadGoInto(t, sandbox, {}, interval(50));
     makeProject(sandbox);
@@ -813,24 +729,57 @@ describe("conductor session heartbeat", { skip }, () => {
     const replacement = await loadGoInto(t, sandbox, {}, interval(50));
     await replacement.plugin.context("conductor", "ses_new");
     assert.ok(await waitFor(() => readBeat(sandbox)?.session_id === "ses_new"));
-    await sleep(800);
+    await replacement.plugin.dispose();
     assert.equal(readBeat(sandbox).session_id, "ses_new");
   });
 
-  test("go: a trailing beat pending at unload never starts", async (t) => {
-    const { sandbox, plugin } = await loadGo(t, OK, interval(300));
+  test("a trailing beat pending at unload never starts", async (t) => {
+    const beatInterval = 300;
+    const { sandbox, plugin } = await loadGo(t, OK, interval(beatInterval));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
     await plugin.context("conductor", "ses_1");
     assert.ok(await waitFor(() => beats(sandbox).length === 1));
-    plugin.emit(idle("ses_1"));
-    await sleep(50);
-    await plugin.dispose();
-    await plugin.context("conductor", "ses_1");
-    await sleep(600);
-    assert.deepEqual(beats(sandbox), ["ses_1 working"]);
+    const firstBeat = orchCalls(sandbox, "session")[0];
+    assert.ok(await waitFor(() => {
+      try { process.kill(firstBeat.pid, 0); return false; } catch (error) {
+        if (error.code === "ESRCH") return true;
+        throw error;
+      }
+    }));
+    await new Promise(setImmediate);
+
+    // Process exit alone need not mean its promise's finally has run. Observe the real
+    // scheduling boundary too: unload must cancel an armed timer, not just an in-flight write.
+    const scheduleTimeout = globalThis.setTimeout;
+    let trailingScheduled = false;
+    let trailingCallbackRan = false;
+    const timeoutSpy = t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+      if (delay !== beatInterval) return scheduleTimeout(callback, delay, ...args);
+      trailingScheduled = true;
+      return scheduleTimeout((...callbackArgs) => {
+        trailingCallbackRan = true;
+        callback(...callbackArgs);
+      }, delay, ...args);
+    });
+    try {
+      await deliverIdle(plugin, "ses_1");
+      assert.ok(await waitFor(() => trailingScheduled), "idle armed a trailing timer");
+      clock.tick(beatInterval - 1);
+      assert.equal(trailingCallbackRan, false, "the trailing timer is still pending at unload");
+      await plugin.dispose();
+      clock.tick(beatInterval * 2);
+      // Observe cancellation before a new context request can overwrite the pending idle state.
+      await assertBeatsRemain(sandbox, ["ses_1 working"], "no post-unload trailing beat");
+      await plugin.context("conductor", "ses_1");
+      clock.tick(beatInterval);
+      await assertBeatsRemain(sandbox, ["ses_1 working"]);
+    } finally {
+      timeoutSpy.mock.restore();
+    }
   });
 
-  test("go: unloading during a failing beat settles after its incident is recorded", async (t) => {
+  test("unloading during a failing beat settles after its incident is recorded", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "session beat": { stdoutHex: Array(4).fill("20"), code: 1 }, "incident record": { stdout: { recorded: "fp" } } }, interval(50));
     makeProject(sandbox);
     await plugin.context("conductor", "ses_1");
@@ -839,17 +788,18 @@ describe("conductor session heartbeat", { skip }, () => {
     assert.equal(orchCalls(sandbox, "incident").length, 1, "the incident is recorded before dispose returns");
   });
 
-  test("go: no beat for another agent, an unseen idle session, or a directory without .orchestrator/", async (t) => {
+  test("no beat for another agent, an unseen idle session, or a directory without .orchestrator/", async (t) => {
     const { sandbox, plugin } = await loadGo(t, OK, interval(50));
+    const clock = usePluginClock(t, plugin);
     await plugin.context("conductor", "ses_1");
     makeProject(sandbox);
     await plugin.context("build", "ses_2");
-    plugin.emit(idle("ses_3"));
-    await sleep(300);
-    assert.deepEqual(orchCalls(sandbox, "session"), []);
+    await deliverIdle(plugin, "ses_3");
+    clock.tick(300);
+    await assertBeatsRemain(sandbox, []);
   });
 
-  test("go: a failed beat is recorded as an incident and the turn still gets its budget block", async (t) => {
+  test("a failed beat is recorded as an incident and the turn still gets its budget block", async (t) => {
     const { sandbox, plugin } = await loadGo(t, { "session beat": { code: 1, stderr: "session beat: could not write .orchestrator/sessions/opencode.json: EACCES\n" }, "incident record": { stdout: { recorded: "fp" } } });
     makeProject(sandbox);
     const system = await plugin.context("conductor", "ses_1");
@@ -860,22 +810,20 @@ describe("conductor session heartbeat", { skip }, () => {
     assert.deepEqual(incident.context, { session: "ses_1" });
   });
 
-  test("js: a failed beat is retried by the next request after the interval, not before", async (t) => {
-    const { sandbox, plugin } = await loadJs(t, {}, interval(400));
+  test("an inside-interval request retries a failed beat at the interval boundary", async (t) => {
+    const failing = { "session beat": { code: 1, stderr: "session beat: EACCES\n" }, "incident record": { stdout: { recorded: "fp" } } };
+    const { sandbox, plugin } = await loadGo(t, failing, interval(400));
+    const clock = usePluginClock(t, plugin);
     makeProject(sandbox);
-    const sessions = path.join(sandbox.project, ".orchestrator", "sessions");
-    fs.writeFileSync(sessions, "not a directory");
     await plugin.context("conductor", "ses_1");
-    const incidents = path.join(sandbox.home, ".local", "state", "opencode", "orchestrator", "incidents.jsonl");
-    assert.ok(await waitFor(() => fs.existsSync(incidents)));
-    assert.match(JSON.parse(fs.readFileSync(incidents, "utf8").trim()).summary, /^session beat failed: could not create \.orchestrator\/sessions/);
-    fs.rmSync(sessions);
+    assert.ok(await waitFor(() => orchCalls(sandbox, "incident").length === 1));
+    setAnswers(sandbox, { ...sandbox.answers, ...OK });
+    clock.tick(399);
     await plugin.context("conductor", "ses_1");
-    await sleep(150);
-    assert.equal(readBeat(sandbox), null, "no immediate retry inside the interval");
-    await sleep(400);
-    await plugin.context("conductor", "ses_1");
-    assert.ok(await waitFor(() => readBeat(sandbox)?.state === "working"));
+    await assertBeatsRemain(sandbox, ["ses_1 working"], "no immediate retry inside the interval");
+    // No third request: the second request's trailing timer is the retry trigger (F1).
+    clock.tick(1);
+    assert.ok(await waitFor(() => beats(sandbox).length === 2));
   });
 });
 

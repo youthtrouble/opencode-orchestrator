@@ -1,18 +1,18 @@
-# orchestrator: scripts, state and policy reference
+# orchestrator: commands, state and policy reference
 
-This is the technical reference for the JS runtime: the scripts in `bin/`, the pure logic in
-`lib/`, the registry `models.json`, and the files they read and write. For what the project is and
-how to use it day to day, start with the [root README](../README.md). The Go port of these scripts
+This is the technical reference for `orch`, the registry `models.json`, and the files they read
+and write. The JS runtime is removed in 0.6.0. For what the project is and
+how to use it day to day, start with the [root README](../README.md). The Go runtime
 is documented in [go/README.md](../go/README.md); the Claude Code front door in
 [claude/README.md](../claude/README.md).
 
 Paths below assume the default install, where this directory is
-`~/.config/opencode/orchestrator`. Shell examples use `ORCH=~/.config/opencode/orchestrator/bin`.
+`~/.config/opencode/orchestrator`. Commands require `orch` on `PATH`, including in agent environments.
 
 ## Contents
 
 - [Installed layout](#installed-layout)
-- [Scripts](#scripts)
+- [Commands](#commands)
 - [Commands, skills and plugin tools](#commands-skills-and-plugin-tools)
 - [Roles and routing](#roles-and-routing)
 - [Budgets and the usage cache](#budgets-and-the-usage-cache)
@@ -40,14 +40,12 @@ Paths below assume the default install, where this directory is
                                /delegate-claude /delegate-codex /audit-orchestrator /away
   skills/*/SKILL.md            deep-planning, clean-code, cross-review, handoff-protocol,
                                delegation, orchestrator-audit
-  plugins/orchestrator.ts      orch_* tools, budget injection, model sync (js or go runtime)
+   plugins/orchestrator.ts      orch_* tools, budget injection, model sync (orch only)
   orchestrator/
     models.json                SOURCE OF TRUTH: vendors, tiers, roles, thresholds, effort,
                                conductor, runtime, autonomy
-    bin/*.mjs                  CLI scripts (below)
-    lib/*.mjs                  pure logic: routing, budget, flip, supervise, mailbox, manifest,
-                               incident, usage readers, keep-awake
-    tests/                     fast unit tests (the doctor runs these)
+     bin/setup.sh               legacy auth/setup helper
+     README.md, CHANGELOG.md     reference and implementation history
   install.sh, uninstall.sh     links back to the checkout's installer
   service.json                 opencode runtime file; stays outside the checkout
 ```
@@ -55,28 +53,28 @@ Paths below assume the default install, where this directory is
 In the checkout, root `tests/` holds the installer matrix and the plugin tests, and `go/` holds the
 Go runtime.
 
-## Scripts
+## Commands
 
-Every script is dependency-free Node and has a Go twin, `orch <script>` (see
-[go/README.md](../go/README.md)). The first lines of each script are its usage text.
+Every command is an `orch <cmd>` subcommand (see [go/README.md](../go/README.md)).
+The plugin uses the same building blocks as `orch <cmd>`.
 
-| Script | Usage | What it does |
+| Command | Usage | What it does |
 |---|---|---|
-| `kickoff.mjs` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, pick the door, preflight (policy with `--unattended`, clear any human gate and any queued relaunch or pause, start the supervisor, add `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir)), then launch the conductor interactively or as the headless `conductor` lane. `--dry-run` prints the door and prompt and changes nothing in the project (no preflight, no launch; it still refreshes the shared usage cache). Both vendors red: runs the preflight, saves the prompt as `.orchestrator/briefs/conductor-kickoff.md`, records a pause naming it (the supervisor's relaunch at the first reset starts from it) and exits 75, or exits 1 when the supervisor did not start or the pause was not recorded. A missing brief names the directory searched. |
-| `watch.mjs` | `[--cwd DIR] [--follow] [--interval 20]` | One-screen dashboard: budgets, routing, supervisor, flip state, lanes, open questions with the reply command, human gate, last messages, incidents of the last 24 h, next action from `STATE.md`. |
-| `usage.mjs` | `[--refresh] [--json] [--brief]` | Live Claude + Codex usage -> posture -> role routing. |
-| `mailbox.mjs` | `post \| list \| ack \| reply \| inbox` | Durable project mailbox (see [below](#mailbox-and-manifests)). |
-| `policy.mjs` | `show \| set key=value... \| unattended [--cwd DIR]` | Effective autonomy policy: registry `autonomy` merged with `.orchestrator/policy.json`. |
-| `flip.mjs` | `decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] [--brief FILE] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | Move the conductor between doors, record budget pauses and human gates. |
-| `worker.mjs` | `start --brief F --harness claude\|codex\|opencode [--lane L] [--model M] [--effort E] ... [--detach] \| status [--lane L] \| stop --lane L` | One bounded brief on one harness as a tracked, lockable, resumable lane. |
-| `supervisor.mjs` | `start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | Per-project daemon: watches lanes, wakes the coordinator, relaunches conductors. |
-| `claude-exec.mjs` | `[--model M] [--effort E] [--permission-mode P] ... [--timeout-min 60] [--force] [--prompt T \| --prompt-file F \| stdin]` | Bounded task on Claude Code (`claude -p`, stream-json) -> JSON result + session id. |
-| `codex-exec.mjs` | `[--model M] [--effort E] [--sandbox S] ... [--resume THREAD] [--timeout-min 60] [--force]` | Bounded task on Codex (`codex exec --json`) -> JSON result + thread id. |
-| `opencode-exec.mjs` | `[--agent conductor] [--cwd DIR] [--resume SESSION] [--timeout-min 120]` | Bounded task on `opencode run`; used for the headless opencode conductor. |
-| `manifest.mjs` | `create --task T --author A [--baseline F] --out F <paths...> \| verify F \| diff A B` | sha256 fingerprints of released files; `verify` exits 1 on any mismatch. |
-| `session.mjs` | `beat --door opencode\|claude [--state S] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | Conductor session heartbeat in `.orchestrator/sessions/<door>.json`; `--hook` is the Claude conductor's frontmatter hook mode (see [Project state files](#project-state-files)). |
-| `incident.mjs` | `record ... \| list \| report \| share --out F` | Local, redacted orchestrator defect log. |
-| `doctor.mjs` | (no arguments) | Health check: binaries, logins, usage feeds, routing, config, plugin, agents, unit tests, recent plugin errors, `orch binary`. |
+| `orch kickoff` | `--brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | Refresh usage, preflight, choose a door and launch. Dry-run changes nothing in the project but refreshes usage. Both red: save the prompt, pause and exit 75; exit 1 if the supervisor or pause fails. |
+| `orch watch` | `[--cwd DIR] [--follow] [--interval 20]` | Dashboard: budgets, routing, supervisor, flip, lanes, questions, messages, incidents and next action. |
+| `orch usage` | `[--refresh] [--json] [--brief]` | Live Claude + Codex usage, posture and routing. |
+| `orch mailbox` | `post \| list \| ack \| reply \| inbox` | Durable project mailbox (see [below](#mailbox-and-manifests)). |
+| `orch policy` | `show \| set key=value... \| unattended [--cwd DIR]` | Registry autonomy merged with project overrides. |
+| `orch flip` | `decide --active D \| run --to D \| pause \| gate [--clear [--no-relaunch]] \| status [--cwd DIR]` | Move between doors, record budget pauses and human gates; full flags in the Go command reference. |
+| `orch worker` | `start --brief F --harness claude\|codex\|opencode [--lane L] ... [--detach] \| status [--lane L] \| stop --lane L` | Tracked, lockable, resumable worker lane. |
+| `orch supervisor` | `start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | Watch lanes, wake the coordinator and relaunch conductors. |
+| `orch claude-exec` | `[--model M] [--effort E] ... [--prompt T \| --prompt-file F \| stdin]` | Bounded Claude Code task, JSON result and session id. |
+| `orch codex-exec` | `[--model M] [--effort E] [--sandbox S] ... [--resume THREAD]` | Bounded Codex task, JSON result and thread id. |
+| `orch opencode-exec` | `[--agent conductor] [--cwd DIR] [--resume SESSION] [--timeout-min 120]` | Bounded `opencode run` task; headless opencode conductor. |
+| `orch manifest` | `create --task T --author A [--baseline F] --out F <paths...> \| verify F \| diff A B` | sha256 fingerprints; verify exits 1 on mismatch. |
+| `orch session` | `beat --door opencode\|claude [--state S] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | Conductor heartbeat; hook mode is described under project state. |
+| `orch incident` | `record ... \| list \| report \| share --out F` | Local, redacted defect log. |
+| `orch doctor` | (no arguments) | Health check, including the running binary and `orch on PATH`. |
 | `setup.sh` | | Legacy auth/setup helper; not the reversible installer. |
 
 Bridge exit codes: 0 success, 1 failure, 2 usage error, 75 refused because the vendor's budget is
@@ -166,7 +164,7 @@ when changing model ids.
 
 ## Budgets and the usage cache
 
-`usage.mjs` reads the Claude OAuth usage endpoint (session %, weekly %, Fable weekly %) and the
+`orch usage` reads the Claude OAuth usage endpoint (session %, weekly %, Fable weekly %) and the
 Codex app-server (`account/rateLimits/read`: 5-hour %, weekly %).
 
 - Thresholds (`thresholds`): **amber at 60% used, red at 85%**, judged on the raw percentage. An
@@ -174,6 +172,8 @@ Codex app-server (`account/rateLimits/read`: 5-hour %, weekly %).
   as resetting soon. A rate-limit lock makes the window red.
 - The **five-hour window** (Claude session, Codex 5-hour) drives routing. A weekly cap blocks its
   vendor only when red.
+- Weekly-only Codex plans show `5h n/a`; the weekly window alone drives routing and flip at every
+  level (amber steers, red blocks), headroom and reset times. Unreadable data stays unknown.
 - A frontier tier (Fable) is used only while that vendor's frontier posture is green; Claude's
   frontier posture also counts the Fable weekly window.
 - **Balancing:** when both vendors can serve the coder, verifier, researcher, explorer or utility
@@ -192,19 +192,19 @@ promotional resets of the usage window, not money; nothing here redeems them. Th
 ChatGPT-login credits: Platform API credits are billed separately and only to Codex run with an API
 key, which this setup does not use.
 
-- **Shown, not steering:** the Codex line of `usage.mjs` (and so of `watch.mjs` and the injected
+- **Shown, not steering:** the Codex line of `orch usage` (and so of `orch watch` and the injected
   `<orchestrator_budget>`) ends with the fact when Codex reported credits or banked resets, for
   example `...; weekly 100% [red] resets ...; credits 215.68 left; plan limit reached; 3 banked
-  resets (window resets, not money).` `usage.mjs --json` adds `openai_credits` (`balance`,
+  resets (window resets, not money).` `orch usage --json` adds `openai_credits` (`balance`,
   `has_credits`, `unlimited`, `plan_limit_reached`, `banked_resets`, or `null`) and
-  `openai_credits_policy` (`mode`, `floor`). `doctor.mjs` adds an `OpenAI credits` row with the
+  `openai_credits_policy` (`mode`, `floor`). `orch doctor` adds an `OpenAI credits` row with the
   policy, and the Work Trains page an `openai credits ...` chip. The window's colour never changes.
 - **Spent only when the owner says so:** policy `openai_credits` is `off` by default: a red Codex
   window means no OpenAI work, credits or not. With `openai_credits=on`, an OpenAI role whose window
   is red while Codex refuses ordinary usage may still route to OpenAI when credits are unlimited or
   the balance is above `openai_credits_floor` (default 0). Such a role is marked `credit_funded`,
   always runs through `codex-exec` (never natively in opencode), is never chosen to balance headroom,
-  and never uses a frontier tier. `codex-exec` (JS and `orch`) is the only bridge that draws credits.
+  and never uses a frontier tier. `orch codex-exec` is the only bridge that draws credits.
   Before it draws, its gate re-reads usage and decides again on that fresh reading, so the floor is
   checked against the balance actually left; if the re-read fails, it refuses. Its run record gains
   `credits: {before, after}` (the balance at the gate and from a fresh reading after the run;
@@ -219,7 +219,7 @@ key, which this setup does not use.
 The usage cache is `~/.local/state/opencode/orchestrator/usage.json` (not retargeted by
 `XDG_STATE_HOME`). A reading is reused for 5 minutes, or until a routing window it holds resets. If
 a refresh fails, the last good reading is kept, marked `last_good_at` and `read_error`, and retried
-every 5 minutes rather than on every read. Both runtimes share this cache.
+every 5 minutes rather than on every read. The cache remains compatible with pre-0.6.0 state.
 
 ## The conductor loop
 
@@ -249,21 +249,21 @@ every 5 minutes rather than on every read. Both runtimes share this cache.
 | `openai_credits` | `off` | `on` lets OpenAI roles whose plan limit is reached run on ChatGPT credits through `codex-exec` (see [OpenAI credits](#openai-credits)) |
 | `openai_credits_floor` | (unset: 0) | With `openai_credits=on`, stop drawing credits once the balance is at or below this number |
 
-`policy.mjs set` refuses `key=never` except for `force_push`, an `openai_credits` other than `off`
-or `on`, and an `openai_credits_floor` that is not a number, 0 or more. `policy.mjs unattended` (also
+`orch policy set` refuses `key=never` except for `force_push`, an `openai_credits` other than `off`
+or `on`, and an `openai_credits_floor` that is not a number, 0 or more. `orch policy unattended` (also
 `kickoff --unattended`) sets `push_to_main=auto` and `product_questions=continue_with_assumption`.
 
 A headless conductor that reaches a human gate with nothing independent left posts the question and
-runs `flip.mjs gate --active <door> --reason "..." --question <id>`. The supervisor will not
-relaunch while the gate is set, and `flip.mjs decide` answers `gate`: a headless conductor updates
-`STATE.md` and stops, while an interactive conductor reports the gate and keeps working with the human. `kickoff` and `flip.mjs run` clear it and start a conductor.
-`flip.mjs gate --clear`, and `mailbox.mjs reply` to the gate's question (its full id or a prefix of
+runs `orch flip gate --active <door> --reason "..." --question <id>`. The supervisor will not
+relaunch while the gate is set, and `orch flip decide` answers `gate`: a headless conductor updates
+`STATE.md` and stops, while an interactive conductor reports the gate and keeps working with the human. `orch kickoff` and `orch flip run` clear it and start a conductor.
+`orch flip gate --clear`, and `orch mailbox reply` to the gate's question (its full id or a prefix of
 it, as recorded by `--question`), clear it and record `pending_launch` for the gated door, which the
 supervisor launches once the conductor lane is idle and unlocked (within a minute); `gate --clear`
 then prints `{"awaiting_human":false,"relaunch":"<door>"}`. Clearing when no gate is set queues
 nothing, and `gate --clear --no-relaunch` (what kickoff runs) removes the marker and any queued launch or
 pause. `pause`
-is for budgets only. To pause a running project by hand, set a gate and then `worker.mjs stop --lane
+is for budgets only. To pause a running project by hand, set a gate and then `orch worker stop --lane
 conductor`; a stopped lane without a gate is relaunched by the supervisor.
 
 Prompts and permission rules are not a security sandbox. `opencode.jsonc` separately sets the
@@ -279,9 +279,9 @@ One conductor drives a project at a time. `models.json` -> `conductor.home` name
 | its own vendor is red | flips to the other door (also triggered when its model dies on a usage-limit error) |
 | it is the away door and home is stably green (green for `green_grace_minutes`) | hands back home |
 | it is the away door, home still red | keeps going |
-| both red | writes the remaining briefs, runs `flip.mjs pause`, stops; the supervisor relaunches at the first reset, home door first if it comes back first |
+| both red | writes the remaining briefs, runs `orch flip pause`, stops; the supervisor relaunches at the first reset, home door first if it comes back first |
 
-`flip.mjs run --to <door>` adds `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir), writes
+`orch flip run --to <door>` adds `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir), writes
 `.orchestrator/briefs/conductor-continue.md` (unless the record it replaces is a pause that names a
 brief, as a both-red kickoff's does, or a pending launch that kept one, and that file exists: then it
 launches that brief), replaces `flip.json` (clearing `paused` and
@@ -293,7 +293,7 @@ happen mid-brief, so a hand-back is delayed by at most one brief.
 
 ## Workers and the supervisor
 
-**Workers.** `worker.mjs start` runs one brief on one harness. State lives in
+**Workers.** `orch worker start` runs one brief on one harness. State lives in
 `.orchestrator/workers/<lane>.json`, the lock in `<lane>.lock`, the log in
 `.orchestrator/logs/<lane>-<run>.log`. `--detach` launches a kept-awake runner. The bridge timeout
 for a worker is 120 minutes unless `--timeout-min` says otherwise. A failed run posts `blocked`
@@ -306,7 +306,7 @@ accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `bread
 Workers are instructed to publish a report and a mailbox release; check the actual state and
 messages rather than assuming every successful run did.
 
-**Supervisor.** One per project (`supervisor.lock`), started by `kickoff` or `supervisor.mjs
+**Supervisor.** One per project (`supervisor.lock`), started by `orch kickoff` or `orch supervisor
 start`. It ticks every 5 seconds: observes every lane, posts events to the mailbox (kind `wake`)
 first and then tries the wake channels, re-dispatches budget-deferred lanes after the reset, and
 once a minute evaluates the conductor:
@@ -314,10 +314,10 @@ once a minute evaluates the conductor:
 - `awaiting_human` in `flip.json`: do nothing.
 - `pending_launch`: launch the target once the lane is idle and unlocked.
 - an idle conductor lane that ended `failed`, `deferred` or `interrupted`, or `finished` without a
-  handoff, or a paused project: relaunch through `flip.mjs run`, resuming the previous session when
+  handoff, or a paused project: relaunch through `orch flip run`, resuming the previous session when
   the door is the same; a flip or hand-back decision picks the other door.
 
-Stopping the supervisor (`supervisor.mjs stop`) does not stop workers. `ack --event ID` records
+Stopping the supervisor (`orch supervisor stop`) does not stop workers. `ack --event ID` records
 receipt of a reminder, not acceptance.
 
 **Wake channels** are configured in the project's `.orchestrator/supervisor.json`:
@@ -344,12 +344,12 @@ The mailbox is append-only JSONL under `.orchestrator/mailbox/`. Kinds in use in
 `question`, `release`, `blocked`, `deferred`, `handoff` and `wake`.
 
 ```sh
-node $ORCH/mailbox.mjs post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
+orch mailbox post --from A [--to B] [--kind release] --subject S [--body text|-] [--ref path]... [--thread id]
                            [--recommended TEXT] [--blocking true|false] [--ask decision|action]   # question only
-node $ORCH/mailbox.mjs list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
-node $ORCH/mailbox.mjs ack --id ID --by B [--note text]
-node $ORCH/mailbox.mjs inbox                       # open questions for you, each with its reply command
-node $ORCH/mailbox.mjs reply <id-or-prefix> "answer"  # threaded note from "human" + ack
+orch mailbox list [--to B] [--unacked-by B] [--kind k] [--since iso] [--limit n] [--json]
+orch mailbox ack --id ID --by B [--note text]
+orch mailbox inbox                       # open questions for you, each with its reply command
+orch mailbox reply <id-or-prefix> "answer"  # threaded note from "human" + ack
 ```
 
 `--root DIR` or `ORCHESTRATOR_PROJECT` selects the project; the default is the current directory.
@@ -361,8 +361,8 @@ A question must carry `--recommended "<the answer you recommend>"`; `--blocking`
 bare means `true`) says whether it blocks the poster. The message line gains `"recommended"` and
 `"blocking"` after `"thread"`; other kinds take neither option. A question without a non-empty
 `--recommended`, a `--blocking` other than `true` or `false`, or either option on another kind is
-refused with a usage line (exit 2, nothing written). `lib/mailbox.mjs` `post()` throws
-`QuestionNeedsRecommendationError` for a question without one.
+refused with a usage line (exit 2, nothing written). The Go mailbox API returns
+`ErrQuestionNeedsRecommendation` for a question without one.
 
 `--ask` says what a question asks of the human: `decision` (the default, also when the line has no
 `ask`) or `action`, for steps the human must do. An action question takes no `--recommended` (the
@@ -378,7 +378,8 @@ Kirsh" pass. The lint is a guard rail, not a guarantee ("Yes, done" passes); wha
 question offers no Accept and that the conductor verifies a reply. `post()` treats an empty `ask` as a
 decision, as `orch` does. Each of these, a `--ask`
 other than `decision` or `action`, and `--ask` on another kind is a usage line (exit 2, nothing
-written); `post()` throws `RecommendationRefusedError` for the first two. A reply to an action
+written); the Go mailbox API returns `ErrActionTakesNoRecommendation` or
+`ErrRecommendationClaimsDone` for the first two. A reply to an action
 question is a claim the conductor verifies before relying on it. `inbox` ends the header of a blocking
 question with ` (blocking)` and prints `recommended: <first 200 UTF-16 units, newlines as spaces>` under its body; older
 questions without these keys print as before.
@@ -386,9 +387,9 @@ questions without these keys print as before.
 Manifests are sha256 fingerprints of the files a slice released:
 
 ```sh
-node $ORCH/manifest.mjs create --task T --author A --out .orchestrator/manifests/T.json <paths...>
-node $ORCH/manifest.mjs verify .orchestrator/manifests/T.json   # exit 1 on any mismatch
-node $ORCH/manifest.mjs diff before.json after.json
+orch manifest create --task T --author A --out .orchestrator/manifests/T.json <paths...>
+orch manifest verify .orchestrator/manifests/T.json   # exit 1 on any mismatch
+orch manifest diff before.json after.json
 ```
 
 A manifest identifies released bytes; it does not prove a review happened or that the bytes are
@@ -415,17 +416,16 @@ repository's `info/exclude`):
 | `supervisor-state.json`, `supervisor-acks.json`, `supervisor.lock`, `supervisor.stop` | Supervisor state |
 | `sessions/<door>.json` | Conductor heartbeat: `door`, `session_id`, `state` (`working`/`waiting`/`done`/`ended`), `now`, `slice`, `progress` (`{done, total}`), `updated_at` |
 
-The Claude conductor writes its heartbeat itself: `claude/agents/conductor.md` runs `session.mjs beat
+The Claude conductor writes its heartbeat itself: `claude/agents/conductor.md` runs `orch session beat
 --door claude --hook` from frontmatter hooks on `UserPromptSubmit` (working), `Stop` (waiting) and
 `SessionEnd` (ended). Hook mode reads only `session_id`, `cwd` and `hook_event_name` from the hook's
 JSON, never stores the prompt, writes nothing where the hook's `cwd` has no `.orchestrator/`, and
-never exits 2 (which Claude Code reads as "block"). Both runtimes write `sessions/` 0700 (tightening
+never exits 2 (which Claude Code reads as "block"). `orch` writes `sessions/` 0700 (tightening
 an existing one this user owns) and its files 0600 through a private temp file and a rename.
 Conductors set `--now`, `--slice` and `--progress` themselves; `--now`, `--slice` or `--session`
 given as `""` is cleared, while `--progress` must always be `N/M`.
 
-The JS scripts create these with the default modes less your umask, except the worker's lane
-lock and detached log, which are 0600. `orch` writes run records, lane state, `flip.json`, the
+`orch` writes run records, lane state, `flip.json`, the
 generated briefs and the supervisor's state and acks owner-only (0600) through a private temp file
 and a rename, never through a planted symlink; the supervisor lock and log are created 0600 (an
 existing log keeps its mode), and `runs/`, `workers/` and `logs/` are 0700. Details:
@@ -440,8 +440,8 @@ Per-user state lives in `~/.local/state/opencode/orchestrator/` (`usage.json`,
 Orchestrator defects (tool/contract mismatches, misroutes, budget surprises, bridge crashes, flips,
 and corrections the human gives about the workflow) are appended, redacted, to
 `~/.local/state/opencode/orchestrator/incidents.jsonl` by the bridges, worker, supervisor, plugin
-and the `orch_incident` tool. `incident.mjs report` groups them by fingerprint; `/retro` and the
-audit skill turn repeats into fixes. Nothing is uploaded: `incident.mjs share --out file.json`
+and the `orch_incident` tool. `orch incident report` groups them by fingerprint; `/retro` and the
+audit skill turn repeats into fixes. Nothing is uploaded: `orch incident share --out file.json`
 writes a sanitized bundle you can attach to an issue by hand.
 
 Detached workers and the supervisor are wrapped in `caffeinate -i -s` on macOS
@@ -451,8 +451,8 @@ with the process. Closing a laptop lid still sleeps the machine unless it runs i
 
 ## Install, update, uninstall and recovery
 
-**Requirements.** macOS or Linux, Bash 3.2+, Node 22+, Git, opencode v2, Claude Code and Codex on
-`PATH`, each logged in. Config and installer state on the same filesystem (atomic renames). The
+**Requirements.** macOS or Linux, Bash 3.2+, Node 22+ (for `install.sh`, `uninstall.sh` and the
+tests only; the runtime is `orch`), Git, opencode v2, Claude Code and Codex on `PATH`, each logged in. Config and installer state on the same filesystem (atomic renames). The
 runtime expects `~/.config/opencode`; a nondefault `XDG_CONFIG_HOME` is rejected. Optional: Go
 1.25+ to build `orch` locally. Release checks used macOS, Node v26.5.1, opencode v2.0.32, Claude
 Code 2.1.287 and codex-cli 0.162.1; Linux and Node 22 are supported assumptions, not exercised
@@ -466,11 +466,18 @@ managed entries instead (excluding history, dependencies, logs and runtime state
 symlinks inside them). Any existing target is refused without `--force`. Force does not merge: it
 moves the old target, with its custom config, runtime files and `node_modules`, into private backup
 storage. Stop opencode sessions, the background service, supervisors and workers first. The
-installer then runs `opencode reload` and the installed doctor; a reload or doctor failure exits
-nonzero and keeps the target, receipt and backup for recovery. `--no-reload` skips both (for
-hermetic tests and scripted installs) and says so; the receipt still becomes active although
-neither reload nor doctor ran, so run `opencode reload` and the doctor yourself afterwards.
-The `orch` binary step is described in [go/README.md](../go/README.md#install). A release download
+installer then runs `opencode reload` and `orch doctor` (the `orch` it placed, or the existing one
+with `--skip-binary`); a reload or doctor failure exits nonzero and keeps the target, receipt and
+backup for recovery. `--no-reload` skips both (for hermetic tests and scripted installs) and says
+so; the receipt still becomes active although neither reload nor doctor ran, so run
+`opencode reload` and `orch doctor` yourself afterwards.
+The `orch` binary step is described in [go/README.md](../go/README.md#install).
+`--skip-binary` places no binary and uses an existing `orch`: `ORCH_BIN` when set (it must be an
+executable file; nothing else is tried), else `~/.local/bin/orch`, else the first `orch` on `PATH`.
+It must answer `orch version`, or the install is refused before anything changes. The receipt
+records no binary, so uninstall leaves that `orch` in place. The installer prints
+`orch: <path> (existing; not managed by this install)`, plus a note when its version differs from
+the checkout's `go/internal/version/VERSION`. A release download
 gives up after 20 s without a connection, 60 s below 1 KiB/s or 15 min in total, and fails with
 `Download failed` and the usual recoverable state. The 15-minute cap holds even while bytes flow,
 so a healthy link slower than about 20 KB/s can hit it; build `orch` locally with Go instead, or
@@ -480,18 +487,17 @@ Installer state lives in `$XDG_STATE_HOME/opencode-orchestrator` (default
 `~/.local/state/opencode-orchestrator`), private (0700, receipts 0600); state inside the checkout or
 config is rejected. There is one active receipt at a time.
 
-**Update** (symlink install): pull in the checkout, run both test suites, rebuild `orch` beside the
-installed one and swap it in, reload, check health:
+**Update** (symlink install): `git pull` alone does not change what runs, because the plugin and
+every command go through the `orch` binary. Pull in the checkout, rebuild `orch`
+beside the installed one and swap it in, reload, check health:
 
 ```sh
 git pull
-node --test orchestrator/tests/*.test.mjs
-node --test tests/*.test.mjs
 (cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
 mv ~/.local/bin/orch.new ~/.local/bin/orch
 orch version
 opencode reload
-node ~/.config/opencode/orchestrator/bin/doctor.mjs
+orch doctor
 ```
 
 The `mv` replaces the binary in one step, so nothing runs a half-written `orch`; `orch version` should
@@ -500,8 +506,18 @@ running Work Trains LaunchAgent keeps the old binary until it restarts, and a Wo
 deploys the Worker before the rebuild; both are in the root README's
 [Updating](../README.md#updating).
 
+Contributor verification (including the Node test suite) is in
+[CONTRIBUTING.md](../CONTRIBUTING.md), not required for an upgrade. Node remains required by
+the installer and uninstaller, not by `orch`.
+
 Copy installs do not follow Git: uninstall, update the checkout, reinstall with `--copy` (and
 `--force` if the restored previous config occupies the target).
+
+**Upgrading from 0.5.0.** 0.6.0 deletes the JS runtime: the Node scripts in `orchestrator/bin`
+(only `setup.sh` stays), the libraries and their unit tests. After `git pull` every `node` command
+that ran one of those scripts is gone: use `orch <name>`. Rebuild `orch` with the Update lines before
+restarting the service. Remove `ORCH_RUNTIME=js` and any `runtime: "js"` option, then run
+`opencode service restart`. A 0.5.0 receipt still uninstalls.
 
 **Upgrading from 0.4.x.** A 0.4.x receipt has no `orch`, and a reinstall is not migrated. Either
 `./uninstall.sh` then `./install.sh`, so the receipt records the binary, or build `orch` by hand into
@@ -536,14 +552,15 @@ reconciling it. Do not delete an opaque backup because a command failed.
 ## Doctor, audit and troubleshooting
 
 ```sh
-node $ORCH/doctor.mjs
-node $ORCH/usage.mjs --refresh
+orch doctor
+orch usage --refresh
 ```
 
-The doctor checks binaries, logins and usage feeds, routing, config/plugin/agents, the fast unit
-tests and recent plugin errors. Its `orch binary` row runs `orch version` on `ORCH_BIN`, else
-`~/.local/bin/orch`, else the first `orch` on `PATH`, and only warns when none is found. Expect
-`OK` rows, including `OK unit tests — pass N`. `WARN` can mean unclear login or recent plugin
+The doctor checks binaries, logins and usage feeds, routing, config/plugin/agents, the Go unit
+tests and recent plugin errors. Its `orch binary` row reports its own executable and version. Its
+`orch on PATH` row warns when no `orch` is on `PATH` (agent commands `orch ...` would fail) or when
+the one on `PATH` is not the running binary. Expect `OK` rows, including
+`OK unit tests — go test ./... passed`. `WARN` can mean unclear login or recent plugin
 errors; any `FAIL` exits nonzero. An all-OK doctor does not test a delegated model turn, install
 reversal or a long unattended run.
 
@@ -555,7 +572,8 @@ reversal or a long unattended run.
 | Routing paused | `/usage` and reset times; both vendors may be constrained |
 | Plugin/agents missing | Managed links, `opencode plugin list`, `opencode debug agents`, then `opencode reload` |
 | Installer refusal | Keep the receipt/backup, reconcile, follow [recovery](#install-update-uninstall-and-recovery) |
-| Doctor unit-test row fails | `node --test orchestrator/tests/*.test.mjs` in the checkout (the doctor has a 20 s limit) |
+| Doctor unit-test row fails | `(cd go && go test ./...)` in the checkout (the doctor has a 120 s limit) |
+| `orch on PATH` warns | Add the directory of the `orch` you run (default `~/.local/bin`) to `PATH`, or remove the other `orch` it names |
 | Codex bridge argument error | See [limitations](#tests-verification-and-limitations) |
 | `not an orchestrator project: <dir> has no .orchestrator/ directory` | A read or stop command (`mailbox list\|ack\|reply\|inbox`, `watch`, `flip status`, `flip gate --clear`, `worker status\|stop`, `supervisor status\|stop\|ack`) ran outside the project: `cd` there or pass `--cwd` (`--root` for the mailbox). Exit 2, nothing written |
 
@@ -578,26 +596,24 @@ with managed links, do Git work in the checkout.
   promise that all traffic goes only to Anthropic and OpenAI.
 - Run records, logs, mailbox, reports and backups can contain private content. Ignoring files in
   Git is not access control. Never commit credentials, runtime state or recovery backups.
-- With the Go runtime, run records, worker and supervisor state and logs are owner-only (see
+- Run records, worker and supervisor state and logs are owner-only (see
   [Project state files](#project-state-files)); a failed worker's recorded errors and `blocked`
-  message have token-shaped text replaced with `<token>` (PE-24); and in go mode the plugin passes
-  incidents to `orch` on stdin, not in process arguments (PE-25). The JS scripts leave those
-  files at your umask and keep the errors verbatim
+  message have token-shaped text replaced with `<token>` (PE-24); the plugin passes
+  incidents to `orch` on stdin, not in process arguments (PE-25)
   ([go/README.md](../go/README.md#crash-output-and-parity-exceptions)).
 
 ## Tests, verification and limitations
 
 ```sh
-node --test orchestrator/tests/*.test.mjs   # fast unit suite (the doctor runs it)
 node --test tests/*.test.mjs                # installer matrix + plugin tests, temp HOME, stubbed CLIs
 ```
 
 The Go checks are in [CONTRIBUTING.md](../CONTRIBUTING.md) and [go/README.md](../go/README.md#checks).
-`tests/plugin-orch-parity.test.mjs` builds `orch` into a temp dir (or uses `ORCH_TEST_BIN`) and
-skips without either; under a temp `HOME`, point `GOCACHE` at a shared cache.
+The parity harness extracts the pre-S12 JS at commit `9e3a456` (`go/parity/js-ref`) from git;
+the last JS release, `v0.5.0`, is not the oracle. Under a temp `HOME`, point `GOCACHE` at a shared cache.
 
 - **Verified:** the unit suite (routing, flip, supervision, mailbox, incident, usage cache), the
-  installer and plugin suites in both runtimes against stubs, the Go build/vet/gofmt/tests and the
+  installer and plugin suites against stubs, the Go build/vet/gofmt/tests and the
   JS-vs-Go parity harness in CI on macOS and Linux. Installer tests never touch a real config or
   authenticate a model.
 - **Codex flags:** for codex-cli 0.162.1, `codex-exec` requests the default `workspace-write`

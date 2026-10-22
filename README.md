@@ -9,6 +9,8 @@ windows so work keeps moving when one of them runs low.
 Current release: [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0)
 (2026-10-19). MIT licensed.
 
+This checkout targets **0.6.0 (unreleased)**: `orch` is the only runtime; the JS runtime is removed.
+
 ## Why it exists
 
 Two subscriptions give you two families of strong models and two separate usage budgets. Used by
@@ -48,8 +50,9 @@ model, and stalling whenever one window hits its cap. This project turns that in
   slices continue) or a same-vendor review is used and labelled as such.
 - **Budgets are advisory.** Usage comes from each vendor's own feeds; when a reading is unavailable
   the bridges proceed rather than block.
-- **The Go runtime is opt-in until 0.6.0**, and per-project plugin options do not reach the plugin
-  yet: switch runtimes with the `ORCH_RUNTIME` environment variable (see [Go runtime](#go-runtime)).
+- **Agent commands need `orch` on PATH**, including in the opencode service and headless Claude
+  workers. The doctor's `orch on PATH` row warns when it is missing or resolves another binary.
+  Per-project plugin options may not reach the plugin; use `ORCH_BIN` for a custom binary.
 - **It is not a sandbox.** Models run tools and shell commands with the permissions you grant, and
   by default push verified slices to `main`.
 
@@ -145,12 +148,14 @@ your `PATH`). Run these from inside your project.
 | Pause the background conductor | `orch flip gate --reason "paused"` then `orch worker stop --lane conductor` |
 | Supervisor | `orch supervisor status` / `start` / `stop` |
 | Recent orchestrator defects | `orch incident report` |
-| Health check | `orch doctor` |
+| Health check (including `orch` on agents' PATH) | `orch doctor` |
 | Work Trains sync status (if set up) | `orch remote status` |
 
-Without `orch`, every command except `orch remote` also exists as
-`node ~/.config/opencode/orchestrator/bin/<name>.mjs`. `orch remote` is Go-only and has no script
-([go/README.md](go/README.md#orch-remote-go-only)).
+Every orchestrator command runs through `orch`; there is no JS fallback. Plugin tools use the
+same building blocks as `orch <cmd>`.
+
+In the checkout, `go/` holds the runtime and tests; `orchestrator/` holds `models.json`,
+`bin/setup.sh` and reference/history docs, not executable JS.
 
 ## How it works
 
@@ -181,6 +186,9 @@ routing; the vendor-wide weekly cap blocks only when red. Codex weekly-only plan
 in usage and doctor; their weekly window alone steers routing and flip at every level (amber steers,
 red blocks). Fable is used only while Claude's frontier posture is green.
 
+On weekly-only Codex plans (such as `prolite`), unreadable usage remains unknown, not `n/a`.
+Headroom and reset times use that driving window.
+
 **Two front doors.** `opencode` runs the OpenAI-native conductor and reaches Claude through
 `claude -p`. `claude --agent conductor` runs the Anthropic-native conductor and reaches OpenAI
 through Codex. Only one drives a project at a time. At each brief boundary the conductor checks the
@@ -198,7 +206,8 @@ power and an external display.
 
 ### 1. Install once
 
-Prerequisites: macOS or Linux, Bash 3.2+, Node 22+, Git, opencode v2, Claude Code, Codex, and
+Prerequisites: macOS or Linux, Bash 3.2+, Node 22+ (installer, uninstaller and tests only), Git,
+opencode v2, Claude Code, Codex, and
 optionally Go 1.25+ (to build `orch` locally; without Go the installer downloads it).
 
 ```sh
@@ -212,7 +221,8 @@ opencode auth login openai --method chatgpt-token-sharing
 orch doctor            # expect OK rows; WARN means look closer, FAIL exits nonzero
 ```
 
-If the shell cannot find `orch`, add `~/.local/bin` to your `PATH`. Keep the checkout where it is:
+If the shell cannot find `orch`, add `~/.local/bin` to your `PATH`, including the service and
+headless workers' environments (or your custom `ORCH_BIN_DIR`). Keep the checkout where it is:
 `~/.config/opencode` links back to it. `./install.sh --help` lists `--copy`, `--force`,
 `--skip-binary` and `--no-reload` (install without the final `opencode reload` and doctor, for
 scripted installs); `./uninstall.sh` restores your previous config. Details, updates and recovery
@@ -304,50 +314,34 @@ gate and keeps working with you.
 | `sessions/` | One heartbeat per conductor door (`orch session show`): what it is doing and when it last moved. Claude conductors write it through hooks, opencode conductors through the plugin |
 
 `.orchestrator/` is private: kickoff keeps it out of Git through the repository's `info/exclude`.
-With the Go runtime, run records, lane and supervisor state, `flip.json`, generated briefs and new
-logs are also owner-only on disk (the JS scripts use your umask's default modes). Your budgets cache and
+Run records, lane and supervisor state, `flip.json`, generated briefs and new
+logs are also owner-only on disk. Your budgets cache and
 the incident log live in `~/.local/state/opencode/orchestrator/`.
-
-### 5. Switch to the Go runtime (optional)
-
-The opencode plugin uses the JS scripts by default. To run every tool and hook through `orch`
-instead, set `ORCH_RUNTIME` for the opencode service and restart it:
-
-```sh
-opencode service set env ORCH_RUNTIME go
-opencode service restart
-# undo:
-opencode service unset env ORCH_RUNTIME
-opencode service restart
-```
-
-The variable must be in the environment of the opencode process that loads the plugin.
-`orch_usage_status` reports which runtime answered. Both runtimes share the same state, so you can
-switch at any time.
 
 ## Go runtime
 
-`orch` is one static Go binary that replaces every `orchestrator/bin/*.mjs` script with byte-for-byte
-parity, checked in CI by a parity harness, apart from the exceptions listed in
+`orch` is the runtime: one Go binary with command parity against the pre-S12 JS at commit
+`9e3a456` (pinned in `go/parity/js-ref`), checked in CI apart from the exceptions listed in
 [go/README.md](go/README.md#crash-output-and-parity-exceptions) (among them owner-only state files,
 bounded child output and process groups). `./install.sh` builds it (or downloads the release
-asset and checks its sha256) into `~/.local/bin`; `--skip-binary` opts out. Without a checkout:
+asset and checks its sha256) into `~/.local/bin`; `--skip-binary` requires an existing usable
+`orch`. Without a checkout, the last published release is still 0.5.0 (not this checkout):
 
 ```sh
 go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
 ```
 
 That puts `orch` in `$(go env GOBIN)` or `~/go/bin`; put it on `PATH` or point the plugin at it with
-`ORCH_BIN`. The JS runtime stays the default until 0.6.0, when it is planned to be removed.
+`ORCH_BIN`. To use 0.6.0 before it is released, build from this checkout (see [Updating](#updating)).
 
 ### Plugin runtime
 
-The plugin's runtime is `js` (default) or `go`, chosen by `ORCH_RUNTIME` as shown in
-[step 5](#5-switch-to-the-go-runtime-optional). The plugin also accepts `runtime` and `binary`
-options, but object-form options in a project `opencode.jsonc` did not reach the plugin in live
-testing (probably an upstream opencode issue), so use `ORCH_RUNTIME` and `ORCH_BIN`. In go mode a
-missing binary fails loudly; it never falls back to JS. Binary resolution, failure policy and the
-accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
+The plugin runs every tool and hook through `orch`; `go` is the default and only runtime.
+Remove `ORCH_RUNTIME=js` or a `runtime: "js"` option: both fail with a migration error.
+Binary resolution is the `binary` option, `ORCH_BIN`, `~/.local/bin/orch`, then `PATH`; an explicit
+bad binary fails loudly, with no fallback. Object-form project options did not reach the plugin
+in live testing (probably upstream), so use `ORCH_BIN`. Details and accepted port deviations:
+[go/README.md](go/README.md#plugin-runtime).
 
 ## Keeping it healthy
 
@@ -365,13 +359,11 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 
 ## Updating
 
-`git pull` updates the symlinked JS, but `orch` is a binary built from the checkout and stays as it was until
+`git pull` updates the symlinked prompts and plugin, but `orch` is a binary built from the checkout and stays as it was until
 you rebuild it. Do not rerun `install.sh` for this: it refuses when `orch` already exists. In the checkout:
 
 ```sh
 git pull
-node --test orchestrator/tests/*.test.mjs
-node --test tests/*.test.mjs
 (cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
 mv ~/.local/bin/orch.new ~/.local/bin/orch
 orch version
@@ -382,6 +374,16 @@ orch doctor
 The build writes a new file beside the installed `orch` and `mv` swaps it in at once, so nothing ever runs a
 half-written binary. Use your `ORCH_BIN_DIR` in place of `~/.local/bin` if you installed elsewhere. `orch version`
 should print the checkout's `go/internal/version/VERSION` and the commit you pulled.
+
+Contributor verification, including `node --test tests/*.test.mjs`, is documented in
+[CONTRIBUTING.md](CONTRIBUTING.md); it is not an upgrade prerequisite. The runtime needs no Node;
+`install.sh` and `uninstall.sh` still require it.
+
+**Upgrading from 0.5.0:** rebuild before restarting the service: old binaries still print deleted
+JS commands. Unset `ORCH_RUNTIME=js` (for the service, `opencode service unset env ORCH_RUNTIME`),
+remove any `runtime: "js"` option, then `opencode service restart`. Replace old commands in your
+project's `STATE.md`, briefs and scripts with `orch <cmd>`; the next flip rewrites its continue brief.
+**From 0.4.x:** run `./uninstall.sh`, then `./install.sh` to record the binary in the receipt.
 
 If Work Trains is set up, restart its LaunchAgent so `orch remote serve` runs the new binary (the running one goes on
 running the old binary until it exits):
@@ -537,7 +539,7 @@ The sync loop logs to `~/.local/state/opencode/orchestrator/remote/remote.log`.
 
 | Document | Covers |
 |---|---|
-| [orchestrator/README.md](orchestrator/README.md) | Scripts and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
+| [orchestrator/README.md](orchestrator/README.md) | Commands and flags, plugin tools, routing and budgets, flips, supervisor, mailbox, policy, state files, install internals and recovery, troubleshooting, security, limitations |
 | [go/README.md](go/README.md) | The `orch` binary: commands, building, install, plugin runtime, parity harness, release checklist |
 | [claude/README.md](claude/README.md) | The Claude Code front door: agents and skill |
 | [go/README.md](go/README.md#orch-remote-go-only) | `orch remote`, the Mac side of Work Trains: `init`, `status`, `push --dry-run` (prints exactly what a push would send and sends nothing), `once` / `serve` (the sync loop) and `launchd` (prints the LaunchAgent plist that keeps `serve` running) |

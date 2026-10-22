@@ -1,12 +1,35 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — unreleased
+
+One runtime: `orch`. This release removes the JS runtime and switches the plugin, generated
+commands, prompts and installer health check to the Go binary. The parity harness retains the
+pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last release tag `v0.5.0`.
+
+### Upgrade notes
+
+- From 0.5.0 in symlink mode: `git pull`, then rebuild and swap the binary before restarting:
+  `(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch) && mv ~/.local/bin/orch.new ~/.local/bin/orch`.
+  Substitute your `ORCH_BIN_DIR` if different. Unset `ORCH_RUNTIME=js` (for a service,
+  `opencode service unset env ORCH_RUNTIME`), remove any `runtime: "js"` option, and run
+  `opencode service restart`. Confirm `orch version` is 0.6.0 and run `orch doctor`.
+- From 0.4.x: `./uninstall.sh`, then `./install.sh`, so the receipt records `orch`.
+- Replace stale `node ... .mjs` commands in project `.orchestrator/briefs`, `STATE.md` and your
+  own scripts with `orch <cmd>`. The next flip rewrites its generated continue brief, not history.
+- Bridge budget-refusal summaries now name `orch <bridge>`; incident fingerprints change, so
+  `/retro` groups old and new refusals separately.
+
+### Changes
 
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
-
-- Fixed: map Codex windows by duration, including weekly-only plans (`5h n/a`); their weekly usage alone drives routing and flip, while unreadable data stays unknown.
-
+- usage: map Codex windows by duration, including weekly-only plans such as `prolite`.
+  Missing windows show `n/a` (unreadable readings stay unknown); weekly-only usage drives routing,
+  flip, headroom, doctor and remote snapshots alone: amber steers, red blocks. PE-27 documents
+  the intentional delta from `9e3a456`; the `codex-by-id` golden is unchanged and compared through
+  the guarded `postOracleDeltas` test adjustment. Other oracle goldens and caches are unchanged.
+- version/docs (S12g): embedded release is 0.6.0, runtime documentation is Go-only, and parity
+  `--only` rejects unknown group names instead of passing without tests.
 - plugin: `orch_delegate` gives the verifier write access by default, as it does the coder (incident 3ad1e76b).
   A verifier on Claude Code ran with `--permission-mode plan`, which blocks Bash, so it returned a plan instead of
   running the checks; on Codex it got a `read-only` sandbox, which blocks its report and the temp dirs tests
@@ -555,6 +578,51 @@
   files, 0700 directories) through a unique temp file and an atomic rename, so planted symlinks are
   never followed and concurrent writers cannot mix content (PE-21; Sol S1/R1, S2/R4, S2/R9, S3/R4,
   S3/R5). Run-record names replace `/` in session ids in both runtimes (Sol S1/R4).
+
+- go: the parity harness compares against the pre-S12 JS, `orchestrator/` at commit `9e3a456` (named in
+  `go/parity/js-ref`), which `go/parity/run.sh` extracts from git into a temp directory; `ORCH_JS` (a JS tree)
+  or `ORCH_JS_REF` (any commit-ish) override it. The Go unit tests and the `routing`, `usage` and `incident`
+  testdata generators no longer read the checkout's JS (the generators take `ORCH_JS`); the source-derived
+  checks moved to the parity build's `TestJSReference`. CI fetches the pinned commit and gains a `node` job
+  that runs `node --test tests/*.test.mjs` on Linux and macOS.
+- go: every command line `orch` writes for agents and humans reads `orch <cmd> ...` instead of
+  `node ~/.config/opencode/orchestrator/bin/<cmd>.mjs` (supervisor reminders, the worker preamble, `flip run`'s
+  `conductor-continue.md`, the `flip gate` message, kickoff's usage line and watch hint, the reply hints of
+  `mailbox inbox` and `watch`, now unconditional, and the `manifest`, `mailbox reply` and `worker` usage lines);
+  `orch claude-exec --help` and `orch codex-exec --help` print orch help instead of the JS source header. The
+  bridge budget-red incident's summary becomes `orch <bridge> refused: budget red`, so its fingerprint changes
+  and `/retro` lists old and new apart. The parity harness maps the JS side's command strings (PE-19, `go/README.md`).
+- go: `orch doctor` suits an install without the JS. A missing `node` is now `WARN node missing  —  needed only
+  by install.sh and uninstall.sh` instead of a FAIL, and a new `orch on PATH` row after `orch binary` checks that
+  `orch` on `PATH` is this binary (OK), warns when it is not on `PATH` (naming the directory to add) or when
+  `PATH` resolves another `orch` (with its version); the row never fails doctor (PE-18).
+- plugin: `orch` is the plugin's only runtime; the JS runtime is gone, so the plugin never imports or spawns
+  orchestrator JS. With no `runtime` option and no `ORCH_RUNTIME` it runs `orch`, and `runtime: "go"` still works.
+  **Upgrade:** remove `ORCH_RUNTIME=js` (e.g. `opencode service unset env ORCH_RUNTIME`) or a `runtime: "js"`
+  option; either now fails every `orch_*` tool with `the js runtime was removed in 0.6.0; remove the runtime option
+  or ORCH_RUNTIME (orch is the only runtime)` instead of running something else. The plugin tests no longer read
+  the JS tree: the routing documents their fake `orch` replays are fixtures in `tests/fixtures/routing/`, the
+  JS-vs-orch argv comparisons are pinned expectations, and `tests/plugin-orch-parity.test.mjs` is deleted.
+- prompts: `AGENTS.md`, the Claude agents (`conductor`, `coder`, `coder-hard`, `reviewer`), the Claude
+  `orchestrator` skill, `claude/README.md`, the `/continue`, `/usage` and `/retro` commands and the
+  `orchestrator-audit` skill call `orch <cmd> ...` instead of `node ~/.config/opencode/orchestrator/bin/<cmd>.mjs`
+  (the conductor's session-heartbeat hooks included); the audit's smoke tests are `orch doctor`, `orch usage
+  --refresh`, `orch codex-exec` and `orch claude-exec`, and a changed bridge flag is fixed in
+  `go/internal/bridge/`. Wording is otherwise unchanged.
+- removed: the JS runtime. `orchestrator/bin/*.mjs` (claude-exec, codex-exec, doctor, flip, incident, kickoff,
+  mailbox, manifest, opencode-exec, policy, session, supervisor, usage, watch, worker), `orchestrator/lib/` (16
+  modules) and `orchestrator/tests/` (11 suites and a helper) are deleted; `orchestrator/` keeps `models.json`,
+  `README.md`, `CHANGELOG.md` and `bin/setup.sh`. Every command is `orch <cmd>`. Node is needed only by
+  `install.sh`, `uninstall.sh` and the tests.
+- install: after `opencode reload` the installer runs `orch doctor` (the binary it placed) instead of
+  `doctor.mjs`, and checks for `orchestrator/models.json` (`Release registry is missing; nothing changed.`)
+  instead of the doctor script. `--skip-binary` now means "use an existing orch": `ORCH_BIN` (an executable file;
+  nothing else is tried), else `~/.local/bin/orch`, else `PATH`, which must answer `orch version`, or the install
+  is refused before anything changes. The receipt still records no binary; the installer runs that orch's doctor
+  and prints `orch: <path> (existing; not managed by this install)`, with a note when its version differs from
+  the checkout's. `orchestrator/bin/setup.sh` runs `orch doctor` the same way (`ORCH_BIN`, `~/.local/bin/orch`,
+  `PATH`). **Upgrade:** after `git pull`, rebuild `orch` before `opencode reload`; replace any
+  `node ~/.config/opencode/orchestrator/bin/<name>.mjs` in your own scripts with `orch <name>`.
 
 ## 0.5.0 — 2026-10-19
 

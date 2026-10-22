@@ -8,17 +8,14 @@
 //      and keeps the conductor's session heartbeat (.orchestrator/sessions/opencode.json).
 //   3. Syncs native agents' models from orchestrator/models.json so the audit skill can retarget
 //      everything by editing one file.
+// Every tool and hook runs on the `orch` binary; the plugin never imports or spawns orchestrator JS.
 import { spawn } from "node:child_process";
-import { randomInt } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 
 const HOME = os.homedir();
 const ORCH = path.join(HOME, ".config", "opencode", "orchestrator");
-const BIN = path.join(ORCH, "bin");
-const NODE = process.execPath.includes("opencode") ? "node" : process.execPath;
 // ORCH_HOME and ORCH_REGISTRY, made absolute once against the plugin's working directory: children
 // run in a project directory, where a relative value would name another tree (S4/R4). This, the
 // binary resolved at setup and callOrch's process.cwd() assume the plugin's cwd is stable after load.
@@ -31,10 +28,6 @@ function absoluteOrchPaths(env: NodeJS.ProcessEnv) {
 }
 
 type Json = Record<string, unknown>;
-
-async function lib(name: string) {
-  return import(pathToFileURL(path.join(ORCH, "lib", name)).href);
-}
 
 // Bridges (orch claude-exec/codex-exec) bound their own CLI within 10 s of a signal and then write
 // their run record, so a child that ignores SIGTERM is SIGKILLed only after KILL_GRACE_MS. Once the
@@ -105,8 +98,8 @@ function lastJson(text: string): Json | null {
   return null;
 }
 
-// ---- Runtime adapter: the JS libs or the Go `orch` binary behind one interface ------------
-type RuntimeName = "js" | "go";
+// ---- Runtime adapter: the `orch` binary behind one interface ------------------------------
+type RuntimeName = "go";
 type CachedRouting = { usage: Json; stale: boolean; prompt: () => Promise<string> };
 /** `recommended`, `blocking` and `ask` count only for a question; other kinds ignore them. */
 type MailboxMessage = { from: string; to: string; kind: string; subject: string; body: string; refs: string[]; thread: string | null; recommended: string | undefined; blocking: boolean | undefined; ask: string | undefined };
@@ -116,8 +109,9 @@ type ManifestCreated = { path: string; manifest_sha256: string; file_count: numb
 type BeatState = "working" | "waiting";
 type SessionBeat = { sessionId: string; state: BeatState };
 type IncidentRequest = { component: string; kind: string; summary: string; detail: string; context: Record<string, unknown>; project: string | null | undefined };
-/** How to launch an orchestrator script (claude-exec, worker, flip, ...): `cmd` plus the argv prefix. */
+/** How to launch an orch subcommand (claude-exec, worker, flip, ...): `cmd` plus the argv prefix. */
 type ScriptCommand = { cmd: string; args: string[] };
+/** What the tools and hooks need from orch; each method is one `orch` subcommand (registry reads models.json). */
 interface OrchRuntime {
   /** null only for a runtime whose selection failed. */
   name: RuntimeName | null;
@@ -152,11 +146,19 @@ class OrchCommandError extends Error {
   }
 }
 
+/** Runtimes earlier releases offered, with the fix for a configuration that still names one. */
+const REMOVED_RUNTIMES: Record<string, string> = {
+  js: "the js runtime was removed in 0.6.0; remove the runtime option or ORCH_RUNTIME (orch is the only runtime)",
+};
+
+// `go` is the only runtime. The option and ORCH_RUNTIME stay accepted so configurations naming it
+// keep working; a removed runtime fails loudly with its fix instead of silently running orch.
 function selectRuntime(options: any, env: NodeJS.ProcessEnv): RuntimeName {
   const isSet = (value: unknown) => value !== undefined && value !== "";
-  const chosen = String(isSet(options.runtime) ? options.runtime : isSet(env.ORCH_RUNTIME) ? env.ORCH_RUNTIME : "js").trim().toLowerCase();
-  if (chosen === "js" || chosen === "go") return chosen;
-  throw new OrchConfigError(`unknown orchestrator runtime "${chosen}" (expected "js" or "go")`);
+  const chosen = String(isSet(options.runtime) ? options.runtime : isSet(env.ORCH_RUNTIME) ? env.ORCH_RUNTIME : "go").trim().toLowerCase();
+  if (chosen === "go") return chosen;
+  if (Object.hasOwn(REMOVED_RUNTIMES, chosen)) throw new OrchConfigError(REMOVED_RUNTIMES[chosen]);
+  throw new OrchConfigError(`unknown orchestrator runtime "${chosen}" (expected "go")`);
 }
 
 function isExecutableFile(file: string) {
@@ -190,48 +192,6 @@ function resolveOrchBinary(options: any, env: NodeJS.ProcessEnv): string {
   throw new OrchConfigError(`orch binary not found (looked in: ${searched.join(", ")})`);
 }
 
-async function createJsRuntime(): Promise<OrchRuntime> {
-  const usageLib = await lib("usage.mjs");
-  return {
-    name: "js",
-    binary: null,
-    routing: (refresh) => usageLib.getRouting({ refresh }),
-    async cachedRouting() {
-      const usage = usageLib.readCachedUsage(5 * 60 * 1000);
-      if (!usage) return null;
-      return {
-        usage,
-        stale: Boolean(usage.stale),
-        prompt: async () => {
-          const reg = usageLib.loadRegistry();
-          const { resolveRoles, summarizeForPrompt } = await lib("routing.mjs");
-          return summarizeForPrompt(resolveRoles(usage, reg, { channels: usageLib.detectChannels() }), usage);
-        },
-      };
-    },
-    effortFor: async (registry, role, size) => (await lib("routing.mjs")).effortFor(registry, role, size),
-    budgetGate: async (vendor, force) => (await lib("budget.mjs")).budgetGate(vendor, { force }),
-    registry: () => usageLib.loadRegistry(),
-    mailboxPost: async (root, msg) => (await lib("mailbox.mjs")).post(root, msg),
-    mailboxList: async (root, query) => (await lib("mailbox.mjs")).list(root, query),
-    async manifestCreate(root, { task, author, paths, baseline }) {
-      const out = prepareManifestPath(root, task);
-      const m = (await lib("manifest.mjs")).buildManifest({ root, paths, task, author, baseline });
-      replaceFile(out, JSON.stringify(m, null, 2) + "\n");
-      return { path: out, manifest_sha256: m.manifest_sha256, file_count: m.file_count };
-    },
-    async manifestVerify(root, file) {
-      const m = JSON.parse(fs.readFileSync(path.resolve(root, file), "utf8"));
-      return (await lib("manifest.mjs")).verifyManifest({ root, manifest: m });
-    },
-    recordIncident: async (request) => (await lib("incident.mjs")).record(request),
-    async sessionBeat(root, { sessionId, state }) {
-      (await lib("session.mjs")).writeBeat(root, "opencode", { state, sessionId });
-    },
-    command: (script) => ({ cmd: NODE, args: [path.join(BIN, `${script}.mjs`)] }),
-  };
-}
-
 // The manifest file for task under root's manifests/, whose directory exists on return. The task
 // names the file, so it must not climb out of (or nest under) manifests/ (S4/R7), and manifests/
 // must not resolve outside the project, through a symlink or otherwise (R15).
@@ -253,47 +213,18 @@ function refuseOutsideProject(root: string, dir: string) {
   if (fromRoot.startsWith("..") || path.isAbsolute(fromRoot)) throw new Error(`manifest directory is outside the project: ${dir}`);
 }
 
-// Random names to try before giving up on an exclusive temp: a collision means another writer's
-// temp, which is never touched, so each one costs only a fresh name.
-const TEMP_NAME_ATTEMPTS = 8;
-
-// Replaces file with text through an exclusive owner-only sibling temp and a rename, so a symlink
-// at file is replaced, never followed, and a reader never sees a partial file (R15). Only the temp
-// this call created is ever removed.
-function replaceFile(file: string, text: string) {
-  const { tmp, fd } = openFreshTemp(file);
-  try {
-    try { fs.writeFileSync(fd, text); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-function openFreshTemp(file: string) {
-  for (let attempt = 1; ; attempt++) {
-    const tmp = `${file}.tmp-${randomInt(2 ** 32)}`;
-    try {
-      return { tmp, fd: fs.openSync(tmp, "wx", 0o600) };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST" || attempt === TEMP_NAME_ATTEMPTS) throw err;
-    }
-  }
-}
-
 // "budget gate --vendor openai" -> "budget gate": the tokens before the first flag.
 function subcommandOf(args: string[]) {
   const firstFlag = args.findIndex((a) => a.startsWith("--"));
   return (firstFlag === -1 ? args : args.slice(0, firstFlag)).join(" ");
 }
 
-// orch's argv loops (like the JS CLIs they mirror) read a value starting with "--" as a flag, so
+// orch's argv loops read a value starting with "--" as a flag, so
 // such free text cannot pass through argv exactly (D-S10-4). Bodies and details go on stdin instead.
 function refuseFlagLike(subcommand: string, fields: Record<string, unknown>) {
   for (const [field, value] of Object.entries(fields)) {
     for (const item of Array.isArray(value) ? value : [value]) {
-      if (typeof item === "string" && item.startsWith("--")) throw new OrchCommandError(subcommand, null, "", `${field} may not begin with "--" in the go runtime`);
+      if (typeof item === "string" && item.startsWith("--")) throw new OrchCommandError(subcommand, null, "", `${field} may not begin with "--"`);
     }
   }
 }
@@ -335,7 +266,7 @@ function createGoRuntime(bin: string): OrchRuntime {
     // The registry the spawned orch reads; no subcommand needed for a file read.
     registry: () => JSON.parse(fs.readFileSync(ORCH_PATH_ENV.ORCH_REGISTRY ?? path.join(ORCH_PATH_ENV.ORCH_HOME ?? ORCH, "models.json"), "utf8")),
     async mailboxPost(root, { from, to, kind, subject, body, refs, thread, recommended, blocking, ask }) {
-      // orch refuses --recommended, --blocking and --ask on any other kind, where the JS lib ignores them.
+      // orch refuses --recommended, --blocking and --ask on any other kind, so they go only with a question.
       const isQuestion = kind === "question";
       refuseFlagLike("mailbox post", { from, to, kind, subject, thread, refs, ...(isQuestion ? { recommended, ask } : {}) });
       // A missing from/subject is left out so orch reports it ("post needs from and subject"), as is
@@ -401,7 +332,7 @@ async function createRuntime(options: any): Promise<OrchRuntime> {
   let name: RuntimeName | null = null;
   try {
     name = selectRuntime(options, process.env);
-    return name === "js" ? await createJsRuntime() : createGoRuntime(resolveOrchBinary(options, process.env));
+    return createGoRuntime(resolveOrchBinary(options, process.env));
   } catch (err) {
     if (err instanceof OrchConfigError) return createBrokenRuntime(name, err);
     throw err;

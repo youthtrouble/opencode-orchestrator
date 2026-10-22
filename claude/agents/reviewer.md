@@ -6,7 +6,7 @@ effort: medium
 tools: Read, Glob, Grep, Bash, Write
 skills: cross-review
 ---
-You are the reviewer. First verify the manifest (`node ~/.config/opencode/orchestrator/bin/manifest.mjs
+You are the reviewer. First verify the manifest (`orch manifest
 verify <manifest>`) and again before you finish. Correctness first (inputs, state ownership,
 lifecycle, concurrency, time zones, error paths, security, privacy), then craft (naming, cohesion,
 dead code, duplicated truths, test quality). Each finding: severity, file:line, concrete failure

@@ -145,7 +145,7 @@ function orchDestination(home) {
   return { directory, destination };
 }
 
-// A download needs only VERSION; a build also needs the Go module.
+// A build needs VERSION and the Go module; a download or an existing orch needs only VERSION.
 function releaseVersion(source) {
   const versionFile = path.join("go", "internal", "version", "VERSION");
   const required = source === "build" ? [versionFile, path.join("go", "go.mod")] : [versionFile];
@@ -236,15 +236,23 @@ function downloadOrch(orch, file) {
   fs.renameSync(downloaded, file);
 }
 
+// The first line of `<file> version`, or null when it does not run cleanly.
+function reportedVersion(file) {
+  const result = spawnSync(file, ["version"], { encoding: "utf8" });
+  if (result.error || result.status !== 0) return null;
+  return (result.stdout || "").split("\n")[0].trim();
+}
+
+const versionToken = (line) => line.split(/\s+/)[0];
+
 function acquireOrch(orch, file) {
   if (orch.source === "build") buildOrch(file);
   else downloadOrch(orch, file);
   fs.chmodSync(file, 0o755);
-  const reported = spawnSync(file, ["version"], { encoding: "utf8" });
-  const firstLine = (reported.stdout || "").split("\n")[0].trim();
+  const reported = reportedVersion(file);
   requireCondition(
-    !reported.error && reported.status === 0 && firstLine.split(/\s+/)[0] === orch.version,
-    `orch version reported "${firstLine}", expected ${orch.version}.`,
+    reported !== null && versionToken(reported) === orch.version,
+    `orch version reported "${reported ?? ""}", expected ${orch.version}.`,
   );
 }
 
@@ -255,20 +263,52 @@ function placeOrch(orch, file) {
   fs.unlinkSync(file);
 }
 
-// PATH entries may carry a trailing slash or a symlinked spelling of the canonical directory.
-function onPath(directory) {
-  return (process.env.PATH || "")
+const pathDirectories = () =>
+  (process.env.PATH || "")
     .split(":")
     .filter((entry) => entry !== "")
-    .some((entry) => {
-      const resolved = path.resolve(entry);
-      return resolved === directory || (fs.existsSync(resolved) && fs.realpathSync(resolved) === directory);
-    });
+    .map((entry) => path.resolve(entry));
+
+// PATH entries may carry a trailing slash or a symlinked spelling of the canonical directory.
+function onPath(directory) {
+  return pathDirectories().some(
+    (resolved) => resolved === directory || (fs.existsSync(resolved) && fs.realpathSync(resolved) === directory),
+  );
 }
 
-function reportOrch(orch) {
-  if (!orch) {
-    console.log("orch: skipped (--skip-binary)");
+function executableFile(file) {
+  try {
+    if (!fs.statSync(file).isFile()) return false;
+    fs.accessSync(file, fs.constants.X_OK);
+    return true;
+  } catch (error) {
+    if (["ENOENT", "ENOTDIR", "EACCES"].includes(error.code)) return false;
+    throw error;
+  }
+}
+
+// --skip-binary uses an orch this install does not manage. ORCH_BIN, when set, is the only
+// candidate (a typo must not silently pick another orch); otherwise ~/.local/bin/orch, then PATH.
+function existingOrch(home) {
+  const refusal = "--skip-binary needs an existing orch (ORCH_BIN, ~/.local/bin/orch or PATH); nothing changed.";
+  const candidates = process.env.ORCH_BIN
+    ? [path.resolve(process.env.ORCH_BIN)]
+    : [
+        path.join(home, ".local", "bin", "orch"),
+        ...pathDirectories().map((directory) => path.join(directory, "orch")),
+      ];
+  const file = candidates.find(executableFile);
+  requireCondition(file, refusal);
+  const reported = reportedVersion(file);
+  requireCondition(reported !== null, refusal);
+  return { file, version: versionToken(reported), checkoutVersion: releaseVersion("existing") };
+}
+
+function reportOrch(orch, existing) {
+  if (existing) {
+    console.log(`orch: ${existing.file} (existing; not managed by this install)`);
+    if (existing.version !== existing.checkoutVersion)
+      console.log(`Note: ${existing.file} reports ${existing.version}; this checkout is ${existing.checkoutVersion}.`);
     return;
   }
   console.log(`orch: ${orch.destination}`);
@@ -328,7 +368,8 @@ function readRecord() {
   return record;
 }
 
-function install(orch) {
+// Exactly one of orch (the binary this install places) and existing (--skip-binary) is set.
+function install(orch, existing) {
   requireCondition(!exists(active), "An installation or recovery receipt already exists; run uninstall.sh first.");
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.mkdirSync(active, { mode: 0o700 });
@@ -374,12 +415,13 @@ function install(orch) {
     console.log("Skipped opencode reload and doctor (--no-reload): run them yourself to load the plugin.");
   else {
     command("opencode", ["reload"]);
-    command("node", [path.join(target, "orchestrator", "bin", "doctor.mjs")]);
+    const doctorOrch = orch ? orch.destination : existing.file;
+    command(doctorOrch, ["doctor"]);
   }
   record.phase = "active";
   writeRecord(record);
   console.log(`Installed (${mode}). Private receipt: ${receipt}`);
-  reportOrch(orch);
+  reportOrch(orch, existing);
 }
 
 function uninstall() {
@@ -477,7 +519,8 @@ try {
     console.log("No installation receipt; nothing changed.");
   } else {
     // Dependencies and target refusal are checked before even creating private state.
-    let orch = null;
+    let orch = null,
+      existing = null;
     if (action === "install") {
       requireCondition(!exists(active), "An installation or recovery receipt already exists; run uninstall.sh first.");
       requireCondition(
@@ -491,14 +534,15 @@ try {
       for (const entry of entries)
         requireCondition(exists(path.join(checkout, entry)), `Missing release entry: ${entry}`);
       requireCondition(
-        exists(path.join(checkout, "orchestrator", "bin", "doctor.mjs")),
-        "Release doctor is missing; nothing changed.",
+        exists(path.join(checkout, "orchestrator", "models.json")),
+        "Release registry is missing; nothing changed.",
       );
       requireCondition(
         existingDevice(path.dirname(target)) === existingDevice(stateRoot),
         "Config and installer state must share a filesystem for atomic backup/restore.",
       );
-      orch = args.includes("--skip-binary") ? null : planOrch(home);
+      if (args.includes("--skip-binary")) existing = existingOrch(home);
+      else orch = planOrch(home);
     }
     privateDirectory(stateRoot);
     const lock = path.join(stateRoot, "operation.lock");
@@ -506,7 +550,7 @@ try {
     fs.writeFileSync(descriptor, String(process.pid));
     fs.closeSync(descriptor);
     try {
-      if (action === "install") install(orch);
+      if (action === "install") install(orch, existing);
       else uninstall();
     } finally {
       fs.unlinkSync(lock);

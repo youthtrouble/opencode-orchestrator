@@ -227,7 +227,6 @@ func TestMailboxPostRefusesMisusedQuestionOptionsAndWritesNothing(t *testing.T) 
 func TestMailboxInboxShowsBlockingAndTheRecommendedAnswer(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("ORCHESTRATOR_PROJECT", root)
-	t.Setenv("PATH", t.TempDir()) // no orch on PATH: the reply hint names mailbox.mjs
 	dir := filepath.Join(root, ".orchestrator", "mailbox")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -241,7 +240,7 @@ func TestMailboxInboxShowsBlockingAndTheRecommendedAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := run(t, Mailbox, []string{"inbox"}, "")
-	const hint = `    reply: node ~/.config/opencode/orchestrator/bin/mailbox.mjs reply `
+	const hint = `    reply: orch mailbox reply `
 	want := "[q1000000] 2026-10-18T12:00Z from c: ship? (blocking)\n    b\n    recommended: yes now\n" + hint + "q1000000 \"your answer\"\n\n" +
 		"[q2000000] 2026-10-18T13:00Z from c: name?\n    b\n    recommended: " + strings.Repeat("r", 200) + "\n" + hint + "q2000000 \"your answer\"\n\n" +
 		"[q3000000] 2026-10-18T14:00Z from c: legacy\n    b\n" + hint + "q3000000 \"your answer\"\n\n"

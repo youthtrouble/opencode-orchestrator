@@ -54,15 +54,15 @@ applies. Review your own effort choices in `/retro`.
 When you run as a worker lane (print mode), ending your turn ENDS THE SESSION and kills any
 background subagent. Therefore: never launch subagents in the background; run `subagent`/`Agent` calls in the
 foreground and wait for them. Never "wait for a notification". Finish the loop, or hand off with
-`flip.mjs run`/`flip.mjs pause`, before your final message.
+`orch flip run`/`orch flip pause`, before your final message.
 
 ## Autonomy policy (so work continues while the human is away)
-Read the effective policy with `node ~/.config/opencode/orchestrator/bin/policy.mjs show`. `push_to_main: auto`
+Read the effective policy with `orch policy show`. `push_to_main: auto`
 means: after a slice is verified (review pass, checks green, manifest recorded) commit only that slice's
 files with a descriptive message and push to main yourself; never force-push; record the push in STATE.md.
 For `ask` items (release, code deletion, spend, deploy; one exception is under "Keeping the live checkout
 current") post a `question` and KEEP WORKING on the next independent slice; record a human gate
-(`flip.mjs gate`) only when nothing independent remains.
+(`orch flip gate`) only when nothing independent remains.
 `product_questions: continue_with_assumption` means: state the assumption in STATE.md and the report,
 post the question, continue.
 
@@ -151,15 +151,15 @@ steps of at most 5 minutes and re-read the mailbox after each step.
 The project is driven by one conductor at a time: the opencode conductor (OpenAI-native) or the
 Claude Code conductor (`claude --agent conductor`, Anthropic-native). Both use the same
 `.orchestrator/` state. `models.json` names the home door (default opencode).
-- At every brief boundary run `node ~/.config/opencode/orchestrator/bin/flip.mjs decide --active <door>`.
-  `flip`/`handback` => update STATE.md, post a `handoff`, run `flip.mjs run --to <door> --from <you>`,
-  and stop. `stay` => continue. `pause` => write the remaining briefs and stop. Then run `node ~/.config/opencode/orchestrator/bin/flip.mjs pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `supervisor.mjs start` running).
+- At every brief boundary run `orch flip decide --active <door>`.
+  `flip`/`handback` => update STATE.md, post a `handoff`, run `orch flip run --to <door> --from <you>`,
+  and stop. `stay` => continue. `pause` => write the remaining briefs and stop. Then run `orch flip pause --active <door>` so the supervisor relaunches automatically when a window resets (keep `orch supervisor start` running).
   `gate` => the human has paused the project: update STATE.md, post nothing new, and stop (never pause or
   flip on it). In an interactive session, report the gate and its question and carry on with the human instead.
-At a HUMAN gate while headless (push, deploy, spend, product question): post the `question` to the mailbox, run `node ~/.config/opencode/orchestrator/bin/flip.mjs gate --active <door> --reason "..." --question <id>`, and stop. Never use `pause` for a human gate; pause is for budgets only.
+At a HUMAN gate while headless (push, deploy, spend, product question): post the `question` to the mailbox, run `orch flip gate --active <door> --reason "..." --question <id>`, and stop. Never use `pause` for a human gate; pause is for budgets only.
 - A conductor whose own provider dies is flipped automatically (plugin hook or supervisor); the
   away conductor hands back at the first boundary after the home vendor is stably green.
-- First use in a repo: `.orchestrator/` is added to `.git/info/exclude` (`flip.mjs run` does this;
+- First use in a repo: `.orchestrator/` is added to `.git/info/exclude` (`orch flip run` does this;
   do it yourself otherwise). Commit `plans/` or `reviews/` into the repo only deliberately.
 
 ## Budget rules
@@ -182,7 +182,7 @@ At a HUMAN gate while headless (push, deploy, spend, product question): post the
 Product bugs go in reviews. Orchestrator defects go in the incident log: a tool or contract that
 did not behave as documented, a misroute, a budget surprise, a crash or timeout in a bridge/worker,
 and every correction the human gives you about how this workflow should behave. Record with
-`orch_incident` (or `node ~/.config/opencode/orchestrator/bin/incident.mjs record ...`). It is local,
+`orch_incident` (or `orch incident record ...`). It is local,
 redacted and append-only; `/retro` and `/audit-orchestrator` read it and turn repeats into fixes.
 
 ## Keep the README current
