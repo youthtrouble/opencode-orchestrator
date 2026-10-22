@@ -253,6 +253,25 @@ Files:
   `AbandonProcessGroup`) has not been tested: the end-to-end test runs `once` without launchd. If
   the supervisor dies with `serve`, the plist needs `AbandonProcessGroup`.
 
+## Ownership primitive (S13a; not yet used by commands)
+
+`internal/ownlock` provides non-blocking `Acquire`, non-acquiring `Probe`, idempotent
+`Release` and blocking `Transaction` using POSIX record locks on regular files opened
+without following the final symlink. Kernel locks, not decimal PID metadata, determine
+ownership; process death releases them. An inode-keyed process registry excludes local
+owners and transactions, handles hard-link aliases, and prevents package-internal closes
+from dropping another owner's lock. Acquisition rechecks pathname identity, retrying at
+most eight times; release refuses an already replaced pathname with an error and anchors
+relative paths at acquisition, independently of later working-directory changes. Probe
+re-resolves a pending reservation that ends without acquiring. Transactions retain their
+lock file and release on callback errors or panics. This is a cooperative protocol: all
+same-process access to lock inodes must use this package (even closing an unrelated read
+descriptor drops POSIX locks); callers must not rename/unlink active lock paths, and
+transaction data must be a separate file. Identity checking cannot make check-and-unlink
+atomic against an unrelated replacer. No commands use this primitive yet: the worker,
+supervisor, flip and ack defects below remain open pending S13b–f. No parity exception
+is introduced by this unused package.
+
 ## Build
 
 Go 1.25+, no third-party dependencies, no cgo.

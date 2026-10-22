@@ -21,6 +21,10 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- internal (S13a): add a POSIX record-lock ownership and transaction primitive with
+  inode-alias tracking and cross-process regression tests, including failed pending
+  reservations and release after a working-directory change. No callers migrate in this
+  slice; worker, supervisor, flip and ack concurrency fixes are still pending.
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.
