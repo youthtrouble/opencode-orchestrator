@@ -12,13 +12,13 @@ import (
 //go:embed VERSION
 var versionFile string
 
-// Number is the release number from VERSION, e.g. "0.5.0".
+// Number is the release number from VERSION, in "X.Y.Z" form.
 func Number() string {
 	return strings.TrimSpace(versionFile)
 }
 
-// String is what `orch version` prints: "0.5.0 (abc1234)", "0.5.0 (abc1234+dirty)", or just
-// "0.5.0" when the binary carries no VCS information (tests, builds outside a checkout).
+// String is what `orch version` prints: "X.Y.Z (abc1234)", "X.Y.Z (abc1234+dirty)", or just
+// "X.Y.Z" when the binary carries no VCS information (tests, builds outside a checkout).
 func String() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

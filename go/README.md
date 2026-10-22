@@ -1,18 +1,17 @@
 # orch: Go runtime of the orchestrator
 
-`orch` is one static binary whose subcommands replace `orchestrator/bin/*.mjs` one for one,
-released as [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0)
-(2026-10-19). Every script is ported, `install.sh` installs `orch` (see [Install](#install)), and the
-plugin runs on it when its runtime is `go` (see [Plugin runtime](#plugin-runtime)). The JS runtime
-stays the default and both share the same `.orchestrator/` and usage state, so they can run side
-by side. What remains is removing the JS (S12), planned for 0.6.0 behind a human gate.
+`orch` is the only runtime in **0.6.0 (unreleased)**: one Go binary, installed by `install.sh`
+(see [Install](#install)), that runs every plugin tool and hook. The JS runtime, libraries and
+their tests are removed. The last JS release is
+[v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0) (2026-10-19);
+the parity oracle is the later pre-S12 commit `9e3a456`, pinned in `go/parity/js-ref`.
 
 For what the orchestrator does and how to use it, see the [root README](../README.md); for the
 scripts' own behaviour and state files, [orchestrator/README.md](../orchestrator/README.md).
 
-Commands (every `bin/*.mjs` script):
+Commands (ported from the JS at that parity reference; differences are listed below):
 
-| Command | Replaces | Behaviour |
+| Command | Ported from (JS) | Behaviour |
 |---|---|---|
 | `orch version` | — | Release number plus VCS revision. |
 | `orch usage [--refresh] [--json]` | `bin/usage.mjs` | Byte-identical output; reads and writes the same usage cache, so either runtime can read what the other wrote. A failed vendor reading (a 429 from the Claude usage endpoint, a codex error) is replaced by the last good cached one, marked `last_good_at` (when it was read) and `read_error`, if the cache was written less than 30 minutes ago. The window rolls: each failed refresh rewrites the cache, so refreshes that keep failing less than 30 minutes apart keep a reading of any age (as in the JS); check `last_good_at`. |
@@ -33,6 +32,13 @@ Commands (every `bin/*.mjs` script):
 | `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command (`orch mailbox reply`, PE-19), the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
 | `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b> (looked in <root>; cd into the project or pass --cwd <project dir>)` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else the preflight below, the prompt written to `.orchestrator/briefs/conductor-kickoff.md`, `orch flip pause --active <home> --brief .orchestrator/briefs/conductor-kickoff.md` with its answer, and the message, exit 75, so the supervisor's relaunch at the reset starts from that brief; when `orch supervisor start` exits non-zero (before the brief) or the pause does, `Both vendors are red, but the supervisor did not start\|the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.` on stderr, exit 1), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear --no-relaunch`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir); `--dry-run` skips it and prints `supervisor: not started (dry-run)` instead, so it changes nothing in the project, though its routing read still refreshes the shared usage cache), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (the brief is written atomically, 0600, PE-21; the lane's trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). Differences: the captured self-execs stop at 1 MiB of output (PE-20) and run in a process group of their own (PE-22). |
 | `orch session beat --door opencode\|claude [--state working\|waiting\|done\|ended] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | `bin/session.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/sessions/<door>.json` (indent 2; the directory 0700, an existing one this user owns tightened to 0700, the file 0600, written through a private temp file and a rename in both runtimes). `beat` keeps each field not given, clears `--now`, `--slice` or `--session` given as `""` (`--progress` must always be `N/M`), defaults the state to `working` and refreshes `updated_at`; `--now` is cut to 200 UTF-16 units and `--slice` to 40 (a split surrogate pair becomes U+FFFD in both). Bad options exit 2. `--hook` reads a Claude Code hook's JSON on stdin (`session_id`, `cwd`, `hook_event_name` only; never the prompt): `UserPromptSubmit` and `SessionStart` record `working`, `Stop` `waiting`, `SessionEnd` `ended`, any other event writes nothing; it never exits 2 (every failure is one `session beat: ...` line and exit 1; a `cwd` with a NUL character is refused before any filesystem call) and never creates `.orchestrator/`. `show` prints `{door: record}` (indent 2) and refuses to run outside a project. |
+
+Comments citing `bin/*.mjs` or `lib/*.mjs` name the JS at parity reference `9e3a456`
+(`go/parity/js-ref`), not files in this checkout; the last JS release is tag `v0.5.0`.
+
+On weekly-only Codex plans, usage and doctor show `5h n/a`; the weekly window alone drives
+routing, flip grace, headroom and the remote snapshot. Amber steers and red blocks; unreadable
+data stays unknown. See PE-27 for the deliberate post-oracle difference.
 
 Outside a project: `mailbox list|ack|reply|inbox`, `watch` (with or without `--follow`), `flip
 status`, `flip gate --clear`, `worker status|stop`, `supervisor status|stop|ack` and `session show`, run where
@@ -148,7 +154,7 @@ lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected
 - `budget`: both vendors' postures from the cached usage reading and the registry's thresholds;
   `null` when there is no cache or it is more than 30 minutes old. Each posture carries both
   windows' resets (`resets_at` for the 5-hour one, `weekly_resets_at`) and `window`, the one that
-  drives its level: `weekly` when the weekly window is red, else `five_hour`. It runs no program: unlike
+   drives its level: `weekly` when the weekly window is red or Codex is weekly-only, else `five_hour`. It runs no program: unlike
   `orch routing`, it does not detect opencode's channels (`sqlite3`, `opencode auth list`).
 
 The sync loop (`once` runs one cycle; `serve` repeats them):
@@ -263,15 +269,17 @@ the Go runtime requires on darwin; that is as static as a macOS binary gets. `bi
 gitignored.
 
 The release number lives in `internal/version/VERSION` (embedded). `orch version` appends the
-VCS revision Go records at build time, e.g. `0.5.0 (5ae996b)` or `0.5.0 (5ae996b+dirty)`; a build
-outside a git checkout (a source tarball or `git archive`) records none and prints `0.5.0`.
+VCS revision Go records at build time, e.g. `0.6.0 (5ae996b)` or `0.6.0 (5ae996b+dirty)`; a build
+outside a git checkout (a source tarball or `git archive`) records none and prints `0.6.0`.
 
 ## Install
 
 `../install.sh` builds `orch` from the checkout when Go 1.25+ is on `PATH` (`CGO_ENABLED=0 go build
 -trimpath -ldflags="-s -w" ./cmd/orch`), checks that `orch version` matches
 `internal/version/VERSION`, and places it at `~/.local/bin/orch`, recorded in the install receipt.
-`ORCH_BIN_DIR` (absolute) chooses another directory; `--skip-binary` installs without `orch`.
+`ORCH_BIN_DIR` (absolute) chooses another directory; `--skip-binary` requires an existing executable
+`orch` (`ORCH_BIN`, else `~/.local/bin/orch`, else `PATH`) whose `version` succeeds, before any
+mutation. Its receipt records no binary and uninstall leaves that existing binary alone.
 
 Without Go it downloads, with `curl`, `orch_<VERSION>_<darwin|linux>_<arm64|amd64>` and
 `checksums.txt` from
@@ -289,7 +297,7 @@ need `ORCH_BIN=<path>`. Uninstall moves a recorded `orch` into its archive; see
 [orchestrator/README.md](../orchestrator/README.md#install-update-uninstall-and-recovery) for
 uninstall, upgrading from 0.4.x and recovery.
 
-Without a checkout:
+Without a checkout, the last published release (not this unreleased checkout):
 
 ```sh
 go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
@@ -301,23 +309,20 @@ it only through `ORCH_BIN` or `PATH`.
 
 ## Plugin runtime
 
-`plugins/orchestrator.ts` has two runtimes. `js` (the default) imports `orchestrator/lib/*.mjs` and
-runs `orchestrator/bin/*.mjs`. `go` runs every tool and hook through `orch` and never loads the JS:
+`plugins/orchestrator.ts` runs every tool and hook through `orch` and never loads the removed JS:
 routing, effort, the budget gate, the mailbox, manifests and incidents are `orch` subcommands, and
 delegate, the workers, the supervisor and the usage-limit flip spawn `orch <script>` with the
 arguments the script gets.
 
-- **Select** with `ORCH_RUNTIME=go` in the environment of the opencode process that loads the
-  plugin; this is the supported switch. For the background service:
-  `opencode service set env ORCH_RUNTIME go`, then `opencode service restart` (undo with
-  `opencode service unset env ORCH_RUNTIME` and another restart); the S10 live check confirmed
-  both. The value is trimmed and case-insensitive; anything other than `js` or `go` is a
-  configuration error.
+- **Runtime:** `go` is the default and only accepted value (trimmed, case-insensitive).
+  `ORCH_RUNTIME=js` or a `runtime: "js"` option is a configuration error naming its removal in
+  0.6.0 and telling you to remove the option or variable. For a service previously set to JS,
+  run `opencode service unset env ORCH_RUNTIME`, then `opencode service restart`.
 - **Plugin options (known limitation):** the plugin also reads `runtime` and `binary` options, and
   an option wins over the environment. In the S10 live check, object-form options in a project
   `opencode.jsonc` (`[{ "package": "./plugins/orchestrator.ts", "options": { "runtime": "go" } }]`)
   did not reach the plugin: the js runtime answered and `opencode plugin list` showed no plugins.
-  This is probably an upstream opencode issue; use `ORCH_RUNTIME` (and `ORCH_BIN`) until it is
+  This is probably an upstream opencode issue; use `ORCH_BIN` until it is
   resolved.
 - **Binary:** the option `binary` (a leading `~` is expanded), then `ORCH_BIN`, then
   `~/.local/bin/orch`, then each `PATH` entry. An explicit `binary` or `ORCH_BIN` that is not an
@@ -351,22 +356,23 @@ arguments the script gets.
     says `a question needs a recommended answer`. Go mode needs an `orch` from this release or
     later: questions pass `mailbox post --recommended/--blocking`, and the conductor heartbeat runs
     `orch session beat`. An older binary fails both (a tool error; a recorded incident per beat).
-- **Rollback:** unset `ORCH_RUNTIME` (or set it, or the option, to `js`) and reload or restart.
+- **Rollback:** JS selection is not a rollback; it fails. Restoring JS requires restoring a
+  pre-0.6.0 checkout and restarting the service under the human cutover/rollback runbook.
 - **Which runtime answered:** `orch_usage_status` metadata carries `runtime` and `orch` (the binary
-  path); a new incident's `version` is the `orch` version in go mode (`0.5.0 (<rev>)`, or a bare
-  `0.5.0` for a binary built outside a checkout), and in js mode the checkout's `.git/HEAD` text
-  (for example `ref: refs/heads/main`) or `unknown`.
+  path); `runtime` is `go`. A new incident's `version` is the `orch` version (`0.6.0 (<rev>)`, or
+  a bare `0.6.0` for a binary built outside a checkout).
 
-`../tests/plugin-routing.test.mjs` and `../tests/plugin-tools.test.mjs` drive both runtimes through
-a fake opencode context against fakes; `../tests/plugin-orch-parity.test.mjs` runs each lib-backed
-tool and hook in both runtimes against the real `orch` (built into a temp dir, or `ORCH_TEST_BIN`)
-and compares the results. It skips only when neither `go` nor `ORCH_TEST_BIN` is available.
+`../tests/plugin-routing.test.mjs` and `../tests/plugin-tools.test.mjs` drive the plugin through
+a fake opencode context and a fake `orch`, with pinned routing documents and argv expectations.
+The former JS-vs-Go plugin differential is deleted; the command parity harness remains.
 
 ## Release checklist (maintainer, human-gated)
 
 Tagging and publishing are a human gate: no agent runs these steps.
 
-Written for version `X.Y.Z`; 0.5.0 was released this way on 2026-10-19.
+For 0.6.0, complete the human cutover and live smoke before release; deferred release-blocking
+findings must be closed by cross-vendor review. Keep `## 0.6.0 — unreleased` until publishing.
+The steps below use `X.Y.Z = 0.6.0` (0.5.0 was released this way on 2026-10-19).
 
 1. Bump `internal/version/VERSION` to `X.Y.Z`.
 2. Date the release heading in `../CHANGELOG.md` (`## X.Y.Z — <YYYY-MM-DD>`).
@@ -1251,6 +1257,15 @@ The other documented differences, each asserted by its own parity case:
   `mailbox/inbox/orch-reply-hint-unconditional-PE-19` and
   `watch/questions/orch-reply-hint-unconditional-PE-19` keep a stub `orch` on `PATH` and compare
   the pair byte for byte under PE-19, hint included.
+- PE-27: Codex windows are mapped by duration (owner bug a90ac3eb), which the `9e3a456` JS
+  predates. A duration-labeled single-window reading appends `applicable: false` to its missing
+  slot; two-window and unreadable outputs are unchanged. This applies equally to `rateLimits`
+  and `rateLimitsByLimitId.codex`. The only existing oracle golden affected is `codex-by-id`:
+  `postOracleDeltas` in `internal/usage/codex_test.go` first asserts the golden has no
+  `weekly.applicable`, then adds `false` for comparison. The golden stays the immutable oracle
+  output; do not regenerate it from later JS. Hand-written unit tests and raw fixtures cover
+  weekly-only, five-hour-only and swapped windows, routing, prompt, doctor, flip, budget reset
+  and snapshot behavior. The parity reference and generated caches are unchanged.
 
 Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
 events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure
@@ -1260,7 +1275,7 @@ write; a stale foreground lock is never reclaimed (only `--detach` reclaims it);
 --detach` reclaims a stale lock by reading it and then unlinking it, so a lock that another
 launcher's runner claims in between is removed too, leaving two runners on one lane;
 and the worker posts only `blocked` and `deferred` messages, never the `release` its header
-comment mentions (the agent posts its own). These are fixed in JS and Go together after S12
+comment mentions (the agent posts its own). These are to be fixed in Go (S13 plan)
 (Q-S6-6).
 
 Those `orch flip` mirrors: the script's header comment lists only decide, run and status;
@@ -1268,7 +1283,7 @@ Those `orch flip` mirrors: the script's header comment lists only decide, run an
 it; a bare `--reason` on `gate` posts no human message (the gate is then invisible in the
 mailbox, Q-S7-5); a bare `--active`, `--from`, `--reason`, `--question` or `--resume` writes
 `true` into `flip.json` and the mailbox, and `run` passes `--resume true` to the conductor
-(Q-S7-4). These are fixed in JS and Go together after S12. (`run` and kickoff dying of ENOTDIR in
+(Q-S7-4). These are to be fixed in Go (S13 plan). (`run` and kickoff dying of ENOTDIR in
 a git worktree or submodule, Q-S7-2, is fixed: Sol R13.)
 
 Those `orch supervisor` mirrors (S8a part): any command other than `start`, `serve`, `status`,
@@ -1283,7 +1298,7 @@ tick when its note cannot be posted; a lane entry of a vanished worker is never 
 (reading 'created_at')` while pruning, so the supervisor records nothing but that
 `storage_error` until the entry is removed by hand. The flip evaluation (S8b) relaunches a
 `pending_launch` at every evaluation (once a minute) without a cooldown while `flip run` fails
-before clearing it. These are fixed in JS and Go together after S12 (Q-S8-3).
+before clearing it. These are to be fixed in Go (S13 plan, Q-S8-3).
 
 Those `orch doctor` mirrors: the JS row texts (`claude login` has no detail, `codex login` prints
 the whole trimmed output, the anthropic row is OK either way); a registry read failure worded as
@@ -1292,18 +1307,19 @@ registry); a role whose tier has no string `opencode` model fails `usage/routing
 TypeError (`Cannot read properties of undefined (reading 'split')`) where an empty one prints
 `undefined`.
 
-Those `orch watch` mirrors (plan go-s9 3.4, incidents recorded, fixed in JS and Go together after
-S12): a `flip.json` holding only `awaiting_human` (what `flip gate` writes on a project that never
+Those `orch watch` mirrors (plan go-s9 3.4, incidents recorded, to be fixed in Go (S13 plan)):
+a `flip.json` holding only `awaiting_human` (what `flip gate` writes on a project that never
 flipped) crashes a single render with `TypeError: Cannot read properties of undefined (reading
 'slice')` and makes `--follow` print that message every interval without ever drawing a frame; the
 `next:` line takes the rest of the `## Next action` heading line, so `## Next action (exact)`
 prints `next: (exact)`. A role whose model is not a string throws as in `orch doctor`.
 
-Those `orch kickoff` mirrors (plan go-s9 3.4, incidents recorded, fixed in JS and Go together after
-S12): `--door` is not validated, so an unknown door (or a bare `--door`, the text `true`) crashes
+Those `orch kickoff` mirrors (plan go-s9 3.4, incidents recorded, to be fixed in Go (S13 plan)):
+`--door` is not validated, so an unknown door (or a bare `--door`, the text `true`) crashes
 with `TypeError: Cannot read properties of undefined (reading 'overall')` after the preflight (with
-`--dry-run`, which skips the preflight, before any write); the both-red path says the
-supervisor will relaunch but does not start it. One divergence is not mirrored: when `orch`
+`--dry-run`, which skips the preflight, before any write). The formerly mirrored both-red
+supervisor-start defect is fixed: kickoff preflights and records a pause naming its saved brief,
+or exits 1 if either step fails. One divergence is not mirrored: when `orch`
 cannot find its own executable (`os.Executable()` fails), each self-exec has no status and no
 output, so orch prints an empty `supervisor: ` line (and, headless, an empty answer and exit 1)
 where the JS, whose `spawnSync` result would then hold `null` output, dies of a `TypeError` on

@@ -1,7 +1,33 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — unreleased
 
+One runtime: `orch`. This release removes the JS runtime and switches the plugin, generated
+commands, prompts and installer health check to the Go binary. The parity harness retains the
+pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last release tag `v0.5.0`.
+
+### Upgrade notes
+
+- From 0.5.0 in symlink mode: `git pull`, then rebuild and swap the binary before restarting:
+  `(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch) && mv ~/.local/bin/orch.new ~/.local/bin/orch`.
+  Substitute your `ORCH_BIN_DIR` if different. Unset `ORCH_RUNTIME=js` (for a service,
+  `opencode service unset env ORCH_RUNTIME`), remove any `runtime: "js"` option, and run
+  `opencode service restart`. Confirm `orch version` is 0.6.0 and run `orch doctor`.
+- From 0.4.x: `./uninstall.sh`, then `./install.sh`, so the receipt records `orch`.
+- Replace stale `node ... .mjs` commands in project `.orchestrator/briefs`, `STATE.md` and your
+  own scripts with `orch <cmd>`. The next flip rewrites its generated continue brief, not history.
+- Bridge budget-refusal summaries now name `orch <bridge>`; incident fingerprints change, so
+  `/retro` groups old and new refusals separately.
+
+### Changes
+
+- usage: map Codex windows by duration, including weekly-only plans such as `prolite`.
+  Missing windows show `n/a` (unreadable readings stay unknown); weekly-only usage drives routing,
+  flip, headroom, doctor and remote snapshots alone: amber steers, red blocks. PE-27 documents
+  the intentional delta from `9e3a456`; the `codex-by-id` golden is unchanged and compared through
+  the guarded `postOracleDeltas` test adjustment. Other oracle goldens and caches are unchanged.
+- version/docs (S12g): embedded release is 0.6.0, runtime documentation is Go-only, and parity
+  `--only` rejects unknown group names instead of passing without tests.
 - plugin: `orch_delegate` gives the verifier write access by default, as it does the coder (incident 3ad1e76b).
   A verifier on Claude Code ran with `--permission-mode plan`, which blocks Bash, so it returned a plan instead of
   running the checks; on Codex it got a `read-only` sandbox, which blocks its report and the temp dirs tests
@@ -550,8 +576,6 @@
   files, 0700 directories) through a unique temp file and an atomic rename, so planted symlinks are
   never followed and concurrent writers cannot mix content (PE-21; Sol S1/R1, S2/R4, S2/R9, S3/R4,
   S3/R5). Run-record names replace `/` in session ids in both runtimes (Sol S1/R4).
-
-## 0.6.0 — unreleased
 
 - go: the parity harness compares against the pre-S12 JS, `orchestrator/` at commit `9e3a456` (named in
   `go/parity/js-ref`), which `go/parity/run.sh` extracts from git into a temp directory; `ORCH_JS` (a JS tree)

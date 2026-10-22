@@ -13,18 +13,19 @@ func TestNumberIsASemanticVersion(t *testing.T) {
 }
 
 func TestDescribe(t *testing.T) {
+	number := Number()
 	revision := debug.BuildSetting{Key: "vcs.revision", Value: "5ae996bc0ffee"}
 	cases := []struct {
 		name     string
 		settings []debug.BuildSetting
 		want     string
 	}{
-		{"no vcs info", nil, "0.5.0"},
-		{"clean checkout", []debug.BuildSetting{revision, {Key: "vcs.modified", Value: "false"}}, "0.5.0 (5ae996b)"},
-		{"dirty checkout", []debug.BuildSetting{revision, {Key: "vcs.modified", Value: "true"}}, "0.5.0 (5ae996b+dirty)"},
+		{"no vcs info", nil, number},
+		{"clean checkout", []debug.BuildSetting{revision, {Key: "vcs.modified", Value: "false"}}, number + " (5ae996b)"},
+		{"dirty checkout", []debug.BuildSetting{revision, {Key: "vcs.modified", Value: "true"}}, number + " (5ae996b+dirty)"},
 	}
 	for _, c := range cases {
-		if got := describe("0.5.0", c.settings); got != c.want {
+		if got := describe(number, c.settings); got != c.want {
 			t.Errorf("%s: describe = %q, want %q", c.name, got, c.want)
 		}
 	}

@@ -32,11 +32,16 @@ done
 parity_groups=""
 want_jsref=false
 for name in $(echo "$group" | tr , ' '); do
-  if [ "$name" = jsref ]; then
-    want_jsref=true
-  else
-    parity_groups="${parity_groups:+$parity_groups|}$name"
-  fi
+  case "$name" in
+    jsref) want_jsref=true ;;
+    json|usage|mailbox|manifest|incident|policy|bridges|worker|flip|supervisor|doctor|watch|kickoff|session)
+      parity_groups="${parity_groups:+$parity_groups|}$name"
+      ;;
+    *)
+      echo "unknown parity group: $name" >&2
+      exit 2
+      ;;
+  esac
 done
 if [ "$only_given" = true ] && [ -z "$parity_groups" ] && [ "$want_jsref" = false ]; then
   echo "usage: parity/run.sh [--only GROUP]" >&2

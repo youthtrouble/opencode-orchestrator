@@ -140,7 +140,7 @@
     }
   },
   "thresholds": {
-    "$comment": "percent used. The 5-hour window (Claude session / Codex primary) drives routing; weekly caps only block a vendor when RED (they are long-horizon signals, shown but not steering). When both vendors can serve a role at an equivalent tier, the one with more 5-hour headroom wins if it leads by more than balance_margin points; otherwise the registry order is the tie-break.",
+    "$comment": "percent used. When a 5-hour window exists (Claude session / Codex five_hour), it drives routing; vendor-wide weekly caps then block only when RED (long-horizon signals, shown but not steering). On weekly-only Codex plans, the weekly window alone drives routing and flip at every level: amber steers and red blocks. When both vendors can serve a role at an equivalent tier, the one with more driving-window headroom wins if it leads by more than balance_margin points; otherwise the registry order is the tie-break.",
     "amber": 60,
     "red": 85,
     "soon_minutes": 20,
