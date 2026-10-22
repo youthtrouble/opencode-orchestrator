@@ -359,6 +359,9 @@ in live testing (probably upstream), so use `ORCH_BIN`. Details and accepted por
   `orch supervisor stop`, ...) outside the project. `cd` into it, or pass `--cwd <project dir>`
   (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
   usually means the id belongs to another project.
+- *A lane or OpenCode session opened in another project.* A supervisor started by an orch
+  older than 0.6.0 passes its own `PWD` to children: restart it from the project directory
+  (`orch supervisor stop` then `orch supervisor start`, there or with `--cwd <project dir>`).
 
 ## Updating
 

@@ -11,6 +11,52 @@ import (
 	"time"
 )
 
+func TestDetachedSetsPWDToDir(t *testing.T) {
+	t.Setenv("PWD", t.TempDir())
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reaped := range []bool{false, true} {
+		t.Run(strconv.FormatBool(reaped), func(t *testing.T) {
+			output, err := os.Create(filepath.Join(t.TempDir(), "env"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer output.Close()
+			d := Detached{Name: "/usr/bin/env", Dir: dir, Output: output}
+			var pid int
+			if reaped {
+				pid, err = d.StartReaped()
+			} else {
+				pid, err = d.Start()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reaped {
+				defer func() {
+					var status syscall.WaitStatus
+					_, _ = syscall.Wait4(pid, &status, 0, nil)
+				}()
+			}
+			deadline := time.Now().Add(slack)
+			var data []byte
+			for {
+				data, err = os.ReadFile(output.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(data), "PWD=") || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			assertChildPWD(t, string(data), dir)
+		})
+	}
+}
+
 // TestStartDetached: the child runs in a session (so a process group) of its own with its
 // stdio on /dev/null, and StartDetached returns while it is still running.
 func TestStartDetached(t *testing.T) {

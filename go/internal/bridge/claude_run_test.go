@@ -33,7 +33,20 @@ var bridgeRuns = map[string]func(args []string, stdin *os.File, stdout, stderr i
 // refreshReportEnv names the file fakeUsageRefresh reports to; without it the fake exits at once.
 const refreshReportEnv = "ORCH_BRIDGE_TEST_REFRESH_REPORT"
 
+const envDumpEnv = "ORCH_BRIDGE_TEST_ENV_DUMP"
+
 func TestMain(m *testing.M) {
+	if report := os.Getenv(envDumpEnv); report != "" && filepath.Base(os.Args[0]) == "claude" {
+		cwd, err := syscall.Getwd()
+		if err != nil {
+			os.Exit(1)
+		}
+		data := strings.Join(append(os.Environ(), "CWD="+cwd), "\n") + "\n"
+		if err := os.WriteFile(report, []byte(data), 0o600); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if run, isBridge := bridgeRuns[os.Getenv(runBridgeEnv)]; isBridge {
 		if len(os.Args) > 1 && os.Args[1] == "usage" {
 			os.Exit(fakeUsageRefresh(os.Args[1:]))
@@ -41,6 +54,44 @@ func TestMain(m *testing.M) {
 		os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
+}
+
+func TestRunClaudeChildPWDIsTheProject(t *testing.T) {
+	stale := t.TempDir()
+	t.Setenv("PWD", stale)
+	t.Setenv("CLAUDECODE", "1")
+	sb := newClaudeSandbox(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(sb.bin, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	report := filepath.Join(sb.home, "child-env")
+	cmd := sb.command("--prompt", "hello")
+	cmd.Env = append(cmd.Env, "PWD="+stale, envDumpEnv+"="+report)
+	// An eventless fake need not produce a successful bridge result; only its environment matters.
+	_ = exitCode(t, cmd.Run())
+	data, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pwd []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PWD=") {
+			pwd = append(pwd, line)
+		}
+		if strings.HasPrefix(line, "CLAUDECODE=") {
+			t.Errorf("nested Claude marker leaked: %s", line)
+		}
+	}
+	if len(pwd) != 1 || pwd[0] != "PWD="+sb.project {
+		t.Errorf("PWD entries = %q, want PWD=%s", pwd, sb.project)
+	}
+	if !strings.Contains(string(data), "CWD="+sb.project+"\n") {
+		t.Errorf("physical cwd missing from dump: %s", data)
+	}
 }
 
 // fakeUsageRefresh stands in for `orch usage --refresh`: it reports its argv, pid and process

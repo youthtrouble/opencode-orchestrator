@@ -2,6 +2,7 @@ package procs
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -14,6 +15,63 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/proctest"
 )
+
+func assertChildPWD(t *testing.T, output, dir string) {
+	t.Helper()
+	var entries []string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "PWD=") {
+			entries = append(entries, line)
+		}
+	}
+	if len(entries) != 1 || entries[0] != "PWD="+dir {
+		t.Errorf("child PWD entries = %q, want one PWD=%s", entries, dir)
+	}
+}
+
+func TestStartSetsPWDToDir(t *testing.T) {
+	stale := t.TempDir()
+	t.Setenv("PWD", stale)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, dir, want string
+		env             []string
+	}{
+		{"inherited", dir, dir, nil},
+		{"explicit", dir, dir, []string{"PWD=stale", "KEEP=1", "PWD=duplicate"}},
+		{"empty", "", stale, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			child, err := Start(Spec{Name: "/usr/bin/env", Dir: tc.dir, Env: tc.env, Stdout: &out, Grace: testGrace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, err := child.Wait()
+			if err != nil || code == nil || *code != 0 {
+				t.Fatalf("Wait = %v, %v", code, err)
+			}
+			assertChildPWD(t, out.String(), tc.want)
+			if tc.env != nil && !strings.Contains(out.String(), "KEEP=1\n") {
+				t.Error("lost explicit environment")
+			}
+		})
+	}
+	var out bytes.Buffer
+	child, err := Start(Spec{Name: script(t, "pwd -P"), Dir: dir, Stdout: &out, Grace: testGrace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := child.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out.String()) != dir {
+		t.Errorf("physical cwd = %q, want %s", out.String(), dir)
+	}
+}
 
 // testGrace is the Grace of children that are expected to finish on their own.
 const testGrace = 10 * time.Second

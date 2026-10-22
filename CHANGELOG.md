@@ -38,6 +38,11 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   `start` reports the kernel's holder; a lock file no process holds (a killed serve or runner)
   is claimed by the next serve, is no lane `stale_lock`, and no longer blocks a conductor
   relaunch; `remote apply`'s resume waits for a held supervisor lock.
+- children (owner follow-up b4ec00c4): every child orch starts in a directory (bridge CLIs,
+  worker runners, supervisor serves and relaunches, kickoff, remote CI `git`/`gh`) gets `PWD`
+  set to that directory instead of inheriting the parent's, so a supervisor started from another
+  checkout no longer makes OpenCode attach to it (PE-58). A supervisor started before this build
+  keeps its old environment: restart it from its project directory, or with `--cwd`.
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.

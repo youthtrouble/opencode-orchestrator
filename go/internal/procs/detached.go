@@ -48,8 +48,11 @@ func (d Detached) StartReaped() (int, error) {
 }
 
 func (d Detached) start() (*exec.Cmd, error) {
-	// Set explicitly: exec.Cmd rewrites PWD for a nil Env with a Dir, and Node does not.
-	env := os.Environ()
+	// An explicit Env stops exec.Cmd setting PWD; set it here, unlike Node (PE-58).
+	env, err := WithPWD(os.Environ(), d.Dir)
+	if err != nil {
+		return nil, err
+	}
 	path, err := resolve(d.Name, d.Dir, env)
 	if err != nil {
 		return nil, err

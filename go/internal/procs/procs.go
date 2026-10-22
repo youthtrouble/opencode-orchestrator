@@ -67,7 +67,7 @@ type Spec struct {
 	Name           string
 	Args           []string
 	Dir            string
-	Env            []string
+	Env            []string // Dir, when nonempty, replaces any PWD in Env (PE-58).
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
 	Grace          time.Duration
@@ -101,8 +101,12 @@ func Start(s Spec) (*Child, error) {
 	}
 	env := s.Env
 	if env == nil {
-		// Set explicitly: exec.Cmd rewrites PWD for a nil Env with a Dir, and Node does not.
 		env = os.Environ()
+	}
+	// An explicit Env stops exec.Cmd setting PWD; set it here, unlike Node (PE-58).
+	env, err := WithPWD(env, s.Dir)
+	if err != nil {
+		return nil, err
 	}
 	path, err := resolve(s.Name, s.Dir, env)
 	if err != nil {

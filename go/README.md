@@ -253,6 +253,10 @@ Files:
   `AbandonProcessGroup`) has not been tested: the end-to-end test runs `once` without launchd. If
   the supervisor dies with `serve`, the plist needs `AbandonProcessGroup`.
 
+The `claude-exec`, `codex-exec`, `opencode-exec`, `worker start` and `supervisor` rows above
+also differ from JS by PE-58: when setting a child's directory, orch replaces its `PWD`.
+References above to the whole inherited environment exclude that normalized `PWD`.
+
 ## Ownership primitive (S13a; not yet used by commands)
 
 `internal/ownlock` provides non-blocking `Acquire`, non-acquiring `Probe`, idempotent
@@ -1352,6 +1356,15 @@ The other documented differences, each asserted by its own parity case:
   pid-text lock files are claimed; a stale `conductor.lock` relaunches), `internal/remote/apply`
   and `internal/cli` tests, and the `supervisor` parity cases `serve/PE-30-unheld-live-pid-lock`,
   `serve/PE-30-unheld-lane-lock` and `start/PE-30-unheld-live-pid-lock` (the JS output pinned).
+
+- PE-58: every child orch starts in a directory (`--cwd`, a lane's or supervisor's project
+  root, or a bridge's `cwd`) gets one `PWD` set to that directory, replacing any inherited or
+  explicit `PWD`. Relative directories resolve against the physical cwd; other environment
+  entries, including claude's removal of `CLAUDECODE`, are preserved. The JS left the parent's
+  `PWD`, so a supervisor started from another checkout made a `$PWD`-trusting CLI (OpenCode)
+  attach to that checkout. Asserted by `TestWithPWD`, `TestStartSetsPWDToDir`,
+  `TestDetachedSetsPWDToDir`, ci's `TestRunSetsPWDToDir`, and
+  `TestRunClaudeChildPWDIsTheProject`; the process tests observe non-shell children.
 
 Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
 events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure
