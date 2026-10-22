@@ -7,7 +7,6 @@ runtime fixes into packaging or prompt rewrites into unrelated work.
 Run from the checkout:
 
 ```sh
-node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 bash -n install.sh uninstall.sh
 node -e 'JSON.parse(require("node:fs").readFileSync("orchestrator/models.json", "utf8"))'
@@ -15,8 +14,7 @@ node -e 'JSON.parse(require("node:fs").readFileSync("orchestrator/models.json", 
 (cd go && ./parity/run.sh)   # slow; builds go/bin/orch and diffs every command against the JS at go/parity/js-ref
 ```
 
-The first suite is the doctor's fast runtime check; the second is the isolated installer matrix and
-the plugin tests. Keep slow integration cases in root `tests/`. Use temporary HOME/XDG directories
+The Node suite is the isolated installer matrix and the plugin tests. Keep slow integration cases in root `tests/`. Use temporary HOME/XDG directories
 and command stubs: never test installation against a real user config. The Go lines need Go 1.25+;
 under a temporary HOME, export `GOCACHE` to one shared directory (e.g. `$TMPDIR/orch-gocache`).
 The Node code has no configured build or semantic typecheck task; report its syntax checks

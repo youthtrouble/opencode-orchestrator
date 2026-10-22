@@ -583,6 +583,20 @@
   (the conductor's session-heartbeat hooks included); the audit's smoke tests are `orch doctor`, `orch usage
   --refresh`, `orch codex-exec` and `orch claude-exec`, and a changed bridge flag is fixed in
   `go/internal/bridge/`. Wording is otherwise unchanged.
+- removed: the JS runtime. `orchestrator/bin/*.mjs` (claude-exec, codex-exec, doctor, flip, incident, kickoff,
+  mailbox, manifest, opencode-exec, policy, session, supervisor, usage, watch, worker), `orchestrator/lib/` (16
+  modules) and `orchestrator/tests/` (11 suites and a helper) are deleted; `orchestrator/` keeps `models.json`,
+  `README.md`, `CHANGELOG.md` and `bin/setup.sh`. Every command is `orch <cmd>`. Node is needed only by
+  `install.sh`, `uninstall.sh` and the tests.
+- install: after `opencode reload` the installer runs `orch doctor` (the binary it placed) instead of
+  `doctor.mjs`, and checks for `orchestrator/models.json` (`Release registry is missing; nothing changed.`)
+  instead of the doctor script. `--skip-binary` now means "use an existing orch": `ORCH_BIN` (an executable file;
+  nothing else is tried), else `~/.local/bin/orch`, else `PATH`, which must answer `orch version`, or the install
+  is refused before anything changes. The receipt still records no binary; the installer runs that orch's doctor
+  and prints `orch: <path> (existing; not managed by this install)`, with a note when its version differs from
+  the checkout's. `orchestrator/bin/setup.sh` runs `orch doctor` the same way (`ORCH_BIN`, `~/.local/bin/orch`,
+  `PATH`). **Upgrade:** after `git pull`, rebuild `orch` before `opencode reload`; replace any
+  `node ~/.config/opencode/orchestrator/bin/<name>.mjs` in your own scripts with `orch <name>`.
 
 ## 0.5.0 — 2026-10-19
 

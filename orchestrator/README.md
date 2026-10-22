@@ -451,8 +451,8 @@ with the process. Closing a laptop lid still sleeps the machine unless it runs i
 
 ## Install, update, uninstall and recovery
 
-**Requirements.** macOS or Linux, Bash 3.2+, Node 22+, Git, opencode v2, Claude Code and Codex on
-`PATH`, each logged in. Config and installer state on the same filesystem (atomic renames). The
+**Requirements.** macOS or Linux, Bash 3.2+, Node 22+ (for `install.sh`, `uninstall.sh` and the
+tests only; the runtime is `orch`), Git, opencode v2, Claude Code and Codex on `PATH`, each logged in. Config and installer state on the same filesystem (atomic renames). The
 runtime expects `~/.config/opencode`; a nondefault `XDG_CONFIG_HOME` is rejected. Optional: Go
 1.25+ to build `orch` locally. Release checks used macOS, Node v26.5.1, opencode v2.0.32, Claude
 Code 2.1.287 and codex-cli 0.162.1; Linux and Node 22 are supported assumptions, not exercised
@@ -466,11 +466,18 @@ managed entries instead (excluding history, dependencies, logs and runtime state
 symlinks inside them). Any existing target is refused without `--force`. Force does not merge: it
 moves the old target, with its custom config, runtime files and `node_modules`, into private backup
 storage. Stop opencode sessions, the background service, supervisors and workers first. The
-installer then runs `opencode reload` and the installed doctor; a reload or doctor failure exits
-nonzero and keeps the target, receipt and backup for recovery. `--no-reload` skips both (for
-hermetic tests and scripted installs) and says so; the receipt still becomes active although
-neither reload nor doctor ran, so run `opencode reload` and the doctor yourself afterwards.
-The `orch` binary step is described in [go/README.md](../go/README.md#install). A release download
+installer then runs `opencode reload` and `orch doctor` (the `orch` it placed, or the existing one
+with `--skip-binary`); a reload or doctor failure exits nonzero and keeps the target, receipt and
+backup for recovery. `--no-reload` skips both (for hermetic tests and scripted installs) and says
+so; the receipt still becomes active although neither reload nor doctor ran, so run
+`opencode reload` and `orch doctor` yourself afterwards.
+The `orch` binary step is described in [go/README.md](../go/README.md#install).
+`--skip-binary` places no binary and uses an existing `orch`: `ORCH_BIN` when set (it must be an
+executable file; nothing else is tried), else `~/.local/bin/orch`, else the first `orch` on `PATH`.
+It must answer `orch version`, or the install is refused before anything changes. The receipt
+records no binary, so uninstall leaves that `orch` in place. The installer prints
+`orch: <path> (existing; not managed by this install)`, plus a note when its version differs from
+the checkout's `go/internal/version/VERSION`. A release download
 gives up after 20 s without a connection, 60 s below 1 KiB/s or 15 min in total, and fails with
 `Download failed` and the usual recoverable state. The 15-minute cap holds even while bytes flow,
 so a healthy link slower than about 20 KB/s can hit it; build `orch` locally with Go instead, or
@@ -480,18 +487,18 @@ Installer state lives in `$XDG_STATE_HOME/opencode-orchestrator` (default
 `~/.local/state/opencode-orchestrator`), private (0700, receipts 0600); state inside the checkout or
 config is rejected. There is one active receipt at a time.
 
-**Update** (symlink install): pull in the checkout, run both test suites, rebuild `orch` beside the
-installed one and swap it in, reload, check health:
+**Update** (symlink install): `git pull` alone does not change what runs, because the plugin and
+every command go through the `orch` binary. Pull in the checkout, run the test suite, rebuild `orch`
+beside the installed one and swap it in, reload, check health:
 
 ```sh
 git pull
-node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 (cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
 mv ~/.local/bin/orch.new ~/.local/bin/orch
 orch version
 opencode reload
-node ~/.config/opencode/orchestrator/bin/doctor.mjs
+orch doctor
 ```
 
 The `mv` replaces the binary in one step, so nothing runs a half-written `orch`; `orch version` should
@@ -502,6 +509,11 @@ deploys the Worker before the rebuild; both are in the root README's
 
 Copy installs do not follow Git: uninstall, update the checkout, reinstall with `--copy` (and
 `--force` if the restored previous config occupies the target).
+
+**Upgrading from 0.5.0.** 0.6.0 deletes the JS runtime: the Node scripts in `orchestrator/bin`
+(only `setup.sh` stays), the libraries and their unit tests. After `git pull` every `node` command
+that ran one of those scripts is gone: use `orch <name>`. Rebuild `orch` with the Update lines before
+`opencode reload`. A 0.5.0 receipt still uninstalls.
 
 **Upgrading from 0.4.x.** A 0.4.x receipt has no `orch`, and a reinstall is not migrated. Either
 `./uninstall.sh` then `./install.sh`, so the receipt records the binary, or build `orch` by hand into
@@ -536,14 +548,16 @@ reconciling it. Do not delete an opaque backup because a command failed.
 ## Doctor, audit and troubleshooting
 
 ```sh
-node $ORCH/doctor.mjs
-node $ORCH/usage.mjs --refresh
+orch doctor
+orch usage --refresh
 ```
 
-The doctor checks binaries, logins and usage feeds, routing, config/plugin/agents, the fast unit
+The doctor checks binaries, logins and usage feeds, routing, config/plugin/agents, the Go unit
 tests and recent plugin errors. Its `orch binary` row runs `orch version` on `ORCH_BIN`, else
-`~/.local/bin/orch`, else the first `orch` on `PATH`, and only warns when none is found. Expect
-`OK` rows, including `OK unit tests — pass N`. `WARN` can mean unclear login or recent plugin
+`~/.local/bin/orch`, else the first `orch` on `PATH`, and only warns when none is found. Its
+`orch on PATH` row warns when no `orch` is on `PATH` (agent commands `orch ...` would fail) or when
+the one on `PATH` is not the running binary. Expect `OK` rows, including
+`OK unit tests — go test ./... passed`. `WARN` can mean unclear login or recent plugin
 errors; any `FAIL` exits nonzero. An all-OK doctor does not test a delegated model turn, install
 reversal or a long unattended run.
 
@@ -555,7 +569,8 @@ reversal or a long unattended run.
 | Routing paused | `/usage` and reset times; both vendors may be constrained |
 | Plugin/agents missing | Managed links, `opencode plugin list`, `opencode debug agents`, then `opencode reload` |
 | Installer refusal | Keep the receipt/backup, reconcile, follow [recovery](#install-update-uninstall-and-recovery) |
-| Doctor unit-test row fails | `node --test orchestrator/tests/*.test.mjs` in the checkout (the doctor has a 20 s limit) |
+| Doctor unit-test row fails | `(cd go && go test ./...)` in the checkout (the doctor has a 120 s limit) |
+| `orch on PATH` warns | Add the directory of the `orch` you run (default `~/.local/bin`) to `PATH`, or remove the other `orch` it names |
 | Codex bridge argument error | See [limitations](#tests-verification-and-limitations) |
 | `not an orchestrator project: <dir> has no .orchestrator/ directory` | A read or stop command (`mailbox list\|ack\|reply\|inbox`, `watch`, `flip status`, `flip gate --clear`, `worker status\|stop`, `supervisor status\|stop\|ack`) ran outside the project: `cd` there or pass `--cwd` (`--root` for the mailbox). Exit 2, nothing written |
 

@@ -359,12 +359,11 @@ accepted go-mode deviations are in [go/README.md](go/README.md#plugin-runtime).
 
 ## Updating
 
-`git pull` updates the symlinked JS, but `orch` is a binary built from the checkout and stays as it was until
+`git pull` updates the symlinked prompts and plugin, but `orch` is a binary built from the checkout and stays as it was until
 you rebuild it. Do not rerun `install.sh` for this: it refuses when `orch` already exists. In the checkout:
 
 ```sh
 git pull
-node --test orchestrator/tests/*.test.mjs
 node --test tests/*.test.mjs
 (cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
 mv ~/.local/bin/orch.new ~/.local/bin/orch

@@ -22,7 +22,7 @@ export const typescriptSupported = Boolean(process.features.typescript);
  * (green, green-stale, red, openai-headroom). Every file is a {usage, registry, channels, resolved,
  * prompt} document with channels {anthropic: false, openai: true} and orchestrator/models.json as
  * the registry. They were generated once with this harness's routingDocument (resolveRoles and
- * summarizeForPrompt from orchestrator/lib/routing.mjs at fb2b761, before the JS tree was deleted),
+ * summarizeForPrompt from lib/routing.mjs in the orchestrator/ tree of fb2b761, before the JS was deleted),
  * over the go/testdata/usage/parity-caches.json caches: green and red are those entries,
  * green-stale is green aged 10 minutes with `stale: true`, and openai-headroom pairs red's claude
  * with green's codex. Regenerating them later needs `orch routing --cached --json` on a host whose

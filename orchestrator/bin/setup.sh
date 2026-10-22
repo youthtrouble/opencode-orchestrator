@@ -19,6 +19,13 @@ echo
 echo "== 4. Reload opencode and run the doctor =="
 opencode service restart >/dev/null 2>&1 || true
 sleep 2
-node "$(dirname "$0")/doctor.mjs" || true
+orch=""
+if [[ -n ${ORCH_BIN:-} && -x $ORCH_BIN ]]; then orch=$ORCH_BIN
+elif [[ -x $HOME/.local/bin/orch ]]; then orch=$HOME/.local/bin/orch
+else orch=$(command -v orch || true)
+fi
+if [[ -n $orch ]]; then "$orch" doctor || true
+else echo "orch not found: run ./install.sh from the checkout"
+fi
 echo
 echo "Done. Start with:  opencode   (default agent: conductor)   then try  /usage  and  /plan <idea>"
