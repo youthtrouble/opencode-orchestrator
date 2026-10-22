@@ -146,6 +146,33 @@ test("one project past that is deferred to the next poll, and the first push end
   assert.notEqual(firstPushAt(app), null);
 });
 
+test("a debounced first-sync continuation keeps its retry's blocking question suppressed", async (t) => {
+  t.mock.method(console, "log", () => {});
+  const app = trainsApp({ queryLimit: QUERIES_PER_INVOCATION });
+  const projects = backlog({ projects: LARGEST_WHOLE_FIRST_PUSH + 1, questions: 0 }, 1);
+  const opening = await app.push(projects);
+  assert.equal(opening.status, 200);
+  assert.equal(opening.body!.projects.at(-1).result, "deferred");
+  assert.equal(firstPushAt(app), null);
+
+  const changed = { ...projects[0], snapshot_hash: snapshotHash(2, 0), questions: [question("continued-q")] };
+  app.at(30);
+  const continuation = await app.push([changed, projects.at(-1)!]);
+  assert.equal(continuation.status, 200);
+  assert.deepEqual(continuation.body!.projects.map((project: Json) => project.result), ["deferred", "accepted"]);
+  assert.equal(continuation.body!.projects[0].retry_after_seconds, 25);
+  assert.equal(firstPushAt(app), null, "a non-budget deferral also keeps the first-sync window open");
+
+  app.at(60);
+  const retried = await app.push([changed]);
+  assert.equal(retried.status, 200);
+  assert.equal(retried.body!.projects[0].result, "accepted");
+  assert.notEqual(firstPushAt(app), null, "the first sync completes when the deferred project lands");
+  assert.equal(countRows(app, "SELECT count(*) AS n FROM questions WHERE notify_state = 'suppressed'"), 1);
+  assert.deepEqual(app.notifier.sent, []);
+  assert.ok(app.budget.peak <= QUERIES_PER_INVOCATION);
+});
+
 // The notifier works from what D1 says is owed, not from what the push that landed it accepted, so a
 // project that landed in a push that then failed is still notified: by the next push that accepts.
 test("a blocking question that landed in a failed push is notified by the retry", async (t) => {

@@ -104,10 +104,10 @@ export function pushHandler(onPushAccepted: OnPushAccepted) {
     const projects: ProjectPushResult[] = [];
     for (const project of push.projects) projects.push(await pushProject(run, project));
     if (run.deferredForBudget > 0) console.log(JSON.stringify({ push: "query_budget", deferred: run.deferredForBudget }));
-    // Stamped only once every project has landed: a push that fails part-way, or defers projects for
-    // the query budget, is followed by another first push, so the rest of its backlog is still
-    // suppressed (plan D8).
-    if (isFirstPush && run.deferredForBudget === 0) await stampFirstPush(ctx, push.machine.id);
+    // Any deferral keeps the first-push window open, so a retry's backlog is still suppressed (plan D8).
+    if (isFirstPush && projects.every((project) => project.result !== "deferred")) {
+      await stampFirstPush(ctx, push.machine.id);
+    }
     if (run.accepted.length > 0) await onPushAccepted.run(ctx, run.accepted);
     return jsonResponse(200, { v: 1, server_time: ctx.now.toISOString(), projects });
   };
