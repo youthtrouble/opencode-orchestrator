@@ -25,8 +25,8 @@ func TestBudgetMapsTheCachedPostures(t *testing.T) {
 		t.Fatalf("Budget = %v, %v", budget, err)
 	}
 	got, _ := json.Marshal(budget)
-	want := `{"anthropic":{"level":"red","five_hour_pct":90,"weekly_pct":null,"resets_at":"2026-10-20T13:00:00.000Z"},` +
-		`"openai":{"level":"red","five_hour_pct":10,"weekly_pct":null,"resets_at":null}}`
+	want := `{"anthropic":{"level":"red","five_hour_pct":90,"weekly_pct":null,"resets_at":"2026-10-20T13:00:00.000Z","window":"five_hour"},` +
+		`"openai":{"level":"red","five_hour_pct":10,"weekly_pct":null,"resets_at":null,"window":"weekly"}}`
 	if string(got) != want {
 		t.Errorf("Budget = %s\nwant %s", got, want)
 	}
@@ -42,9 +42,29 @@ func TestBudgetCarriesTheOpenAICreditsFact(t *testing.T) {
 		t.Fatalf("Budget = %v, %v", budget, err)
 	}
 	got, _ := json.Marshal(budget)
-	want := `{"anthropic":{"level":"green","five_hour_pct":10,"weekly_pct":null,"resets_at":null},` +
-		`"openai":{"level":"red","five_hour_pct":88,"weekly_pct":100,"resets_at":null,` +
+	want := `{"anthropic":{"level":"green","five_hour_pct":10,"weekly_pct":null,"resets_at":null,"window":"five_hour"},` +
+		`"openai":{"level":"red","five_hour_pct":88,"weekly_pct":100,"resets_at":null,"window":"weekly",` +
 		`"credits":{"balance":"215.68","has_credits":true,"unlimited":false,"plan_limit_reached":true,"banked_resets":3}}}`
+	if string(got) != want {
+		t.Errorf("Budget = %s\nwant %s", got, want)
+	}
+}
+
+// The window that drives a vendor's level is the weekly one only once that is red (when both
+// are red, the weekly reset is the one that unblocks); an amber weekly window does not count.
+func TestBudgetNamesTheDrivingWindowAndBothResets(t *testing.T) {
+	file := writeUsage(t, `{"generated_at":"2026-10-20T11:31:00.000Z",
+		"claude":{"ok":true,"session":{"pct":20,"resets_at":"2026-10-20T13:00:00Z"},"weekly":{"pct":70,"resets_at":"2026-10-25T03:00:00Z"}},
+		"codex":{"ok":true,"five_hour":{"pct":95,"resets_at":"2026-10-20T14:00:00Z"},"weekly":{"pct":100,"resets_at":"2026-10-26T08:04:00Z"}}}`)
+	budget, err := Budget(testUsageConfig(t, file))
+	if err != nil || budget == nil {
+		t.Fatalf("Budget = %v, %v", budget, err)
+	}
+	got, _ := json.Marshal(budget)
+	want := `{"anthropic":{"level":"green","five_hour_pct":20,"weekly_pct":70,"resets_at":"2026-10-20T13:00:00.000Z",` +
+		`"weekly_resets_at":"2026-10-25T03:00:00.000Z","window":"five_hour"},` +
+		`"openai":{"level":"red","five_hour_pct":95,"weekly_pct":100,"resets_at":"2026-10-20T14:00:00.000Z",` +
+		`"weekly_resets_at":"2026-10-26T08:04:00.000Z","window":"weekly"}}`
 	if string(got) != want {
 		t.Errorf("Budget = %s\nwant %s", got, want)
 	}

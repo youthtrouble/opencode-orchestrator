@@ -115,40 +115,121 @@ test("a body past six lines or the character cap is clamped to a preview", () =>
   assert.ok(clamped.preview.endsWith("…"));
 });
 
-test("budget chips show each vendor's level and 5 h use, or unknown", () => {
-  const budget = {
-    anthropic: { level: "amber", five_hour_pct: 72.5, weekly_pct: 40, resets_at: null },
-    openai: { level: "green", five_hour_pct: null, weekly_pct: null, resets_at: null },
-  };
-  assert.deepEqual(
-    model.budgetChips(budget).map((chip: { text: string }) => chip.text),
-    ["anthropic amber 73%", "openai green"],
-  );
-  assert.deepEqual(
-    model.budgetChips(null).map((chip: { level: string }) => chip.level),
-    ["unknown", "unknown"],
-  );
+// Reset times are local clock times: every case pins the locale and the zone, never the machine's.
+const UTC_GB = { locale: "en-GB", timeZone: "UTC" };
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const inMs = (ms: number) => new Date(NOW + ms).toISOString();
+const IN_2H10 = inMs(2 * HOUR + 10 * MINUTE); // 14:10 UTC, NOW being Tue 20 Oct 12:00 UTC
+const MONDAY_0804 = "2026-10-26T08:04:00Z";
+
+test("a reset reads as relative within a day and as a local weekday and 24-hour time after it", () => {
+  const cases: [string, string][] = [
+    [inMs(-1000), "due"],
+    [inMs(0), "due"],
+    [inMs(30_000), "in < 1 min"],
+    [inMs(MINUTE), "in 1 min"],
+    [inMs(MINUTE + 1000), "in 2 min"],
+    [inMs(41 * MINUTE + 10_000), "in 42 min"],
+    [inMs(HOUR), "in 1 h"],
+    [inMs(2 * HOUR), "in 2 h"],
+    [IN_2H10, "in 2 h 10 min"],
+    [inMs(24 * HOUR - 1000), "in 24 h"],
+    [inMs(24 * HOUR), "Wed 12:00"],
+    [MONDAY_0804, "Mon 08:04"],
+    [inMs(6 * 24 * HOUR), "Mon 26 Oct 12:00"],
+    ["2026-11-02T08:04:00Z", "Mon 2 Nov 08:04"],
+  ];
+  for (const [resetsAt, phrase] of cases) assert.equal(model.resetPhrase(resetsAt, NOW, UTC_GB), phrase, resetsAt);
 });
 
-test("OpenAI credits get a chip of their own; the window chip keeps its level", () => {
-  const budget = {
-    anthropic: null,
-    openai: {
-      level: "red",
-      five_hour_pct: 88,
-      weekly_pct: 100,
-      resets_at: null,
-      credits: { balance: "215.68", has_credits: true, unlimited: false, plan_limit_reached: true, banked_resets: 3 },
-    },
-  };
-  assert.deepEqual(
-    model.budgetChips(budget).map((chip: { level: string; text: string }) => [chip.level, chip.text]),
-    [
-      ["unknown", "anthropic unknown"],
-      ["red", "openai red 88%"],
-      ["credits", "openai credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money)"],
-    ],
-  );
+test("a reset's clock time is the viewer's zone, 24-hour even where the locale's own clock is 12-hour", () => {
+  assert.equal(model.resetPhrase(MONDAY_0804, NOW, { locale: "en-US", timeZone: "America/Los_Angeles" }), "Mon 01:04");
+  assert.equal(model.resetPhrase("2026-10-21T23:30:00Z", NOW, { locale: "en-GB", timeZone: "Asia/Tokyo" }), "Thu 08:30");
+});
+
+type Chip = { vendor: string; level: string; text: string; detail: string[] };
+const chipsOf = (budget: unknown): Chip[] => model.budgetChips(budget, NOW, UTC_GB);
+
+test("with no budget, or a vendor the Mac could not read, a chip says there is no reading", () => {
+  const unread = { level: "unknown", five_hour_pct: null, weekly_pct: null, resets_at: null, window: "five_hour" };
+  for (const budget of [null, { anthropic: null, openai: null }, { anthropic: unread, openai: unread }]) {
+    assert.deepEqual(chipsOf(budget), [
+      { vendor: "anthropic", level: "unknown", text: "Anthropic · no reading", detail: ["No recent budget reading from the Mac"] },
+      { vendor: "openai", level: "unknown", text: "OpenAI · no reading", detail: ["No recent budget reading from the Mac"] },
+    ]);
+  }
+});
+
+test("a chip reads the 5-hour window when it drives the level, and opens to both windows", () => {
+  const [anthropic] = chipsOf({
+    anthropic: { level: "green", five_hour_pct: 28, weekly_pct: 41, resets_at: IN_2H10, weekly_resets_at: MONDAY_0804, window: "five_hour" },
+    openai: null,
+  });
+  assert.deepEqual(anthropic, {
+    vendor: "anthropic",
+    level: "green",
+    text: "Anthropic 28% · resets in 2 h 10 min",
+    detail: ["5-hour 28% · resets 14:10 (in 2 h 10 min)", "Weekly 41% · resets Mon 08:04"],
+  });
+});
+
+test("a Mac that sends no window or weekly reset is read as the 5-hour window", () => {
+  const [anthropic] = chipsOf({
+    anthropic: { level: "red", five_hour_pct: 72.5, weekly_pct: 100, resets_at: IN_2H10 },
+    openai: null,
+  });
+  assert.equal(anthropic.text, "Anthropic 73% · resets in 2 h 10 min");
+  assert.deepEqual(anthropic.detail, ["5-hour 73% · resets 14:10 (in 2 h 10 min)", "Weekly 100%"]);
+});
+
+test("a chip reads the weekly window when the Mac says it drives the level (weekly red, or both red)", () => {
+  for (const fiveHourPct of [64, 95]) {
+    const [, openai] = chipsOf({
+      anthropic: null,
+      openai: { level: "red", five_hour_pct: fiveHourPct, weekly_pct: 100, resets_at: IN_2H10, weekly_resets_at: MONDAY_0804, window: "weekly" },
+    });
+    assert.equal(openai.level, "red");
+    assert.equal(openai.text, "OpenAI weekly 100% · resets Mon 08:04");
+    assert.deepEqual(openai.detail, [`5-hour ${fiveHourPct}% · resets 14:10 (in 2 h 10 min)`, "Weekly 100% · resets Mon 08:04"]);
+  }
+});
+
+test("a reset already past reads as due, and a window without a reset or percentage says only what it has", () => {
+  const [anthropic, openai] = chipsOf({
+    anthropic: { level: "red", five_hour_pct: 90, weekly_pct: null, resets_at: inMs(-5 * MINUTE), window: "five_hour" },
+    openai: { level: "amber", five_hour_pct: null, weekly_pct: 70, resets_at: null, window: "five_hour" },
+  });
+  assert.equal(anthropic.text, "Anthropic 90% · resets due");
+  assert.deepEqual(anthropic.detail, ["5-hour 90% · resets due", "Weekly"]);
+  assert.equal(openai.text, "OpenAI");
+  assert.deepEqual(openai.detail, ["5-hour", "Weekly 70%"]);
+});
+
+test("OpenAI credits show on its chip as a balance or unlimited, and in full when it opens", () => {
+  const credits = (fields: object) => ({
+    balance: "195.62",
+    has_credits: true,
+    unlimited: false,
+    plan_limit_reached: true,
+    banked_resets: 2,
+    ...fields,
+  });
+  const openaiWith = (extra: object) =>
+    chipsOf({
+      anthropic: null,
+      openai: { level: "red", five_hour_pct: 64, weekly_pct: 100, resets_at: null, weekly_resets_at: MONDAY_0804, window: "weekly", ...extra },
+    })[1];
+  const present = openaiWith({ credits: credits({}) });
+  assert.equal(present.text, "OpenAI weekly 100% · resets Mon 08:04 · credits 195.62");
+  assert.equal(present.detail.at(-1), "credits 195.62 left; plan limit reached; 2 banked resets (window resets, not money)");
+  assert.equal(openaiWith({ credits: credits({ unlimited: true, balance: null }) }).text, "OpenAI weekly 100% · resets Mon 08:04 · credits unlimited");
+  const spent = openaiWith({ credits: credits({ has_credits: false, balance: null, banked_resets: 0 }) });
+  assert.equal(spent.text, "OpenAI weekly 100% · resets Mon 08:04");
+  assert.equal(spent.detail.at(-1), "no credits; plan limit reached");
+  const absent = openaiWith({});
+  assert.equal(absent.text, "OpenAI weekly 100% · resets Mon 08:04");
+  assert.deepEqual(absent.detail, ["5-hour 64%", "Weekly 100% · resets Mon 08:04"]);
 });
 
 test("Resume is offered for a paused project and Pause otherwise", () => {

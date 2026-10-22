@@ -41,6 +41,9 @@ const DEVICES: readonly Device[] = [
   { name: "desktop", width: 1280, height: 900, mobile: false },
 ];
 const DEVICE_SCALE_FACTOR = 2;
+/** The zone and locale every shot renders reset times in (the owner's), whatever the host's. */
+const SHOT_TIME_ZONE = "Europe/London";
+const SHOT_LOCALE = "en-GB";
 
 const CHROME_START_TIMEOUT_MS = 15_000;
 /** How long Chrome gets to exit after SIGTERM before it is SIGKILLed. */
@@ -50,6 +53,8 @@ const PAGE_READY_TIMEOUT_MS = 10_000;
 const PAGE_READY_POLL_MS = 100;
 /** The page's header text until its first summary renders (remote/worker/public/index.html). */
 const LOADING_TEXT = "Loading…";
+/** Resolves after two animation frames: a render has been laid out and painted, not just put in the DOM. */
+const NEXT_PAINT = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))";
 /** Exit codes for a run stopped by a signal, as a shell reports them (128 + signal number). */
 const SIGNAL_EXIT_CODES = { SIGINT: 130, SIGTERM: 143 } as const;
 
@@ -107,10 +112,11 @@ async function main(): Promise<void> {
     const tab = await browser.openTab();
     const foreignRequests = await watchForeignRequests(tab, fixtureServer.origin);
     const shots: { file: string; png: Buffer }[] = [];
-    for (const [state, fixture] of Object.entries(SCREEN_STATES)) {
+    await pinLocaleAndTimeZone(tab);
+    for (const [state, { fixture, click }] of Object.entries(SCREEN_STATES)) {
       fixtureServer.serve(fixture);
       for (const device of DEVICES) {
-        shots.push({ file: join(out, `${state}-${device.name}.png`), png: await shoot(tab, `${fixtureServer.origin}/`, device) });
+        shots.push({ file: join(out, `${state}-${device.name}.png`), png: await shoot(tab, `${fixtureServer.origin}/`, device, click) });
       }
     }
     // Checked before anything is written, so a run that left loopback leaves no shots behind. The output
@@ -155,7 +161,7 @@ function findChrome(): string {
 function validateFixtures(): void {
   const validate = compileSchema(JSON.parse(readFileSync(SCHEMA_URL, "utf8")));
   const nowMs = Date.now();
-  const failures = Object.entries(SCREEN_STATES).flatMap(([state, fixture]) => {
+  const failures = Object.entries(SCREEN_STATES).flatMap(([state, { fixture }]) => {
     const result = validate("Summary", fixture(nowMs));
     return result.ok ? [] : result.errors.map(({ path, message }) => `${state}: ${path || "/"} ${message}`);
   });
@@ -410,8 +416,17 @@ async function watchForeignRequests(tab: Tab, origin: string): Promise<string[]>
   return foreign;
 }
 
-/** Loads the page at the device's size, in light mode, and returns a PNG of its viewport once the first summary renders. */
-async function shoot(tab: Tab, url: string, device: Device): Promise<Buffer> {
+/** The page shows reset times in the viewer's zone and locale; pinned so a shot does not depend on the host's. */
+async function pinLocaleAndTimeZone(tab: Tab): Promise<void> {
+  await tab.send("Emulation.setLocaleOverride", { locale: SHOT_LOCALE });
+  await tab.send("Emulation.setTimezoneOverride", { timezoneId: SHOT_TIME_ZONE });
+}
+
+/**
+ * Loads the page at the device's size, in light mode, and returns a PNG of its viewport once the first
+ * summary renders (and, given `click`, once that control is clicked and the page has painted again).
+ */
+async function shoot(tab: Tab, url: string, device: Device, click?: string): Promise<Buffer> {
   await tab.send("Emulation.setDeviceMetricsOverride", {
     width: device.width,
     height: device.height,
@@ -423,6 +438,10 @@ async function shoot(tab: Tab, url: string, device: Device): Promise<Buffer> {
   const { errorText } = await tab.send<{ errorText?: string }>("Page.navigate", { url });
   if (errorText) throw new ScreensError(`cannot load ${url}: ${errorText}`);
   await waitForFirstRender(tab);
+  if (click !== undefined) {
+    await evaluate(tab, `document.querySelector(${JSON.stringify(click)}).click()`);
+    await evaluate(tab, NEXT_PAINT);
+  }
   const { data } = await tab.send<{ data: string }>("Page.captureScreenshot", { format: "png" });
   return Buffer.from(data, "base64");
 }
@@ -432,8 +451,7 @@ async function waitForFirstRender(tab: Tab): Promise<void> {
   const deadline = Date.now() + PAGE_READY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if ((await evaluate(tab, rendered)) === true) {
-      // Two animation frames: the render has been laid out and painted, not just put in the DOM.
-      await evaluate(tab, "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
+      await evaluate(tab, NEXT_PAINT);
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, PAGE_READY_POLL_MS));

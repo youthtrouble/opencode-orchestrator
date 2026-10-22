@@ -368,6 +368,12 @@ never reaches the Mac). An answer, pause or resume can be undone for 10 seconds 
 cannot start runs, run commands, read files or change code. It is macOS-only and self-hosted: you deploy the Worker
 to your own Cloudflare account.
 
+Each vendor's budget chip shows the window that sets its colour (the 5-hour one, unless the weekly one is red) and
+when it resets, in your phone's time zone and 24-hour time: relative within a day, else the weekday:
+`Anthropic 28% · resets in 2 h 10 min`, `OpenAI weekly 100% · resets Mon 08:04 · credits 195.62` (credits only when
+Codex reports them). Tap a chip for both windows with clock and relative times, `5-hour 28% · resets 22:50 (in 2 h
+10 min)`, and the credits in full. `· no reading` means the Mac has no reading of that vendor from the last 30 minutes.
+
 ```text
   Mac: orch remote serve (LaunchAgent)            phone: browser
         |  push snapshots, pull answers                 |  one-time PIN login

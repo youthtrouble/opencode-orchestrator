@@ -1,0 +1,11 @@
+{
+  "def": "Posture",
+  "value": {
+    "level": "green",
+    "five_hour_pct": 28,
+    "weekly_pct": 41,
+    "resets_at": "2026-10-20T14:00:00Z",
+    "window": "daily"
+  },
+  "expect_path": "/window"
+}

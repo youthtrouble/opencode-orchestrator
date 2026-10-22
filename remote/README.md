@@ -338,8 +338,9 @@ node remote/e2e/screens.ts --out remote/docs/design/after [--chrome <path>]
 
 It serves `worker/public/` and fixture summaries (`e2e/screens/fixtures.ts`, fake projects only, each checked
 against the protocol's `Summary` first) on loopback with the Worker's security headers, drives headless Chrome
-over the DevTools protocol, and writes `<state>-<phone|desktop>.png` for the states `needs-you`, `calm`,
-`stale-mac`, `failed-ci-paused`, `budget-credits` and `action-question` (`docs/design/before/` is the page before the WT22 redesign,
+over the DevTools protocol (in Europe/London time and the en-GB locale, so reset times do not depend on the
+host), and writes `<state>-<phone|desktop>.png` for the states `needs-you`, `calm`,
+`stale-mac`, `failed-ci-paused`, `budget-credits`, `budget-expanded` (OpenAI's budget chip opened) and `action-question` (`docs/design/before/` is the page before the WT22 redesign,
 `docs/design/after/` the page now; phone 390x844, desktop 1280x900, both at 2x, light mode). It fails if a
 fixture is not a valid `Summary`. Chrome runs with its background services off and a proxy that refuses every
 connection off loopback, so such a request fails instead of leaving the machine; if the page's tab requests

@@ -4,6 +4,7 @@
     "level": "unknown",
     "five_hour_pct": null,
     "weekly_pct": null,
-    "resets_at": null
+    "resets_at": null,
+    "window": "five_hour"
   }
 }

@@ -146,7 +146,9 @@ lane, `sessions/*.json`, the mailbox) and the cached usage file (never collected
   `incident.Redact` then replaces the home directory, user paths, emails, tokens, uuids and
   session ids.
 - `budget`: both vendors' postures from the cached usage reading and the registry's thresholds;
-  `null` when there is no cache or it is more than 30 minutes old. It runs no program: unlike
+  `null` when there is no cache or it is more than 30 minutes old. Each posture carries both
+  windows' resets (`resets_at` for the 5-hour one, `weekly_resets_at`) and `window`, the one that
+  drives its level: `weekly` when the weekly window is red, else `five_hour`. It runs no program: unlike
   `orch routing`, it does not detect opencode's channels (`sqlite3`, `opencode auth list`).
 
 The sync loop (`once` runs one cycle; `serve` repeats them):

@@ -5,9 +5,16 @@ import type { Json } from "../phone.ts";
 
 export type Fixture = (nowMs: number) => Json;
 
+/** A state to shoot: its summary, and optionally a control to click once it renders (a CSS selector). */
+export interface ScreenState {
+  fixture: Fixture;
+  click?: string;
+}
+
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 const UNDO_SECONDS = 10;
 
 const iso = (ms: number): string => new Date(ms).toISOString();
@@ -29,14 +36,23 @@ function summary(nowMs: number, { lastPullAgoMs, budget, projects }: { lastPullA
   };
 }
 
+/** A posture whose 5-hour window resets in 2 h 10 min and weekly one in 4 days; the 5-hour window drives it. */
 function posture(level: string, fiveHourPct: number, weeklyPct: number, nowMs: number): Json {
-  return { level, five_hour_pct: fiveHourPct, weekly_pct: weeklyPct, resets_at: iso(nowMs + 2 * HOUR + 10 * MINUTE) };
+  return {
+    level,
+    five_hour_pct: fiveHourPct,
+    weekly_pct: weeklyPct,
+    resets_at: iso(nowMs + 2 * HOUR + 10 * MINUTE),
+    weekly_resets_at: iso(nowMs + 4 * DAY + 3 * HOUR),
+    window: "five_hour",
+  };
 }
 
-/** OpenAI at its weekly limit and drawing on ChatGPT credits. */
+/** OpenAI at its weekly limit, so the weekly window drives it, and drawing on ChatGPT credits. */
 function openaiOnCredits(nowMs: number): Json {
   return {
     ...posture("red", 64, 100, nowMs),
+    window: "weekly",
     credits: { balance: "195.62", has_credits: true, unlimited: false, plan_limit_reached: true, banked_resets: 2 },
   };
 }
@@ -296,11 +312,13 @@ const actionQuestion: Fixture = (nowMs) =>
   });
 
 /** The states the script shoots, by the name its PNGs carry. */
-export const SCREEN_STATES: Readonly<Record<string, Fixture>> = {
-  "needs-you": needsYou,
-  calm,
-  "stale-mac": staleMac,
-  "failed-ci-paused": failedCiPaused,
-  "budget-credits": budgetCredits,
-  "action-question": actionQuestion,
+export const SCREEN_STATES: Readonly<Record<string, ScreenState>> = {
+  "needs-you": { fixture: needsYou },
+  calm: { fixture: calm },
+  "stale-mac": { fixture: staleMac },
+  "failed-ci-paused": { fixture: failedCiPaused },
+  "budget-credits": { fixture: budgetCredits },
+  // The same budget with OpenAI's chip open: both windows' resets and the credits in full.
+  "budget-expanded": { fixture: budgetCredits, click: '[data-focus="budget:openai"]' },
+  "action-question": { fixture: actionQuestion },
 };

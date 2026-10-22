@@ -1,0 +1,9 @@
+{
+  "def": "Posture",
+  "value": {
+    "level": "amber",
+    "five_hour_pct": 72.5,
+    "weekly_pct": 40,
+    "resets_at": "2026-10-20T14:00:00Z"
+  }
+}

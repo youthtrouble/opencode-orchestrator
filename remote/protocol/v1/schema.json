@@ -67,6 +67,17 @@
         "resets_at": {
           "$ref": "#/$defs/NullableIso"
         },
+        "weekly_resets_at": {
+          "description": "Optional: when the weekly window resets. Absent from a Mac that predates it, or when the reading has no weekly reset.",
+          "$ref": "#/$defs/NullableIso"
+        },
+        "window": {
+          "description": "Optional: the window that drives level. weekly once the weekly window is red (its reset is the one that unblocks), else five_hour. Absent from a Mac that predates it; read absent as five_hour.",
+          "enum": [
+            "five_hour",
+            "weekly"
+          ]
+        },
         "credits": {
           "description": "Optional, OpenAI only: ChatGPT credits Codex spends once the plan limit is reached, and banked window resets (promotional resets of the usage window, not money). Absent when Codex reported neither. has_credits, unlimited and balance are null when it reported no credits object.",
           "type": "object",

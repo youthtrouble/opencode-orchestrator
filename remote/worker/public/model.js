@@ -44,22 +44,117 @@ export function macSeen(machine, nowMs) {
   return { label: relativeTime(lastPullAt, nowMs), stale: nowMs - Date.parse(lastPullAt) > STALE_AFTER_MS };
 }
 
+const VENDOR_LABELS = { anthropic: "Anthropic", openai: "OpenAI" };
+const MINUTE_MS = 60 * 1000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
+/** From this far ahead a reset also names its date, so a weekday a week away is never ambiguous. */
+const DATED_RESET_MS = 6 * DAY_MS;
+
 /**
- * One chip per vendor: "anthropic amber 72%", or "openai unknown" when the Mac sent nothing.
- * OpenAI credits, when reported, get a chip of their own: they are a separate fact from the
- * window's level, and banked resets are window resets, not money.
+ * One chip per vendor, read from the window that drives its level (the Mac's `window`; a Mac that
+ * predates it is read as the 5-hour one): "Anthropic 28% · resets in 2 h 10 min", "OpenAI weekly 100% ·
+ * resets Mon 08:04 · credits 195.62". `detail` holds the lines the open chip shows: both windows, with
+ * the clock time and the relative time, and the credits in full. `format` ({ locale, timeZone }) is
+ * left empty by the page, for the viewer's own; times are always 24-hour.
  */
-export function budgetChips(budget) {
-  const chips = ["anthropic", "openai"].map((vendor) => {
+export function budgetChips(budget, nowMs, format = {}) {
+  return Object.entries(VENDOR_LABELS).map(([vendor, label]) => {
     const posture = budget?.[vendor] ?? null;
     const level = posture?.level ?? "unknown";
-    const pct = posture?.five_hour_pct ?? null;
-    const text = pct === null ? `${vendor} ${level}` : `${vendor} ${level} ${Math.round(pct)}%`;
-    return { vendor, level, text };
+    if (!hasReading(posture)) {
+      return { vendor, level, text: `${label} · no reading`, detail: ["No recent budget reading from the Mac"] };
+    }
+    return { vendor, level, text: chipText(label, posture, nowMs, format), detail: chipDetail(posture, nowMs, format) };
   });
-  const credits = budget?.openai?.credits;
-  if (credits) chips.push({ vendor: "openai", level: "credits", text: `openai ${creditsText(credits)}` });
-  return chips;
+}
+
+/** A posture of level unknown with no percentage says nothing (the vendor's usage was unavailable). */
+function hasReading(posture) {
+  if (posture === null) return false;
+  return posture.level !== "unknown" || posture.five_hour_pct !== null || posture.weekly_pct !== null;
+}
+
+function chipText(label, posture, nowMs, format) {
+  const weekly = posture.window === "weekly";
+  const pct = weekly ? posture.weekly_pct : posture.five_hour_pct;
+  const resetsAt = weekly ? (posture.weekly_resets_at ?? null) : posture.resets_at;
+  const parts = [`${label}${weekly ? " weekly" : ""}${pct === null ? "" : ` ${Math.round(pct)}%`}`];
+  if (resetsAt !== null) parts.push(`resets ${resetPhrase(resetsAt, nowMs, format)}`);
+  const credits = posture.credits ? creditsShort(posture.credits) : null;
+  if (credits !== null) parts.push(credits);
+  return parts.join(" · ");
+}
+
+function chipDetail(posture, nowMs, format) {
+  const lines = [
+    windowLine("5-hour", posture.five_hour_pct, posture.resets_at, nowMs, format),
+    windowLine("Weekly", posture.weekly_pct, posture.weekly_resets_at ?? null, nowMs, format),
+  ];
+  const credits = posture.credits ? creditsText(posture.credits) : "";
+  if (credits !== "") lines.push(credits);
+  return lines;
+}
+
+/** "5-hour 28% · resets 22:50 (in 2 h 10 min)", "Weekly 41% · resets Mon 08:04". */
+function windowLine(name, pct, resetsAt, nowMs, format) {
+  const parts = [pct === null ? name : `${name} ${Math.round(pct)}%`];
+  if (resetsAt !== null) {
+    const { relative, clock } = resetWhen(resetsAt, nowMs, format);
+    parts.push(`resets ${relative === null || clock === null ? (relative ?? clock) : `${clock} (${relative})`}`);
+  }
+  return parts.join(" · ");
+}
+
+/**
+ * When a window resets, as its chip says it: "due" once past (the Mac's reading may be 30 min old),
+ * "in < 1 min", "in 42 min", "in 2 h 10 min" within a day (minutes rounded up, so never "in 0 min"),
+ * then the local weekday and time, "Mon 08:04", with the date from six days on, "Mon 27 Oct 08:04".
+ */
+export function resetPhrase(resetsAtIso, nowMs, format = {}) {
+  const { relative, clock } = resetWhen(resetsAtIso, nowMs, format);
+  return relative ?? clock;
+}
+
+/** The relative phrase (within a day) and the local clock time (null once due). */
+function resetWhen(resetsAtIso, nowMs, format) {
+  const at = new Date(resetsAtIso);
+  const deltaMs = at.getTime() - nowMs;
+  if (deltaMs <= 0) return { relative: "due", clock: null };
+  if (deltaMs < MINUTE_MS) return { relative: "in < 1 min", clock: clockTime(at, format) };
+  if (deltaMs < DAY_MS) {
+    return { relative: `in ${hoursAndMinutes(Math.ceil(deltaMs / MINUTE_MS))}`, clock: clockTime(at, format) };
+  }
+  return { relative: null, clock: dayAndTime(at, deltaMs >= DATED_RESET_MS, format) };
+}
+
+/** "Mon 08:04", or with the date "Mon 27 Oct 08:04" (day and month in the locale's order). */
+function dayAndTime(at, withDate, format) {
+  const weekday = localDate(at, { weekday: "short" }, format);
+  const date = withDate ? [localDate(at, { day: "numeric", month: "short" }, format)] : [];
+  return [weekday, ...date, clockTime(at, format)].join(" ");
+}
+
+function hoursAndMinutes(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes} min`;
+  return minutes === 0 ? `${hours} h` : `${hours} h ${minutes} min`;
+}
+
+/** 24-hour "08:04", whatever the locale's own clock (the owner's choice). */
+function clockTime(at, format) {
+  return localDate(at, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }, format);
+}
+
+function localDate(at, fields, { locale, timeZone }) {
+  return new Intl.DateTimeFormat(locale, { ...fields, timeZone }).format(at);
+}
+
+/** The chip's credits: the balance, or unlimited; nothing when there is no balance to spend. */
+function creditsShort(credits) {
+  if (credits.unlimited) return "credits unlimited";
+  if (!credits.has_credits) return null;
+  return credits.balance === null ? "credits available" : `credits ${credits.balance}`;
 }
 
 /** "credits 215.68 left; plan limit reached; 3 banked resets (window resets, not money)", as orch prints it. */

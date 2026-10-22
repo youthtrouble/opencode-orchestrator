@@ -20,6 +20,8 @@ const page = {
   openMenus: new Set(),
   /** Projects whose "Recent events" are open, so the open list survives the next poll's re-render. */
   openEvents: new Set(),
+  /** Vendors whose budget chip is open, so its detail survives the next poll's re-render. */
+  openBudget: new Set(),
   /** One keyed write per question or project, sending or unconfirmed (model.writeToSend). */
   writes: new Map(),
   /** Undo requests in flight, by answer or action id. */
@@ -272,9 +274,30 @@ function renderHeader(summary) {
     `Mac seen ${seen.label}`,
     seen.stale ? el("span", { class: "badge badge-stale" }, "stale") : null,
   );
-  setChildren(
-    $("budget"),
-    ...model.budgetChips(summary.budget).map((chip) => el("li", { class: `chip level-${chip.level}` }, chip.text)),
+  setChildren($("budget"), ...model.budgetChips(summary.budget, nowOnServer()).map(budgetChip));
+}
+
+/** A chip that opens to both windows' resets; the level word is for screen readers, as colour alone says nothing. */
+function budgetChip(chip) {
+  const open = page.openBudget.has(chip.vendor);
+  const detailId = `budget-${chip.vendor}`;
+  return el(
+    "li",
+    {},
+    el(
+      "button",
+      {
+        type: "button",
+        class: `chip level-${chip.level}`,
+        "aria-expanded": String(open),
+        "aria-controls": detailId,
+        "data-focus": `budget:${chip.vendor}`,
+        onclick: () => toggle(page.openBudget, chip.vendor),
+      },
+      chip.text,
+      el("span", { class: "vh" }, ` (${chip.level})`),
+    ),
+    el("div", { class: "chip-detail", id: detailId, hidden: !open }, ...chip.detail.map((line) => el("p", {}, line))),
   );
 }
 

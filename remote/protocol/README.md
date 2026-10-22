@@ -55,13 +55,20 @@ Where a browser payload repeats a field of another payload, it refers to that fi
   field until the schema, the Worker that imports it and the Go structs all declare it.
 - Optional fields added within v1: `Posture.credits` (OpenAI only: ChatGPT credits and banked window resets);
   `Question.ask` and the summary question's `ask` (WT25: `"action"` for steps the owner must do, which carry no
-  recommendation; absent for a decision). Go marks an optional field `omitempty`, so it leaves it out when unset and
+  recommendation; absent for a decision); `Posture.weekly_resets_at` and `Posture.window` (WT22-C: the weekly
+  window's reset, and the window that drives `level`, `"weekly"` when the weekly window is red, else
+  `"five_hour"`; a reader treats an absent `window` as `"five_hour"`). Go marks an optional field `omitempty`, so it leaves it out when unset and
   its decoder accepts it absent.
 - `Question.ask` rollout: a Worker built before it rejects a push that carries it (`additionalProperties: false`), so
   deploy the Worker (with its migration `0003_questions_ask.sql`) before an orch that sends it. An older Worker answers
   a push that holds an action question with 400 `invalid_request` and stores none of its projects. An action question
   carries no recommendation, so the Worker refuses an accept of it (`this question has no recommendation; reply
   instead`).
+
+- `Posture.weekly_resets_at` and `Posture.window` rollout: a Worker built before them rejects a push that carries
+  them with 400 `invalid_request` (`additionalProperties: false`) and stores none of its projects, and every push
+  carries the budget. Deploy the Worker first, then rebuild `orch`. Until the rebuild the page reads every chip
+  from the 5-hour window and shows no weekly reset.
 
 ## Accept answers
 

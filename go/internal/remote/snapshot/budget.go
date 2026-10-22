@@ -76,12 +76,25 @@ func postureOf(posture routing.VendorPosture, fiveHourWindow string) *wire.Postu
 		level = routing.Unknown
 	}
 	resetsAt, _ := parseTime(jsjson.Path(posture.Detail, fiveHourWindow, "resets_at"))
+	weeklyResetsAt, _ := parseTime(jsjson.Path(posture.Detail, "weekly", "resets_at"))
 	return &wire.Posture{
-		Level:       level,
-		FiveHourPct: percentage(jsjson.Path(posture.Detail, fiveHourWindow, "pct")),
-		WeeklyPct:   percentage(jsjson.Path(posture.Detail, "weekly", "pct")),
-		ResetsAt:    isoOrNull(resetsAt),
+		Level:          level,
+		FiveHourPct:    percentage(jsjson.Path(posture.Detail, fiveHourWindow, "pct")),
+		WeeklyPct:      percentage(jsjson.Path(posture.Detail, "weekly", "pct")),
+		ResetsAt:       isoOrNull(resetsAt),
+		WeeklyResetsAt: isoOrNull(weeklyResetsAt),
+		Window:         drivingWindow(posture),
 	}
+}
+
+// drivingWindow names the window whose reset lifts the vendor's level. The weekly window counts
+// toward the level only once it is red (routing's weeklyBlock), and when both are red its reset
+// is the one that unblocks the vendor; otherwise, and when nothing is known, it is the 5-hour one.
+func drivingWindow(posture routing.VendorPosture) string {
+	if weekly, ok := posture.Window("weekly"); ok && weekly == routing.Red {
+		return wire.WindowWeekly
+	}
+	return wire.WindowFiveHour
 }
 
 // percentage is a used percentage the schema accepts (a number in 0..100), else nil.

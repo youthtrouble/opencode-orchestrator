@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- remote: the Work Trains budget chips show when each vendor resets (WT22-C). A chip reads the window that sets its
+  colour, the 5-hour one unless the weekly one is red: `Anthropic 28% · resets in 2 h 10 min`, `OpenAI weekly 100% ·
+  resets Mon 08:04 · credits 195.62`. Times are the viewer's time zone, 24-hour, relative within a day, then weekday
+  and time (with the date from six days out); a passed reset reads "resets due". Tapping a chip opens both windows,
+  `5-hour 28% · resets 22:50 (in 2 h 10 min)` and `Weekly 41% · resets Mon 08:04`, with the credits in full (they no
+  longer have a chip of their own); it stays open across the 15 s refresh. Chips are neutral pills whose dot carries
+  the level, with the level in words for screen readers, and stack full width on a phone. The v1 protocol's
+  `Posture` gains two optional fields, `weekly_resets_at` and `window`, which `orch remote` now sends. **Rollout:**
+  deploy the Worker first, then rebuild `orch`: an older Worker answers a push that carries them with 400 and stores
+  nothing. Until the rebuild the page falls back to the 5-hour window. Shots, with the new `budget-expanded` state:
+  `remote/docs/design/after/`; `screens.ts` pins Europe/London and en-GB.
 - remote: the Work Trains page is restyled, light only (WT22-B): a warm off-white ground, one accent for Accept,
   Send, Retry, links and the focus ring, and colour only for status (a dot and a word on a tint per project, the
   progress bar in the project's state colour, a dot per CI run that is red only for a real failure). The Needs-you

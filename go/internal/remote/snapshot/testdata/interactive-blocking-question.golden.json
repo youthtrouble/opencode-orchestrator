@@ -10,13 +10,16 @@
       "level": "amber",
       "five_hour_pct": 72.5,
       "weekly_pct": 40,
-      "resets_at": "2026-10-20T14:00:00.422Z"
+      "resets_at": "2026-10-20T14:00:00.422Z",
+      "weekly_resets_at": "2026-10-25T03:00:00.000Z",
+      "window": "five_hour"
     },
     "openai": {
       "level": "unknown",
       "five_hour_pct": null,
       "weekly_pct": null,
-      "resets_at": null
+      "resets_at": null,
+      "window": "five_hour"
     }
   },
   "projects": [

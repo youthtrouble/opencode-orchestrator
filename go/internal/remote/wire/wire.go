@@ -33,9 +33,19 @@ type Posture struct {
 	FiveHourPct *float64 `json:"five_hour_pct"`
 	WeeklyPct   *float64 `json:"weekly_pct"`
 	ResetsAt    *string  `json:"resets_at"`
+	// WeeklyResetsAt is optional: the weekly window's reset; nil when the reading has none.
+	WeeklyResetsAt *string `json:"weekly_resets_at,omitempty"`
+	// Window is optional: the window that drives Level, WindowFiveHour or WindowWeekly.
+	Window string `json:"window,omitempty"`
 	// Credits is optional and OpenAI's only; nil when Codex reported none.
 	Credits *Credits `json:"credits,omitempty"`
 }
+
+// The windows a Posture's Window names.
+const (
+	WindowFiveHour = "five_hour"
+	WindowWeekly   = "weekly"
+)
 
 // Credits is the OpenAI credits fact: ChatGPT credits Codex spends once the plan limit is
 // reached, and banked window resets, which are not money. HasCredits, Unlimited and Balance

@@ -154,6 +154,43 @@ test("an open Recent events is forgotten once its project leaves the summary, so
   assert.equal(returned.open, false);
 });
 
+function summaryWithBudget() {
+  const resetsAt = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+  const posture = { level: "amber", five_hour_pct: 72, weekly_pct: 40, resets_at: resetsAt, window: "five_hour" };
+  return { ...summaryWithMacSeen(24), budget: { anthropic: posture, openai: null } };
+}
+
+const budgetButtons = (document: FakeDocument) => document.getElementById("budget").findAll(byTag("button"));
+const budgetDetail = (document: FakeDocument, vendor: string) =>
+  document.getElementById("budget").findAll((node) => node.attributes.get("id") === `budget-${vendor}`)[0];
+
+test("each budget chip is a closed button that names its level in words and controls its hidden detail", async () => {
+  const document = await pageShowing(summaryWithBudget());
+  const [anthropic, openai] = budgetButtons(document);
+  assert.equal(anthropic.attributes.get("class"), "chip level-amber");
+  assert.equal(anthropic.attributes.get("aria-expanded"), "false");
+  assert.equal(anthropic.attributes.get("aria-controls"), "budget-anthropic");
+  assert.match(anthropic.textContent, /^Anthropic 72% · resets in (1 h 59 min|2 h) \(amber\)$/);
+  const [levelWord] = anthropic.findAll((node) => classOf(node) === "vh");
+  assert.equal(levelWord.textContent, " (amber)");
+  assert.equal(openai.textContent, "OpenAI · no reading (unknown)");
+  const detail = budgetDetail(document, "anthropic");
+  assert.equal(detail.hidden, true);
+  assert.match(detail.textContent, /^5-hour 72% · resets \d\d:\d\d \(in .+\)Weekly 40%$/);
+});
+
+test("an opened budget chip stays open across the next re-render", async () => {
+  let reopened: { button: FakeNode; detail: FakeNode } | undefined;
+  await pageShowing(summaryWithBudget(), PAGE_ORIGIN, (document) => {
+    budgetButtons(document)[0].dispatch("click");
+    document.getElementById("hidden-toggle").dispatch("click"); // any re-render will do
+    reopened = { button: budgetButtons(document)[0], detail: budgetDetail(document, "anthropic") };
+  });
+  assert.ok(reopened);
+  assert.equal(reopened.button.attributes.get("aria-expanded"), "true");
+  assert.equal(reopened.detail.hidden, false);
+});
+
 test("a project state the page does not know gets no state class on its pill or progress bar", async () => {
   const summary = summaryWithProject();
   summary.projects[0].state = "rebooting";
