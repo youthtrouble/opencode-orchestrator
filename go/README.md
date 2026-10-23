@@ -466,6 +466,9 @@ literals (the flip brief, the exec help headers, kickoff's prompt, usage and wat
 `runrecord.Write` against `lib/run-record.mjs`) against that JS source. With `--only`, name `jsref`
 to run it: `--only jsref` runs it alone, `--only json,jsref` runs it after the `json` group (two
 `go test` invocations; `run.sh` exits with the first non-zero status).
+Unknown `--only` groups exit 2 and list the valid names derived from `TestParity` plus `jsref`.
+Only extracted references have their `tests/` replaced with one passing stub suite so the frozen
+doctor's 20 s probe stays deterministic under load (PE-18); supplied `ORCH_JS` trees are untouched.
 
 `parity/run.sh` builds `bin/orch`, then runs `go test -tags parity ./parity`. Each case runs the
 JS and `orch` with the same argv-equivalent and stdin, each in a fresh temp `HOME` and a fresh
@@ -1173,7 +1176,10 @@ The other documented differences, each asserted by its own parity case:
   `exit N`); WARN `go test timed out after 120 s`; else WARN `not run (no go toolchain or module
   at <dir>)`. With the registry missing both runtimes FAIL their test row (the JS unit tests
   need `models.json`; orch's self-test fails `routing: ENOENT: ...`). Asserted by every
-  `doctor` parity case and by `internal/doctor` unit tests.
+  `doctor` parity case and by `internal/doctor` unit tests. The runner substitutes one passing
+  stub suite only in its extracted reference (never a supplied `ORCH_JS` tree), retaining the
+  passing-row assertion and mask rather than accepting timeouts; the registry-missing case
+  adds a registry-dependent test in its private copy to preserve the failing-row boundary.
 - PE-19: every command line orch writes for agents and humans reads `orch <cmd> ...` (package
   `internal/cmdref`): supervisor reminders, the worker preamble, `flip run`'s
   `conductor-continue.md`, the `flip gate` message, kickoff's usage line and watch hint, the reply

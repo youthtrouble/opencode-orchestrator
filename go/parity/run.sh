@@ -29,19 +29,23 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+valid_groups=$(sed -n 's/^[[:space:]]*t\.Run("\([^"]*\)", h\.test.*$/\1/p' "$module_dir/parity/harness_test.go")
+valid_groups="$(printf '%s\n' "$valid_groups" | tr '\n' ' ')jsref"
 parity_groups=""
 want_jsref=false
 for name in $(echo "$group" | tr , ' '); do
-  case "$name" in
-    jsref) want_jsref=true ;;
-    json|usage|mailbox|manifest|incident|policy|bridges|worker|flip|supervisor|doctor|watch|kickoff|session)
-      parity_groups="${parity_groups:+$parity_groups|}$name"
-      ;;
+  case " $valid_groups " in
+    *" $name "*) ;;
     *)
-      echo "unknown parity group: $name" >&2
+      echo "unknown parity group: $name (groups: $valid_groups)" >&2
       exit 2
       ;;
   esac
+  if [ "$name" = jsref ]; then
+    want_jsref=true
+  else
+    parity_groups="${parity_groups:+$parity_groups|}$name"
+  fi
 done
 if [ "$only_given" = true ] && [ -z "$parity_groups" ] && [ "$want_jsref" = false ]; then
   echo "usage: parity/run.sh [--only GROUP]" >&2
@@ -74,6 +78,12 @@ if [ -z "${ORCH_JS:-}" ]; then
   git -C "$repo_dir" archive "$ref" orchestrator | tar -x -C "$js_tree"
   ORCH_JS="$js_tree/orchestrator"
   [ -d "$ORCH_JS" ] || { echo "parity reference $ref has no orchestrator/ tree" >&2; exit 2; }
+  # The frozen doctor's 20 s node --test probe need not rerun the oracle's own suites under
+  # host load (go-s13 2.6); PE-18 still requires a passing row before masking it. Only the
+  # extracted copy belongs to us: a supplied ORCH_JS tree is never changed.
+  rm -rf "$ORCH_JS/tests"
+  mkdir "$ORCH_JS/tests"
+  printf '%s\n' 'import test from "node:test"; test("stub", () => {});' > "$ORCH_JS/tests/stub.test.mjs"
 fi
 
 cd "$module_dir"
@@ -95,7 +105,7 @@ run_tests() {
 }
 
 if [ "$only_given" = false ]; then
-  run_tests '^(TestParity|TestJSReference)$'
+  run_tests '^(TestParity|TestParityRunner|TestJSReference)$'
 else
   # One -run pattern cannot do both: its subtest element would filter TestJSReference's subtests.
   if [ -n "$parity_groups" ]; then

@@ -9,6 +9,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -36,6 +39,102 @@ func TestParity(t *testing.T) {
 	t.Run("watch", h.testWatch)
 	t.Run("kickoff", h.testKickoff)
 	t.Run("session", h.testSession)
+}
+
+// TestParityRunner exercises the shell boundary with a fake go, never a runtime or model CLI.
+func TestParityRunner(t *testing.T) {
+	source, err := parser.ParseFile(token.NewFileSet(), "harness_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var groups []string
+	for _, decl := range source.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "TestParity" {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "Run" {
+				return true
+			}
+			if len(call.Args) == 0 {
+				t.Fatal("TestParity t.Run has no name")
+			}
+			literal, ok := call.Args[0].(*ast.BasicLit)
+			if !ok {
+				t.Fatal("TestParity group names must be string literals")
+			}
+			name, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			groups = append(groups, name)
+			return true
+		})
+	}
+	if len(groups) == 0 {
+		t.Fatal("TestParity has no groups")
+	}
+	groups = append(groups, "jsref")
+	fakes := t.TempDir()
+	writeSeedFile(t, filepath.Join(fakes, "go"), `#!/bin/sh
+if [ "$1" = test ]; then
+  printf 'tree=%s\n' "$ORCH_JS"
+  printf 'args=%s\n' "$*"
+  cat "$ORCH_JS"/tests/*
+fi
+`)
+	if err := os.Chmod(filepath.Join(fakes, "go"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	run := func(tree, group string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("sh", "run.sh", "--only", group)
+		cmd.Env = append(os.Environ(), "PATH="+fakes+":"+os.Getenv("PATH"), "ORCH_JS="+tree, "ORCH_JS_REF=")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	t.Run("derived-groups", func(t *testing.T) {
+		out, err := run("", "bogus")
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+			t.Fatalf("exit %v, output %s; want exit 2", err, out)
+		}
+		want := "unknown parity group: bogus (groups: " + strings.Join(groups, " ") + ")\n"
+		if out != want {
+			t.Fatalf("output %q; want %q", out, want)
+		}
+	})
+	t.Run("supplied-tree-unchanged", func(t *testing.T) {
+		tree := t.TempDir()
+		const sentinel = "supplied tests must stay unchanged\n"
+		file := filepath.Join(tree, "tests", "sentinel.test.mjs")
+		writeSeedFile(t, file, sentinel)
+		out, err := run(tree, strings.Join(groups, ","))
+		if err != nil || strings.Count(out, sentinel) != 2 {
+			t.Fatalf("exit %v, output %s", err, out)
+		}
+		entries, err := os.ReadDir(filepath.Dir(file))
+		if err != nil || len(entries) != 1 || entries[0].Name() != filepath.Base(file) {
+			t.Fatalf("supplied tests changed: %v, %v", entries, err)
+		}
+	})
+	t.Run("extracted-tree-stubbed-and-removed", func(t *testing.T) {
+		out, err := run("", "doctor")
+		const stub = "import test from \"node:test\"; test(\"stub\", () => {});\n"
+		if err != nil || !strings.HasSuffix(out, stub) || strings.Count(out, "\n") != 3 {
+			t.Fatalf("exit %v, output %s; want only the stub suite", err, out)
+		}
+		tree := strings.TrimPrefix(strings.SplitN(out, "\n", 2)[0], "tree=")
+		if _, err := os.Stat(tree); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("extracted tree was not removed: %v", err)
+		}
+	})
 }
 
 // testJSON compares JSON.stringify(JSON.parse(stdin), null, indent) with `orch json-echo` over

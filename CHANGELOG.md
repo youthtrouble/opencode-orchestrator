@@ -21,6 +21,9 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- parity tooling (S13m): derive `--only` groups from `TestParity` and list them on an unknown
+  group (exit 2); replace only extracted JS reference tests with one passing doctor probe stub
+  (PE-18), never modifying a supplied `ORCH_JS` tree.
 - worker (S13l, PE-53): clear a stale state-write error on successful recovery; release messages
   remain the agent's responsibility, not the worker's.
 - watch/flip/remote (S13l, PE-54): display gate-only and unreadable flip state explicitly;
