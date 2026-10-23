@@ -36,6 +36,9 @@ const refreshReportEnv = "ORCH_BRIDGE_TEST_REFRESH_REPORT"
 const envDumpEnv = "ORCH_BRIDGE_TEST_ENV_DUMP"
 
 func TestMain(m *testing.M) {
+	if filepath.Base(os.Args[0]) == "opencode-signal" {
+		os.Exit(fakeOpencodeSignal())
+	}
 	if scenario := os.Getenv(fakeOpencodeEnv); scenario != "" && filepath.Base(os.Args[0]) == "opencode" {
 		os.Exit(fakeOpencode(scenario))
 	}
