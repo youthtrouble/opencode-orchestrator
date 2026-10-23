@@ -1636,8 +1636,10 @@ The other documented differences, each asserted by its own parity case:
   option (its `--variant` is model-specific), and `orch worker` passes `--effort` to every
   harness. The JS ignored `--help` and ran opencode with `X` as the prompt. Parity:
   `bridges/opencode/PE-46/*` and `worker/start/opencode/PE-46/effort-is-not-the-prompt`; the
-  worker's PE-13 unread-prompt case keeps the JS pinned with a 100 KiB brief, under Linux's
-  128 KiB limit on one argument, because orch's opencode-exec now reads the prompt.
+  worker's PE-13 unread-prompt case gives JS a 1 MiB brief, exceeding Node's Unix socketpair
+  buffer with Linux's default socket settings, and orch a 100 KiB brief, under Linux's 128 KiB
+  limit on one argument. It also checks that orch's opencode argv contains the whole brief,
+  because orch's opencode-exec now reads the prompt.
 - PE-47 (S13j, L4): opencode-exec's failure incident records `context.model` from `--model`
   (or `null` without it); its result still has no `model` key. The JS always recorded `null`.
 - PE-48 (S13j, L5): `orch worker`'s usage line names `--harness codex|claude|opencode`; the JS
