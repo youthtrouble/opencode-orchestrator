@@ -10,6 +10,7 @@
 //      everything by editing one file.
 // Every tool and hook runs on the `orch` binary; the plugin never imports or spawns orchestrator JS.
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -410,6 +411,221 @@ function createHeartbeat(write: (beat: SessionBeat) => Promise<void>, reportFail
   };
 }
 
+/**
+ * The plugin twin of Go paths.ProjectRoot: the absolute lexical path of `dir`, cut at the parent of
+ * its first component named exactly `.orchestrator`, so a slice worktree maps to its project.
+ * Symlinks are never resolved.
+ */
+function projectRootOf(dir: string) {
+  const parts = path.resolve(dir).split(path.sep);
+  const at = parts.indexOf(".orchestrator");
+  return at === -1 ? parts.join(path.sep) : parts.slice(0, at).join(path.sep) || path.sep;
+}
+
+// The activity ledger's cadence (plan go-s13s 3.1). The watchdog that reads it trusts a file whose
+// alive_at is recent, so the alive refresh must stay well inside its 180 s trust window.
+const LEDGER_COALESCE_MS = 15 * 1000;
+const LEDGER_ALIVE_MS = 60 * 1000;
+const LEDGER_FAILURE_QUIET_MS = 10 * 60 * 1000;
+const ACTIVITY_PREFIXES = ["session.execution.", "session.step.", "session.text.", "session.reasoning.", "session.tool.", "session.shell.", "session.compaction.", "session.retry.", "session.usage."];
+const SESSION_END_EVENTS = new Set(["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted", "session.idle"]);
+
+type ActivityLedger = {
+  /** Handles one bus event; anything that is not session activity is ignored. */
+  event(event: any, fallbackDir: string): void;
+  /** Activity seen outside the bus (the context hook, any agent). */
+  touch(dir: string): void;
+  /** The execute.before/.after fallback for a tool call no bus event has tracked. */
+  toolBefore(dir: string, e: any): void;
+  toolAfter(dir: string, e: any): void;
+  /** Stops the timers and removes this instance's own files. */
+  stop(): void;
+};
+
+/**
+ * One tool call in flight, from the bus (`tool`, `shell`) or only from the execute hooks (`hook`).
+ * Correlation never crosses a session: a completion, a deduplication or a cleanup only touches
+ * entries of the same session (a hook entry without one only matches another without one).
+ * `callId` is null when the start carried no id; such an entry is closed by the oldest-first match
+ * of an id-less completion of the same kind, else only by its session's end.
+ */
+type InFlightCall = { kind: "tool" | "shell" | "hook"; session: string | null; callId: string | null; detail: string };
+
+type LedgerProject = {
+  ledgerFile: string;
+  lastActivityAt: number | null;
+  /** Tool calls in flight by key, in start order; `tools_in_flight` is its size. */
+  inFlight: Map<string, InFlightCall>;
+  /** Bus keys of calls `session.tool.input.started` named `subagent`: their child session's events measure them. */
+  subagentCalls: Set<string>;
+  writtenTools: number;
+  lastWriteAt: number;
+  trailing: ReturnType<typeof setTimeout> | null;
+  lastFailureReportAt: number;
+};
+
+/**
+ * The per-instance activity ledger, `<P>/.orchestrator/activity/opencode/<instance>.json`. It records
+ * when any session of the project (subagents included) last showed activity and how many tool calls
+ * other than `subagent` are in flight, so the opencode bridge can tell a stuck lane from a quiet main
+ * session waiting on healthy subagent work. It holds timestamps and counts only. Writes are
+ * synchronous and small, never throw into a hook, and are reported at most once per project per
+ * LEDGER_FAILURE_QUIET_MS.
+ */
+function createActivityLedger(instance: string, reportFailure: (root: string, err: unknown) => void): ActivityLedger {
+  const projects = new Map<string, LedgerProject>();
+  let order = 0;
+  let stopped = false;
+
+  const aliveTimer = setInterval(() => { for (const [root, p] of projects) write(root, p); }, LEDGER_ALIVE_MS);
+  aliveTimer.unref?.();
+
+  function project(dir: string) {
+    const root = projectRootOf(dir);
+    let p = projects.get(root);
+    if (!p) {
+      p = { ledgerFile: path.join(root, ".orchestrator", "activity", "opencode", `${instance}.json`), lastActivityAt: null, inFlight: new Map(), subagentCalls: new Set(), writtenTools: 0, lastWriteAt: -Infinity, trailing: null, lastFailureReportAt: -Infinity };
+      projects.set(root, p);
+    }
+    return [root, p] as const;
+  }
+
+  function changed(root: string, p: LedgerProject) {
+    if (stopped) return;
+    if ((p.writtenTools > 0) !== (p.inFlight.size > 0)) { write(root, p); return; }
+    const wait = LEDGER_COALESCE_MS - (Date.now() - p.lastWriteAt);
+    if (wait <= 0) { write(root, p); return; }
+    if (p.trailing) return;
+    p.trailing = setTimeout(() => { p.trailing = null; write(root, p); }, wait);
+    p.trailing.unref?.();
+  }
+
+  function write(root: string, p: LedgerProject) {
+    if (stopped) return;
+    if (p.trailing) { clearTimeout(p.trailing); p.trailing = null; }
+    // As with the session heartbeat, a directory outside a project gets no project state.
+    if (!fs.existsSync(path.join(root, ".orchestrator"))) return;
+    const now = Date.now();
+    p.lastWriteAt = now;
+    const tools = p.inFlight.size;
+    const record = { schema: 1, instance, pid: process.pid, alive_at: new Date(now).toISOString(), last_activity_at: p.lastActivityAt === null ? null : new Date(p.lastActivityAt).toISOString(), tools_in_flight: tools };
+    const dir = path.dirname(p.ledgerFile);
+    const temp = `${p.ledgerFile}.${process.pid}.tmp`;
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(temp, JSON.stringify(record) + "\n", { mode: 0o600 });
+      fs.renameSync(temp, p.ledgerFile);
+      p.writtenTools = tools;
+    } catch (err) {
+      try { fs.rmSync(temp, { force: true }); } catch { /* the temp file may not exist */ }
+      if (now - p.lastFailureReportAt < LEDGER_FAILURE_QUIET_MS) return;
+      p.lastFailureReportAt = now;
+      reportFailure(root, err);
+    }
+  }
+
+  function touch(dir: string) {
+    const [root, p] = project(dir);
+    p.lastActivityAt = Date.now();
+    changed(root, p);
+  }
+
+  function clearSession(p: LedgerProject, sessionId: string) {
+    for (const [key, call] of p.inFlight) if (call.session === sessionId) p.inFlight.delete(key);
+    for (const key of p.subagentCalls) if (key.startsWith(`${sessionId}\0`)) p.subagentCalls.delete(key);
+  }
+
+  function findCall(p: LedgerProject, match: (call: InFlightCall) => boolean) {
+    for (const [key, call] of p.inFlight) if (match(call)) return key;
+    return null;
+  }
+
+  /** Starts a call: an id names it; without one it gets a unique key that only an id-less completion can close. */
+  function startCall(p: LedgerProject, call: InFlightCall) {
+    // A repeated start of the same named call replaces its entry instead of counting twice.
+    const key = call.callId === null ? `#${++order}` : JSON.stringify([call.kind, call.session, call.detail, call.callId]);
+    p.inFlight.set(key, call);
+  }
+
+  /** Ends the call with the same kind, session, detail and id; an id-less end takes the oldest id-less start. */
+  function endCall(p: LedgerProject, { kind, session, callId, detail }: InFlightCall) {
+    const key = findCall(p, (c) => c.kind === kind && c.session === session && c.detail === detail && c.callId === callId);
+    if (key) p.inFlight.delete(key);
+  }
+
+  function trackBusTool(p: LedgerProject, type: string, data: any) {
+    const session: string = data.sessionID;
+    const callId = typeof data.id === "string" ? data.id : null;
+    const call: InFlightCall = type.startsWith("session.shell.")
+      ? { kind: "shell", session, callId, detail: "" }
+      : { kind: "tool", session, callId, detail: String(data.assistantMessageID ?? "") };
+    const subagentKey = callId === null ? null : `${session}\0${call.detail}\0${callId}`;
+    switch (type) {
+      case "session.tool.input.started":
+        if (data.name === "subagent" && subagentKey) p.subagentCalls.add(subagentKey);
+        return;
+      case "session.tool.called":
+      case "session.shell.started": {
+        // The bus now tracks this call: a hook entry the same session opened for it is the same call.
+        const hookKey = callId === null ? null : findCall(p, (c) => c.kind === "hook" && c.session === session && c.callId === callId);
+        if (hookKey) p.inFlight.delete(hookKey);
+        if (subagentKey && p.subagentCalls.has(subagentKey)) return;
+        startCall(p, call);
+        return;
+      }
+      case "session.tool.success":
+      case "session.tool.failed":
+      case "session.shell.ended":
+        endCall(p, call);
+        if (subagentKey) p.subagentCalls.delete(subagentKey);
+    }
+  }
+
+  function hookCall(e: any): InFlightCall {
+    return { kind: "hook", session: typeof e?.sessionID === "string" ? e.sessionID : null, callId: typeof e?.callID === "string" ? e.callID : null, detail: String(e?.tool) };
+  }
+
+  return {
+    event(event, fallbackDir) {
+      const type = event?.type, data = event?.data;
+      if (typeof type !== "string" || typeof data?.sessionID !== "string") return;
+      if (type !== "session.idle" && !ACTIVITY_PREFIXES.some((prefix) => type.startsWith(prefix))) return;
+      const dir = typeof event.location?.directory === "string" ? event.location.directory : fallbackDir;
+      const [root, p] = project(dir);
+      p.lastActivityAt = Date.now();
+      trackBusTool(p, type, data);
+      if (SESSION_END_EVENTS.has(type)) clearSession(p, data.sessionID);
+      changed(root, p);
+    },
+    touch,
+    toolBefore(dir, e) {
+      if (e?.tool === "subagent") return;
+      const [root, p] = project(dir);
+      p.lastActivityAt = Date.now();
+      const call = hookCall(e);
+      // Only an active bus entry of the same session with the same id is the same call.
+      const tracked = call.callId !== null && call.session !== null && findCall(p, (c) => c.kind !== "hook" && c.session === call.session && c.callId === call.callId) !== null;
+      if (!tracked) startCall(p, call);
+      changed(root, p);
+    },
+    toolAfter(dir, e) {
+      if (e?.tool === "subagent") return;
+      const [root, p] = project(dir);
+      p.lastActivityAt = Date.now();
+      endCall(p, hookCall(e));
+      changed(root, p);
+    },
+    stop() {
+      stopped = true;
+      clearInterval(aliveTimer);
+      for (const p of projects.values()) {
+        if (p.trailing) clearTimeout(p.trailing);
+        try { fs.rmSync(p.ledgerFile, { force: true }); } catch { /* best effort: the watchdog distrusts a stale file */ }
+      }
+    },
+  };
+}
+
 const ROLE_TO_NATIVE_AGENT: Record<string, string> = { planner: "architect-oai", coder: "coder-oai", reviewer: "reviewer-oai", verifier: "verifier-oai", researcher: "researcher-oai", explorer: "explore", utility: "general" };
 const NATIVE_AGENT_TIER: Record<string, string> = { "architect-oai": "frontier", "coder-oai": "strong", build: "strong", conductor: "strong", general: "mid", "reviewer-oai": "mid", "verifier-oai": "cheap", "researcher-oai": "cheap", explore: "cheap", title: "cheap", summary: "cheap", compaction: "cheap" };
 
@@ -656,8 +872,14 @@ export default {
     });
 
     // ---- 2. Budget + routing in the system prompt of primary agents -----------------------
+    const projectRoot = ctx.location?.directory || process.cwd();
+    const ledger = createActivityLedger(`${process.pid}-${randomBytes(4).toString("hex")}`, (root, err) => {
+      void reportPluginFailure(`activity ledger write failed: ${errorText(err).slice(0, 160)}`, { project: root });
+    });
     const PRIMARY = new Set(["conductor", "build", "plan"]);
     await ctx.session.hook("context", async (e: any) => {
+      // Every agent's model call is activity, subagents' included: the ledger's second source.
+      ledger.touch(projectRoot);
       if (!PRIMARY.has(String(e.agent))) return;
       if (String(e.agent) === "conductor" && e.sessionID) beatWorking(String(e.sessionID));
       try {
@@ -671,7 +893,6 @@ export default {
     // ---- 2a. Conductor session heartbeat (the opencode twin of the Claude conductor's hooks) -
     // opencode v2 has no per-user-message plugin hook, so `working` rides the context hook, which runs
     // before every model call of a primary agent; `waiting` comes from the session.idle bus event.
-    const projectRoot = ctx.location?.directory || process.cwd();
     const heartbeat = createHeartbeat(
       (beat) => rt.sessionBeat(projectRoot, beat),
       (beat, err) => reportPluginFailure(`session beat failed: ${errorText(err).slice(0, 160)}`, { session: beat.sessionId }),
@@ -691,20 +912,22 @@ export default {
     // The promise API's event.subscribe returns an endless async iterable, so it is pumped in the
     // background and ended through the signal when the plugin unloads.
     const eventsLifetime = new AbortController();
-    async function pumpIdleEvents(signal: AbortSignal) {
+    async function pumpEvents(signal: AbortSignal) {
       try {
         for await (const event of ctx.event.subscribe({ signal }) as AsyncIterable<any>) {
+          ledger.event(event, projectRoot);
           if (event?.type === "session.idle" && typeof event.data?.sessionID === "string") heartbeat.idle(event.data.sessionID);
         }
       } catch (err) {
         if (!signal.aborted) await reportPluginFailure(`event subscription failed: ${errorText(err).slice(0, 160)}`, {});
       }
     }
-    void pumpIdleEvents(eventsLifetime.signal);
+    void pumpEvents(eventsLifetime.signal);
 
     // ---- 2b. Budget gate for native subagents + learn from provider limit errors ----------
     const NATIVE_OPENAI_AGENTS = new Set(Object.keys(NATIVE_AGENT_TIER));
     await ctx.tool.hook("execute.before", async (e: any) => {
+      ledger.toolBefore(projectRoot, e);
       if (e.tool !== "subagent") return;
       const target = String((e.input as any)?.agent || "");
       if (!NATIVE_OPENAI_AGENTS.has(target)) return;
@@ -747,6 +970,7 @@ export default {
       }
     });
     await ctx.tool.hook("execute.after", async (e: any) => {
+      ledger.toolAfter(projectRoot, e);
       // Our own tools failing is an orchestrator defect by definition: log it for the audit.
       if (e.status === "error" && String(e.tool).startsWith("orch")) {
         try { await rt.recordIncident({ component: "plugin", kind: "bug", summary: `tool ${e.tool} errored: ${String(e.error?.message || e.error).slice(0, 160)}`, detail: JSON.stringify(e.input).slice(0, 800), context: { agent: e.agent }, project: ctx.location?.directory }); } catch { /* never block */ }
@@ -777,6 +1001,7 @@ export default {
 
     return async () => {
       eventsLifetime.abort();
+      ledger.stop();
       await heartbeat.stop();
     };
   },

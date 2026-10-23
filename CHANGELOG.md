@@ -21,6 +21,12 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- plugin (S13s1): the orchestrator plugin keeps a per-instance activity ledger at
+  `.orchestrator/activity/opencode/<pid>-<hex>.json`: the last activity of any session in the
+  project (subagents included, from bus events, the context hook and the tool hooks) and the
+  number of non-`subagent` tool calls in flight. Writes are coalesced to one per 15 s, `alive_at`
+  is refreshed every 60 s, and a failed write is one incident per project per 10 min. It holds
+  timestamps and counts only; the watchdog that reads it lands in S13s2.
 - bridges (S13j, PE-44, PE-45): a provider error event reaches the run's `errors`, so a ChatGPT
   usage limit in opencode (or a top-level codex `error`) is a `limit` incident with its text
   instead of a `crash` with an empty error; a run the bridge stopped at its `--timeout-min` cap

@@ -367,6 +367,7 @@ gate and keeps working with you.
 | `policy.json` | This project's autonomy overrides (`orch policy set release=auto`) |
 | `supervisor.json` | Optional wake channels for the supervisor |
 | `sessions/` | One heartbeat per conductor door (`orch session show`): what it is doing and when it last moved. Claude conductors write it through hooks, opencode conductors through the plugin |
+| `activity/opencode/` | One small file per running opencode plugin instance (`<pid>-<hex>.json`): when any session of this project, subagents included, last showed activity, and how many tool calls other than `subagent` are in flight. It holds timestamps and counts only, never prompts, paths, tool inputs or session ids, and the plugin removes its own file when it unloads |
 
 `.orchestrator/` is private: kickoff keeps it out of Git through the repository's `info/exclude`.
 Run records, lane and supervisor state, `flip.json`, generated briefs and new
