@@ -214,6 +214,15 @@ func (h *harness) compareKickoff(t *testing.T, inv invocation, line string, file
 		}
 	}
 	if inv.crash != noCrash {
+		if strings.Contains(strings.Join(inv.orch, " "), "--door gemini") || inv.orch[len(inv.orch)-1] == "--door" {
+			if js.exitCode != 1 || !strings.Contains(js.stderr, "Cannot read properties of undefined (reading 'overall')") {
+				t.Errorf("frozen JS: %+v", js)
+			}
+			if orch.exitCode != 2 || orch.stdout != "" || orch.stderr != "kickoff: --door must be opencode|claude|auto\n" {
+				t.Errorf("PE-57: %+v", orch)
+			}
+			return
+		}
 		if err := crashError(inv.crash, inv.errorLine, js, orch); err != nil {
 			t.Error(err)
 		}
@@ -242,6 +251,12 @@ type refusedClearCase struct {
 func (h *harness) testKickoffRefusedGateClear(t *testing.T, rc refusedClearCase) {
 	t.Helper()
 	inv := h.kickoffInvocation(kickoffCase{args: rc.args, seed: rc.seed})
+	// Keep PE-61 about the refused clear: PE-57 now rejects the JS's sentinel door earlier.
+	for i, arg := range inv.orch {
+		if arg == "gemini" {
+			inv.orch[i] = "opencode"
+		}
+	}
 	var runs int
 	var orchChanged []string
 	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
@@ -485,16 +500,15 @@ func (h *harness) testKickoffDryRunThenReal(t *testing.T, s seed, dryRun, real [
 		return o.withProjectPlaceholder(t, sb).normalized(then.normalize)
 	}
 	js, orch := run("js", dry.js, then.js), run("orch", dry.orch, then.orch)
-	for side, o := range map[string]outcome{"js": js, "orch": orch} {
-		if got := o.files["extra/"+worktreeExclude]; got != ".orchestrator/\n" {
-			t.Errorf("%s real run: %s = %q, want the line", side, worktreeExclude, got)
-		}
+	if got := js.files["extra/"+worktreeExclude]; got != ".orchestrator/\n" {
+		t.Errorf("JS exclude %q", got)
 	}
-	if err := crashError(crashC2, "", js, orch); err != nil {
-		t.Error(err)
+	if js.exitCode != 1 || !strings.Contains(js.stderr, "Cannot read properties of undefined (reading 'overall')") {
+		t.Errorf("frozen JS: %+v", js)
 	}
-	js.stderr, orch.stderr = "", ""
-	compareOutcomes(t, js, orch)
+	if orch.exitCode != 2 || orch.stderr != "kickoff: --door must be opencode|claude|auto\n" || orch.files["extra/"+worktreeExclude] != "" {
+		t.Errorf("PE-57: %+v", orch)
+	}
 }
 
 // isProjectFile reports whether an outcome's file key is in the project: its .orchestrator/

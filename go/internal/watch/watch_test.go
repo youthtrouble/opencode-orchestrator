@@ -94,6 +94,32 @@ func TestEmptyProject(t *testing.T) {
 	}
 }
 
+func TestGateAndUnreadableFlip(t *testing.T) {
+	for _, c := range []struct{ content, want string }{
+		{`{"awaiting_human":{"door":"claude","reason":"` + strings.Repeat("r", 80) + `"}}`, "flip: AWAITING HUMAN (claude, " + strings.Repeat("r", 60) + ")"},
+		{`{`, "flip: UNREADABLE"},
+	} {
+		p := newProject(t)
+		p.write("flip.json", c.content)
+		got, err := p.render()
+		if err != nil || !strings.Contains(got, c.want) {
+			t.Errorf("render = %q, %v; want %q", got, err, c.want)
+		}
+	}
+}
+
+func TestInvalidModelDoesNotAbortDashboard(t *testing.T) {
+	p := newProject(t)
+	d := p.deps()
+	r := fixtureRouting(t)
+	jsjson.Path(r.Registry, "vendors", "openai", "tiers", "mid").(*jsjson.Object).Set("opencode", 5.0)
+	d.Routing = func() (*usage.Routing, error) { return r, nil }
+	got, err := Render(d)
+	if err != nil || !strings.Contains(got, "coder: (invalid model)") || !strings.Contains(got, "incidents (24h)") {
+		t.Errorf("render = %q, %v", got, err)
+	}
+}
+
 func TestEveryGroup(t *testing.T) {
 	p := newProject(t)
 	p.alivePids[42] = true
@@ -122,7 +148,7 @@ func TestEveryGroup(t *testing.T) {
 		"line two",
 		"routing: planner=claude-opus-5-5#medium  coder=gpt-6.1-sol@high  reviewer=PAUSED",
 		"supervisor: running pid 41 (DEAD) checked Z",
-		"flip: opencode->claude at 14:05Z",
+		"flip: AWAITING HUMAN (undefined, push?)",
 		"lanes: a[claude] running last Bash 15:00Z | undefined[undefined] undefined  Z | d[codex] starting (DEAD)  Z",
 		"QUESTIONS FOR YOU (1):",
 		"  [q1234567] " + strings.Repeat("a", 99) + "\uFFFD\n     reply: orch mailbox reply q1234567 \"...\"",
@@ -132,7 +158,7 @@ func TestEveryGroup(t *testing.T) {
 		"  15:11Z question conductor -> coder: not for you",
 		"  15:12Z handoff-long coder -> *: done",
 		"incidents (24h): 1  latest: recent " + strings.Repeat("s", 83),
-		"next: (exact)",
+		"next: run the tests",
 	}, "\n")
 	if got != want {
 		t.Errorf("Render:\n%s\nwant:\n%s", got, want)
@@ -178,7 +204,6 @@ func TestShapesTheJSThrowsOn(t *testing.T) {
 	for _, c := range []struct {
 		name, file, content, want string
 	}{
-		{"gate-only flip", "flip.json", `{"awaiting_human":{"reason":"r"}}`, "Cannot read properties of undefined (reading 'slice')"},
 		{"paused at a number", "flip.json", `{"paused":{"at":5}}`, "flip.paused.at.slice is not a function"},
 		{"paused at null", "flip.json", `{"paused":{"at":null}}`, "Cannot read properties of null (reading 'slice')"},
 		{"message without at", "mailbox/messages.jsonl", `{"id":"x","kind":"note","subject":"s"}` + "\n", "Cannot read properties of undefined (reading 'slice')"},
@@ -200,6 +225,7 @@ func TestShapesTheJSThrowsOn(t *testing.T) {
 
 func TestNextActionVariants(t *testing.T) {
 	for _, c := range []struct{ state, want string }{
+		{"## Next action (exact)\n\nrun the tests\n## Open", "next: run the tests"},
 		{"## Next action\n\n  do it now  \nmore\n## Other", "next: do it now  "}, // trim applies to the section, not the line,
 		{"no heading", ""},
 		{"## Next action\n\n## Empty", ""},

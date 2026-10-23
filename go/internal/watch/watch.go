@@ -1,7 +1,7 @@
 // Package watch is bin/watch.mjs: a one-screen dashboard of a project (budgets, routing,
 // supervisor, flip state, lanes, questions, mailbox, incidents, the next action). Every value
-// is printed with the JS semantics of the template it appears in, and every TypeError the JS
-// would throw on an unexpected shape is returned with V8's message.
+// retains JS display semantics except for the explicit gate, invalid-model and next-action
+// corrections in PE-54..56. Other malformed shapes retain V8's error messages.
 package watch
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
@@ -46,13 +47,19 @@ func Render(d Deps) (string, error) {
 	if err != nil {
 		return "", &RoutingError{err}
 	}
-	flip := nodefs.ReadJSONOrNull(filepath.Join(d.Root, ".orchestrator", "flip.json"))
+	record, flipErr := flipcmd.NewProject(d.Root).Read()
+	flip := record.Value
 	steps := []func() ([]string, error){
 		func() ([]string, error) { return header(d, r) },
 		func() ([]string, error) { return promptHead(r), nil },
 		func() ([]string, error) { return routingLine(r) },
 		func() ([]string, error) { return supervisorLine(d), nil },
-		func() ([]string, error) { return flipLine(flip) },
+		func() ([]string, error) {
+			if flipErr != nil {
+				return []string{"flip: UNREADABLE (" + flipErr.Error() + ")"}, nil
+			}
+			return flipLine(flip)
+		},
 		func() ([]string, error) { return lanesLine(d) },
 		func() ([]string, error) { return questions(d) },
 		func() ([]string, error) { return awaitingHuman(flip), nil },
@@ -101,7 +108,8 @@ func routingLine(r *usage.Routing) ([]string, error) {
 		}
 		model, err := routing.ModelName(r.Registry, a.Entry)
 		if err != nil {
-			return nil, err
+			parts = append(parts, a.Role+": (invalid model)")
+			continue
 		}
 		suffix := ""
 		if jsjson.Truthy(a.Entry.Effort) {
@@ -127,11 +135,13 @@ func supervisorLine(d Deps) []string {
 	return []string{"supervisor: " + field(sup, "status") + " pid " + field(sup, "pid") + dead + " checked " + checked + "Z"}
 }
 
-// flipLine throws, as the JS does, for a flip.json that is neither paused nor holds `at`: the
-// state `flip gate` leaves on a project that never flipped (plan 3.4 defect 1, mirrored).
+// flipLine makes a human gate dominant, including on a project that has never flipped.
 func flipLine(flip any) ([]string, error) {
 	if !jsjson.Truthy(flip) {
 		return []string{"flip: never"}, nil
+	}
+	if gate := jsjson.Path(flip, "awaiting_human"); jsjson.Truthy(gate) {
+		return []string{"flip: AWAITING HUMAN (" + field(gate, "door") + ", " + jsstr.Slice(field(gate, "reason"), 0, 60) + ")"}, nil
 	}
 	if paused := jsjson.Path(flip, "paused"); jsjson.Truthy(paused) {
 		atValue, present := jsjson.Lookup(paused, "at")
@@ -266,9 +276,7 @@ func incidents(d Deps) ([]string, error) {
 	return []string{line}, nil
 }
 
-// nextAction is `text.split("## Next action")[1]?.split("##")[0]?.trim().split("\n")[0]`: the
-// rest of the heading line, so `## Next action (exact)` yields `(exact)` (plan 3.4 defect 5,
-// mirrored).
+// nextAction reads the first non-empty body line, not an annotation in the heading.
 func nextAction(d Deps) ([]string, error) {
 	state := filepath.Join(d.Root, ".orchestrator", "STATE.md")
 	if !nodefs.Exists(state) {
@@ -282,7 +290,8 @@ func nextAction(d Deps) ([]string, error) {
 	if !found {
 		return nil, nil
 	}
-	section, _, _ := strings.Cut(after, "##")
+	_, body, _ := strings.Cut(after, "\n")
+	section, _, _ := strings.Cut(body, "##")
 	next, _, _ := strings.Cut(jsstr.Trim(section), "\n")
 	if next == "" {
 		return nil, nil

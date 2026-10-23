@@ -105,8 +105,7 @@ func (e *RoutingError) Unwrap() error { return e.Err }
 var errGateNotCleared = errors.New("the human gate could not be cleared")
 
 // Run performs the kickoff and returns the exit code. An error is what the JS dies of: a
-// *RoutingError, the TypeError of an unknown door, a file error or a launch that could not
-// start.
+// *RoutingError, a file error or a launch that could not start. Invalid doors are usage errors.
 func Run(args Args, d Deps) (int, error) {
 	if args.Opts.Truthy("help") || len(args.Briefs) == 0 {
 		fmt.Fprintln(d.Out, cmdref.KickoffUsage())
@@ -114,6 +113,13 @@ func Run(args Args, d Deps) (int, error) {
 			return 0, nil
 		}
 		return 2, nil
+	}
+	if _, present := args.Opts["door"]; present {
+		door, valid := args.Opts.Value("door")
+		if !valid || (door != "opencode" && door != "claude" && door != "auto") {
+			fmt.Fprintln(d.Err, "kickoff: --door must be opencode|claude|auto")
+			return 2, nil
+		}
 	}
 	for _, brief := range args.Briefs {
 		if !nodefs.Exists(resolveIn(d.Root, brief)) {
@@ -170,8 +176,7 @@ func homeDoor(registry *jsjson.Object) string {
 	return flip.DoorOpencode
 }
 
-// chooseDoor is the JS door choice: a given --door other than "auto" is taken unvalidated (a
-// bare --door is the text "true", which no door matches); otherwise the home door if its
+// chooseDoor takes a validated explicit door; otherwise the home door if its
 // vendor is usable, else the other door if usable. chosen is false when neither is.
 func chooseDoor(opts cliargs.Opts, home string, postures *routing.Postures) (door string, chosen bool) {
 	if given := opts.JS("door"); jsjson.Truthy(given) && given != "auto" {

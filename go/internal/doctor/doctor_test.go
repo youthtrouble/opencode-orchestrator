@@ -51,8 +51,10 @@ func (m *machine) deps() Deps {
 			return nil, os.ErrNotExist
 		},
 		Exists: func(path string) bool { return m.exists[path] },
-		OnPath: func(string) bool { return m.goOnPath },
 		LookPath: func(name string) (string, error) {
+			if name == "go" && m.goOnPath {
+				return "/bin/go", nil
+			}
 			if name != "orch" || m.pathOrch == "" {
 				return "", exec.ErrNotFound
 			}
@@ -267,15 +269,18 @@ func TestUsageRowsBeforeAThrowAreKept(t *testing.T) {
 	}
 }
 
-// A role whose tier declares no string model makes the JS `v.model.split` throw.
-func TestRoutingRowThrowsForAModelThatIsNotAString(t *testing.T) {
+// PE-56 keeps the routing row readable when one model is invalid.
+func TestRoutingRowDisplaysAModelThatIsNotAString(t *testing.T) {
 	for _, c := range []struct {
-		name, tier, want string
+		name, tier string
 	}{
-		{"missing", `{}`, "Cannot read properties of undefined (reading 'split')"},
-		{"null", `{"opencode":null}`, "Cannot read properties of null (reading 'split')"},
-		{"number", `{"opencode":5}`, "v.model.split is not a function"},
-		{"empty", `{"opencode":""}`, ""},
+		{"missing", `{}`},
+		{"null", `{"opencode":null}`},
+		{"number", `{"opencode":5}`},
+		{"boolean", `{"opencode":true}`},
+		{"object", `{"opencode":{}}`},
+		{"array", `{"opencode":[]}`},
+		{"empty", `{"opencode":""}`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			m := healthy(t)
@@ -285,14 +290,28 @@ func TestRoutingRowThrowsForAModelThatIsNotAString(t *testing.T) {
 			}
 			jsjson.Path(m.routing.Registry, "vendors", "openai", "tiers").(*jsjson.Object).Set("mini", tier)
 			got := lines(Check(m.deps())[12:13])
-			want := "FAIL usage/routing  —  " + c.want + "\n"
-			if c.want == "" {
+			want := "OK   routing  —  planner=fable-5.1@claude-code coder=PAUSED utility: (invalid model)\n"
+			if c.name == "empty" {
 				want = "OK   routing  —  planner=fable-5.1@claude-code coder=PAUSED utility=undefined@opencode\n"
 			}
 			if got != want {
 				t.Errorf("row %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestSameFileRecognizesHardLinks(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "orch")
+	if err := os.WriteFile(file, []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := file + "-link"
+	if err := os.Link(file, link); err != nil {
+		t.Fatal(err)
+	}
+	if !sameFile(file, link) {
+		t.Fatal("hard links reported as different executables")
 	}
 }
 

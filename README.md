@@ -120,6 +120,17 @@ orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"  # the id, or its first 8
 orch flip gate --clear                                  # after a gate: clear it; the conductor restarts
 ```
 
+The dashboard shows human gates even before the project's first flip, and labels corrupt or
+unreadable flip state `UNREADABLE` rather than implying no gate. `orch flip status` reports
+`{"state":"unreadable","reason":...}` (exit 0), and Work Trains snapshots show the hold reason.
+Repair the file using the gate recovery instructions below; these displays never clear it.
+Watch reads the first non-empty body line under `## Next action` (annotations such as `(exact)`
+are ignored). Watch and doctor label a non-string role model `(invalid model)` without losing
+the other roles. Kickoff accepts only `--door opencode|claude|auto`; unknown, empty or bare
+values exit 2 before routing or project writes. Doctor recognizes a hard-linked `orch` on PATH.
+After worker state storage recovers, its stale `last_state_write_error` is cleared; release
+messages are still posted by the agent, not the worker.
+
 Replying to the question a gate is waiting on clears it too. Details are in
 [step 3](#3-while-it-runs).
 

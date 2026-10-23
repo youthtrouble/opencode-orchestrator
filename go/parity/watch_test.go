@@ -69,6 +69,7 @@ func (h *harness) testWatch(t *testing.T) {
 		collects  bool // the cache is stale, so getRouting re-collects (and both feeds fail)
 	}{
 		{name: "empty"},
+		{name: "invalid-model-PE-56"},
 		{name: "supervisor-alive", seed: watchProject("supervisor-state.json", fmt.Sprintf(`{"status":"running","pid":%d,"checked_at":%q}`, os.Getpid(), iso(0)))},
 		{name: "supervisor-dead", seed: watchProject("supervisor-state.json", fmt.Sprintf(`{"status":"running","pid":%d,"checked_at":%q}`, deadPid, iso(0)))},
 		{name: "supervisor-pid-zero", seed: watchProject("supervisor-state.json", fmt.Sprintf(`{"status":"running","pid":0,"checked_at":%q}`, iso(0)))}, // no falsy guard: alive
@@ -119,8 +120,60 @@ func (h *harness) testWatch(t *testing.T) {
 				inv.seed = seeds(seedCache(green, time.Now().Add(-6*time.Minute)), codexFails, seedProjectDir(".orchestrator"))
 				inv.normalize = normalizeWatchCollected
 			}
+			if c.name == "invalid-model-PE-56" {
+				registry, err := jsjson.Unmarshal([]byte(h.registryWithHome(t, "opencode")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				tiers := jsjson.Path(registry, "vendors", "openai", "tiers").(*jsjson.Object)
+				for _, key := range tiers.Keys() {
+					jsjson.Path(tiers, key).(*jsjson.Object).Set("opencode", 5.0)
+				}
+				data, err := jsjson.Marshal(registry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				root := h.jsTreeWithRegistry(t, string(data))
+				inv.js[1] = filepath.Join(root, "bin", "watch.mjs")
+				inv.env = []string{"ORCH_HOME=" + root, "ORCH_REGISTRY=" + filepath.Join(root, "models.json")}
+				js, orch := h.runPair(t, inv)
+				if js.exitCode != 1 || !strings.Contains(js.stderr, "model.split is not a function") {
+					t.Errorf("frozen JS: %+v", js)
+				}
+				if orch.exitCode != 0 || orch.stderr != "" || !strings.Contains(orch.stdout, "reviewer: (invalid model)") || !strings.Contains(orch.stdout, "incidents (24h)") {
+					t.Errorf("PE-56: %+v", orch)
+				}
+				return
+			}
 			if c.crashLine != "" {
 				inv.crash, inv.errorLine = crashC1, c.crashLine
+			}
+			if c.name == "flip-awaiting-human-only" {
+				js, orch := h.runPair(t, inv)
+				if js.exitCode != 1 || !strings.Contains(js.stderr, c.crashLine) {
+					t.Errorf("frozen JS: %+v", js)
+				}
+				if orch.exitCode != 0 || orch.stderr != "" || !strings.Contains(orch.stdout, "flip: AWAITING HUMAN (undefined, push?)") {
+					t.Errorf("PE-54: %+v", orch)
+				}
+				return
+			}
+			if c.name == "flip-awaiting-human-with-at" || c.name == "state-next-action-exact" {
+				js, orch := h.runPair(t, inv)
+				if c.name == "state-next-action-exact" {
+					if !strings.Contains(js.stdout, "next: (exact)") || !strings.Contains(orch.stdout, "next: run the tests") {
+						t.Fatal("PE-55 next-action regression")
+					}
+					js.stdout = strings.ReplaceAll(js.stdout, "next: (exact)", "next: run the tests")
+				} else {
+					old := "flip: a->b at " + iso(0)[11:16] + "Z"
+					if !strings.Contains(js.stdout, old) {
+						t.Fatal("missing frozen JS flip line")
+					}
+					js.stdout = strings.ReplaceAll(js.stdout, old, "flip: AWAITING HUMAN (undefined, push?)")
+				}
+				compareOutcomes(t, js, orch)
+				return
 			}
 			h.comparePair(t, inv)
 		})
@@ -172,14 +225,14 @@ const followFrameStart = "\x1b[2J\x1b[H"
 // for errorFrames, a second stderr line) begins, SIGTERMs the pid it started and compares the
 // first frame (or stderr line) and that both died of the signal.
 func (h *harness) compareWatchFollow(t *testing.T, seed seed, errorFrames bool) {
-	run := func(argv []string) (string, *os.ProcessState) {
+	run := func(argv []string, readErrors bool) (string, *os.ProcessState) {
 		sb := h.newSandbox(t)
 		seed(t, sb)
 		cmd := h.command(sb, append(argv, "--follow", "--interval", "1"), nil, nil)
 		var watched io.ReadCloser
 		var err error
 		var other bytes.Buffer
-		if errorFrames {
+		if readErrors {
 			cmd.Stdout = &other
 			watched, err = cmd.StderrPipe()
 		} else {
@@ -195,7 +248,7 @@ func (h *harness) compareWatchFollow(t *testing.T, seed seed, errorFrames bool) 
 		// Bounds the process's life even if this test fails before signalling it.
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		first := make(chan string, 1)
-		go func() { first <- readFirstFrame(watched, errorFrames) }()
+		go func() { first <- readFirstFrame(watched, readErrors) }()
 		var frame string
 		select {
 		case frame = <-first:
@@ -214,9 +267,13 @@ func (h *harness) compareWatchFollow(t *testing.T, seed seed, errorFrames bool) 
 		}
 		return normalizeWatchHeader(frame), cmd.ProcessState
 	}
-	jsFrame, jsState := run([]string{h.node, filepath.Join(h.orchJS, "bin", "watch.mjs")})
-	orchFrame, orchState := run([]string{h.orchBin, "watch"})
-	if jsFrame == "" || jsFrame != orchFrame {
+	jsFrame, jsState := run([]string{h.node, filepath.Join(h.orchJS, "bin", "watch.mjs")}, errorFrames)
+	orchFrame, orchState := run([]string{h.orchBin, "watch"}, false)
+	if errorFrames {
+		if jsFrame != "Cannot read properties of undefined (reading 'slice')\n" || !strings.Contains(orchFrame, "flip: AWAITING HUMAN (undefined, r)") {
+			t.Errorf("PE-54 JS %q orch %q", jsFrame, orchFrame)
+		}
+	} else if jsFrame == "" || jsFrame != orchFrame {
 		t.Errorf("first frame differs:\n  js: %q\norch: %q", jsFrame, orchFrame)
 	}
 	for name, state := range map[string]*os.ProcessState{"js": jsState, "orch": orchState} {

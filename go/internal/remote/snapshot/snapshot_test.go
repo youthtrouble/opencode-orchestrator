@@ -46,6 +46,37 @@ func project(t *testing.T, files map[string]string) discover.Project {
 	return discover.Project{Name: "app", Root: root, RealPath: root}
 }
 
+func TestBuildShowsUnreadableFlipAsAGate(t *testing.T) {
+	for _, content := range []string{`{`, `{"awaiting_human":`} {
+		snapshot, err := Build(project(t, map[string]string{"flip.json": content}), testEnv())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.State != statePaused || !strings.Contains(snapshot.StateReason, "flip state unreadable: INVALID_JSON") {
+			t.Errorf("snapshot = %+v", snapshot)
+		}
+	}
+}
+
+func TestBuildShowsAFlipReadFailureAsAGate(t *testing.T) {
+	p := project(t, nil)
+	file := filepath.Join(p.Root, ".orchestrator", "flip.json")
+	if err := os.MkdirAll(file, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Build(p, testEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != statePaused || !strings.Contains(snapshot.StateReason, "flip state unreadable: EISDIR") {
+		t.Errorf("snapshot = %+v", snapshot)
+	}
+	info, err := os.Stat(file)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("flip input changed: %v", err)
+	}
+}
+
 func TestBuildTreatsUnparsableStateFilesAsNoRecord(t *testing.T) {
 	snapshot, err := Build(project(t, map[string]string{
 		"flip.json":              `[1, 2]`,

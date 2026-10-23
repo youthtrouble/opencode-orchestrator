@@ -21,6 +21,16 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- worker (S13l, PE-53): clear a stale state-write error on successful recovery; release messages
+  remain the agent's responsibility, not the worker's.
+- watch/flip/remote (S13l, PE-54): display gate-only and unreadable flip state explicitly;
+  `flip status` reports unreadable state with its recovery reason and exit 0.
+- watch (S13l, PE-55): show the first non-empty next-action body line, not `(exact)` from its heading.
+- watch/doctor (S13l, PE-56): show an invalid model per role without losing other routing information.
+- kickoff (S13l, PE-57): validate `--door opencode|claude|auto` before routing or project writes;
+  unknown, empty and bare values exit 2.
+- doctor (S13l, S12c F1/F2): recognize hard-linked executables on PATH and share `LookPath`
+  for toolchain discovery instead of maintaining a second predicate.
 - plugin (S13s1): the orchestrator plugin keeps a per-instance activity ledger at
   `.orchestrator/activity/opencode/<pid>-<hex>.json`: the last activity of any session in the
   project (subagents included, from bus events, the context hook and the tool hooks) and the
