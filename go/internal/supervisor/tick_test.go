@@ -42,12 +42,12 @@ func TestTickOnAFreshStateWritesTheJSKeyOrderAndTheTwoPhaseIntent(t *testing.T) 
       "breadth": "focused",
       "quiet": false,
       "checked_at": %q,
-      "next_check": %d,
-      "next_check_at": %q
+      "next_check": null,
+      "next_check_at": null
     }
   }
 }
-`, id, iso(0), t0+120, iso(0), t0+120, iso(120))
+`, id, iso(0), t0+120, iso(0))
 	if firstWrite != wantFirst {
 		t.Errorf("state after the intent write:\n%s\nwant:\n%s", firstWrite, wantFirst)
 	}
@@ -82,14 +82,14 @@ func TestTickOnAFreshStateWritesTheJSKeyOrderAndTheTwoPhaseIntent(t *testing.T) 
       "breadth": "focused",
       "quiet": false,
       "checked_at": %q,
-      "next_check": %d,
-      "next_check_at": %q
+      "next_check": null,
+      "next_check_at": null
     }
   },
   "checked_at": %q,
   "pid": 4242,
   "status": "running"
-}`, id, iso(0), t0+120, iso(0), t0+120, iso(120), iso(0))
+}`, id, iso(0), t0+120, iso(0), iso(0))
 	if got := indent(t, state); got != want {
 		t.Errorf("state:\n%s\nwant:\n%s", got, want)
 	}
@@ -491,7 +491,8 @@ func TestTickThrowSites(t *testing.T) {
 	})
 	t.Run("next_check abc of the same run: RangeError", func(t *testing.T) {
 		f := newFixture(t)
-		f.worker("b", `"status": "running"`)
+		f.worker("b", `"status": "running", "pid": 7`)
+		f.live[7] = true
 		_, err := f.tick(`{"lanes": {"b": {"run": "run-b", "next_check": "abc"}}}`)
 		if nodefs.ErrorCode(err) != "RangeError: Invalid time value" {
 			t.Errorf("error = %v", err)

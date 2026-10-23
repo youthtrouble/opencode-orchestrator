@@ -197,8 +197,9 @@ budgets: if its own vendor is red it flips to the other door; the away door hand
 relaunches it at the first reset.
 
 **Background runs.** A headless conductor runs as the worker lane `conductor`. Each lane has a
-two-hour limit by default; when one ends early or fails, the supervisor relaunches the conductor,
-which resumes from `STATE.md`. A lane has one runner at a time: the runner holds a kernel lock on
+two-hour limit by default; when one ends for any reason (early, failed, after a bare handoff, or
+killed before it recorded a final status), the supervisor relaunches the conductor, which resumes
+from `STATE.md`, and tells you once in the mailbox. Only a gate or a budget pause stops this. A lane has one runner at a time: the runner holds a kernel lock on
 `.orchestrator/workers/<lane>.lock` while it runs, and `orch worker stop` signals only that holder.
 A lock file left by a runner that crashed is reclaimed by the next start; never delete one by
 hand. Background processes are kept awake with `caffeinate` (macOS) or

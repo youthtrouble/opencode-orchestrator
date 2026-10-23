@@ -41,6 +41,7 @@ func (h *harness) runDaemon(t *testing.T, sb sandbox, argv []string, stdin []byt
 // runDaemonWithin is runDaemon with the serve given exitWait to stop.
 func (h *harness) runDaemonWithin(t *testing.T, sb sandbox, argv []string, stdin []byte, env []string, exitWait time.Duration) outcome {
 	t.Helper()
+	since := time.Now()
 	cmd := h.command(sb, argv, stdin, env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -51,11 +52,11 @@ func (h *harness) runDaemonWithin(t *testing.T, sb sandbox, argv []string, stdin
 	go func() { exited <- cmd.Wait() }()
 	dir := filepath.Join(sb.project, ".orchestrator")
 	if runErr, done := waitForLock(filepath.Join(dir, "supervisor.lock"), cmd.Process.Pid, exited); done {
-		return outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+		return h.withPE59(t, argv, since, outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)})
 	}
 	select {
 	case runErr := <-exited: // it died while ticking (a crash, or PE-17's JS)
-		return outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+		return h.withPE59(t, argv, since, outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)})
 	case <-time.After(serveTickTime):
 	}
 	if err := os.WriteFile(filepath.Join(dir, "supervisor.stop"), nil, 0o644); err != nil {
@@ -63,13 +64,57 @@ func (h *harness) runDaemonWithin(t *testing.T, sb sandbox, argv []string, stdin
 	}
 	select {
 	case runErr := <-exited:
-		return outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+		return h.withPE59(t, argv, since, outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)})
 	case <-time.After(exitWait):
 		_ = cmd.Process.Kill()
 		<-exited
 		t.Fatalf("%s did not stop within %s; killed %d", argv[0], exitWait, cmd.Process.Pid)
 		return outcome{}
 	}
+}
+
+// withPE59 applies PE-59 by side to the lane entries a serve started at since wrote (checked
+// that second or later; seeded entries stay as written): orch must write literal null for both
+// next check fields of every lane that is not running, and the frozen JS's epoch/ISO pair
+// there is rewritten to null. Running entries and any other JS value are left as written.
+func (h *harness) withPE59(t *testing.T, argv []string, since time.Time, o outcome) outcome {
+	t.Helper()
+	const path = "project/supervisor-state.json"
+	text, ok := o.files[path]
+	if !ok {
+		return o
+	}
+	if argv[0] != h.node {
+		if kept := endedLanesWithNextCheck(text, since); len(kept) > 0 {
+			t.Errorf("PE-59: orch kept a next check for lanes that are not running: %q", kept)
+		}
+		return o
+	}
+	o.files[path] = laneNextCheck.ReplaceAllStringFunc(text, func(entry string) string {
+		parts := laneNextCheck.FindStringSubmatch(entry)
+		if parts[2] == "running" || !checkedSince(parts[3], since) || !jsNextCheck.MatchString(parts[4]) || !jsNextCheckAt.MatchString(parts[6]) {
+			return entry
+		}
+		return parts[1] + "null" + parts[5] + "null"
+	})
+	return o
+}
+
+// endedLanesWithNextCheck lists the lane entries of a state text, checked at or after since,
+// whose phase is not running and whose next_check or next_check_at is not literal null.
+func endedLanesWithNextCheck(state string, since time.Time) []string {
+	var kept []string
+	for _, parts := range laneNextCheck.FindAllStringSubmatch(state, -1) {
+		if parts[2] != "running" && checkedSince(parts[3], since) && (parts[4] != "null" || parts[6] != "null") {
+			kept = append(kept, parts[0])
+		}
+	}
+	return kept
+}
+
+// checkedSince reports whether a lane entry's checked_at (whole seconds) is not before since.
+func checkedSince(checkedAt string, since time.Time) bool {
+	return checkedAt >= since.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05.000Z")
 }
 
 // waitForLock polls until the lock holds pid or the process exits (done, with its error).
@@ -108,6 +153,10 @@ var (
 	superLogLine = regexp.MustCompile(`(?m)^(` + isoMillis.String() + `) `)
 	// superMailboxID is the id of the wake message an event records.
 	superMailboxID = regexp.MustCompile(`("mailbox_id": ")` + freshUUID.String() + `(")`)
+	// laneNextCheck is a state.lanes entry's phase and its next check pair, as written (PE-59).
+	laneNextCheck = regexp.MustCompile(`("phase": "([a-z_]+)",\n[^\n]*\n[^\n]*\n\s*"checked_at": "([^"\n]*)",\n\s*"next_check": )([^,\n]+)(,\n\s*"next_check_at": )([^\n]+)`)
+	// jsNextCheck is the pair the frozen JS writes: epoch seconds and their ISO time.
+	jsNextCheck, jsNextCheckAt = regexp.MustCompile(`^\d+$`), regexp.MustCompile(`^"` + isoMillis.String() + `"$`)
 	// incidentFresh is the at, version and project of an incident line written in the run.
 	incidentFresh = regexp.MustCompile(`("at":")(` + isoMillis.String() + `)(".*"version":")[^"]*(")`)
 )
@@ -343,9 +392,10 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		flipEvalCase("paused-both-red", seeds(seedFlip(`{"paused": true}`), caches.bothRed)),
 		// decide flips the idle project to claude; the cooldown holds the launch back.
 		flipEvalCase("decide-flip-in-cooldown", seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T10:00:00.000Z"}`), inCooldown, caches.openaiRed)),
-		// The finished conductor handed off (a handoff message since it started): decide stays
-		// and nothing needs a restart, so no relaunch even out of the cooldown.
-		flipEvalCase("handed-off", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), handoffSince("2026-10-19T10:00:00.000Z"), caches.green)),
+		// The finished conductor handed off (a handoff message since it started). PE-60: orch
+		// restarts it out of the cooldown, the frozen JS never does; in the cooldown neither
+		// launches. The restart is covered by TestRelaunchAfterABareHandoff.
+		flipEvalCase("handed-off", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), handoffSince("2026-10-19T10:00:00.000Z"), inCooldown, caches.green)),
 		// A handoff before the lane started does not count: the lane finished early, in cooldown.
 		flipEvalCase("handoff-before-start", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), handoffSince("2026-10-19T09:00:00.000Z"), inCooldown, caches.green)),
 		// The flip names a door flip run refuses: the never-started launch fails (exit 2, logged)
@@ -373,7 +423,8 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 			requireFlipEvaluated(t, "js", js)
 			requireFlipEvaluated(t, "orch", orch)
 			if c.name == "flip/pending-launch-to-gemini" {
-				assertRedispatchRecord(t, &orch, "pending:undefined", false)
+				// PE-60: a pending launch records under the conductor slot key (no lane here).
+				assertRedispatchRecord(t, &orch, "conductor:none", false)
 			}
 			compareOutcomes(t, js, orch)
 		})
@@ -584,6 +635,7 @@ func (h *harness) runStart(t *testing.T, s seed, argv []string) outcome {
 	}
 	o.stdout = withSupervisorHolder(o.stdout)
 	o.files = sb.files(t)
+	o = h.withPE59(t, argv, since, o)
 	return withLockHolderPids(o.withProjectPlaceholder(t, sb)).normalized(normalizeServe(since))
 }
 
@@ -767,15 +819,18 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 				key := "conductor:none"
 				switch c.name {
 				case "conductor/pending-launch":
-					key = "pending:undefined"
+					key = "conductor:none" // PE-60: pending launches record under the slot key
 				case "conductor/gate-cleared":
-					key = "pending:2026-10-19T10:00:00.000Z"
+					key = "0:conductor" // PE-60: the slot key of the finished lane
 				case "conductor/finished-early-resume":
 					key = "0:conductor"
 				case "redispatch/deferred-due":
 					key = "rd"
 				}
 				assertRedispatchRecord(t, &orch, key, true)
+			}
+			if c.name == "conductor/finished-early-resume" {
+				removeRelaunchNote(t, &orch, "claude conductor relaunched by the supervisor: exited without handoff")
 			}
 			compareOutcomes(t, js, orch)
 		})
@@ -816,10 +871,12 @@ func (h *harness) runServeLaunch(t *testing.T, inv invocation, argv []string, la
 	inv.seed(t, sb)
 	before := map[string]string{}
 	collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
+	since := time.Now()
 	o := h.runDaemon(t, sb, argv, nil, inv.env)
 	l := launchedRunner(t, argv[0], sb, lane)
 	settle(t, l.RunnerPid)
 	o.files = sb.files(t)
+	o = h.withPE59(t, argv, since, o)
 	requireLaunchRecorded(t, argv[0], l, o.files, true)
 	quoted := quotedAnswerLengths(o.files["project/logs/supervisor.log"])
 	collectExtraFiles(t, sb, inv, o.files)
@@ -867,8 +924,10 @@ func (h *harness) testServeClaudeResume(t *testing.T) {
 		inv.seed(t, sb)
 		before := map[string]string{}
 		collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
+		since := time.Now()
 		o := h.runDaemon(t, sb, argv, nil, inv.env)
 		o.files = quietFilesWithRunRecord(t, argv[0], sb)
+		o = h.withPE59(t, argv, since, o)
 		reapClaudeExec(t, argv[0], sb)
 		withWakePromptDigest(t, argv[0], o.files)
 		o = o.withProjectPlaceholder(t, sb)
@@ -1075,6 +1134,26 @@ func (h *harness) testServePausedUncachedDecide(t *testing.T) {
 	compareOutcomes(t, js, orch)
 }
 
+// removeRelaunchNote asserts the one informational note orch posts to the human for a
+// conductor restart (PE-60; the frozen JS posts none) and removes it for the comparison.
+func removeRelaunchNote(t *testing.T, o *outcome, subject string) {
+	t.Helper()
+	const path = "project/mailbox/messages.jsonl"
+	var kept []string
+	notes := 0
+	for _, line := range strings.SplitAfter(o.files[path], "\n") {
+		if strings.Contains(line, `"from":"supervisor","to":"human","kind":"note","subject":"`+subject+`"`) {
+			notes++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if notes != 1 {
+		t.Fatalf("%d relaunch notes %q in %s", notes, subject, o.files[path])
+	}
+	o.files[path] = strings.Join(kept, "")
+}
+
 // PE-36/37: only launch cases add supervisor-owned records. Assert their contents
 // before removing that one field for comparison with the frozen JS's old writes.
 func assertRedispatchRecord(t *testing.T, o *outcome, key string, confirmed bool) {
@@ -1119,4 +1198,42 @@ func assertRedispatchRecord(t *testing.T, o *outcome, key string, confirmed bool
 		prefix = strings.TrimSuffix(prefix, ",\n") + "\n"
 	}
 	o.files[path] = prefix + suffix
+}
+
+// TestPE59EndedLaneCheck pins the orch-side PE-59 assertion: a non-running lane entry must hold
+// literal null for both fields, so an orch regression to a number cannot be normalized away.
+func TestPE59EndedLaneCheck(t *testing.T) {
+	since := time.Date(2026, 10, 19, 10, 0, 0, 500_000_000, time.UTC)
+	checkedAt := "2026-10-19T10:00:00.000Z" // the serve's tick second
+	entry := func(phase, nextCheck, nextCheckAt string) string {
+		return `{
+  "lanes": {
+    "a": {
+      "run": "r",
+      "phase": "` + phase + `",
+      "breadth": "standard",
+      "quiet": false,
+      "checked_at": "` + checkedAt + `",
+      "next_check": ` + nextCheck + `,
+      "next_check_at": ` + nextCheckAt + `
+    }
+  }
+}
+`
+	}
+	for _, c := range []struct {
+		name, state string
+		kept        bool
+	}{
+		{"ended, nulls", entry("finished", "null", "null"), false},
+		{"running, numbers", entry("running", "1792404300", `"2026-10-19T10:05:00.000Z"`), false},
+		{"ended, numbers (regression)", entry("finished", "1792404300", `"2026-10-19T10:05:00.000Z"`), true},
+		{"exited, number only", entry("process_exited", "1792404300", "null"), true},
+		{"ended, ISO only", entry("failed", "null", `"2026-10-19T10:05:00.000Z"`), true},
+		{"seeded before the serve", strings.Replace(entry("finished", "1792404300", `"2026-10-19T10:05:00.000Z"`), checkedAt, "2026-10-19T09:59:59.000Z", 1), false},
+	} {
+		if got := len(endedLanesWithNextCheck(c.state, since)) > 0; got != c.kept {
+			t.Errorf("%s: flagged %v, want %v", c.name, got, c.kept)
+		}
+	}
 }

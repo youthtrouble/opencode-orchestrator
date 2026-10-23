@@ -107,7 +107,7 @@ func TestRedispatchFailedConductorRetriesThenConfirmsOnce(t *testing.T) {
 	}
 }
 
-func TestRedispatchPendingBackoffStopsAfterFiveFailures(t *testing.T) {
+func TestRedispatchPendingBackoffSlowsAfterFiveFailures(t *testing.T) {
 	f := newFixture(t)
 	f.mkdir("logs")
 	f.write("flip.json", `{"pending_launch":{"at":"pending-at","to":"claude","from":"opencode"}}`)
@@ -127,10 +127,10 @@ func TestRedispatchPendingBackoffStopsAfterFiveFailures(t *testing.T) {
 			}
 		}
 	}
-	f.at(100000)
+	f.at(900 + 1799)
 	state = compact(t, f.mustEvaluate(state))
 	if len(f.launches()) != 5 {
-		t.Fatalf("did not stop: %v", f.launches())
+		t.Fatalf("did not slow down: %v", f.launches())
 	}
 	msgs := f.messages()
 	if len(msgs) != 1 || !strings.Contains(msgs[0], `"to":"human","kind":"blocked","subject":"conductor relaunch stopped after 5 failed attempts"`) || !strings.Contains(msgs[0], "last failure") || !strings.Contains(msgs[0], "orch flip run") {
@@ -236,7 +236,7 @@ func TestRedispatchFifthFailureNotesAreSingleAndAddressed(t *testing.T) {
 				run = f.mustEvaluate
 			}
 			object := run(state)
-			f.at(100000)
+			f.at(1799) // before a conductor key's slow retry
 			run(compact(t, object))
 			blocked := []any{}
 			for _, line := range f.messages() {
@@ -297,29 +297,29 @@ func TestRedispatchConductorLogErrorKeepsRecordForNextWrite(t *testing.T) {
 	}
 }
 
+// A pending launch records under the conductor slot key (S13o v3); pending:<at> keys are
+// retired, so a leftover one is pruned like any obsolete key.
 func TestRedispatchPendingSuccessConfirmsAndPrunesOnlyObsoleteKeys(t *testing.T) {
 	f := newFixture(t)
 	f.mkdir("logs")
 	f.write("flip.json", `{"pending_launch":{"at":"a","to":"claude"}}`)
-	f.runResult = SyncResult{Status: status(0), Stdout: conductorLaunched}
+	f.respond = func(SyncSpec) SyncResult {
+		f.write("workers/conductor.json", `{"run_id":"replacement","status":"running","harness":"claude","pid":123}`)
+		f.live[123] = true
+		return SyncResult{Status: status(0), Stdout: conductorLaunched}
+	}
 	state := f.mustTick(`{"redispatch":{"gone":{"attempts":1},"pending:old":{"attempts":1}}}`)
-	if jsjson.Path(state, "redispatch", "pending:a", "confirmed_run_id") != "replacement" || jsjson.Path(state, "redispatch", "gone") != nil || jsjson.Path(state, "redispatch", "pending:old") != nil {
+	if jsjson.Path(state, "redispatch", "conductor:none", "confirmed_run_id") != "replacement" || jsjson.Path(state, "redispatch", "gone") != nil || jsjson.Path(state, "redispatch", "pending:old") != nil {
 		t.Fatalf("records: %s", compact(t, state))
 	}
 	f.at(10000)
 	state = f.mustTick(compact(t, state))
-	if len(f.launches()) != 1 {
-		t.Fatal("confirmed pending launch repeated")
-	}
-	f.write("flip.json", `{}`)
-	f.at(20000)
-	state = f.mustTick(compact(t, state))
-	if jsjson.Path(state, "redispatch", "pending:a") != nil {
-		t.Fatalf("obsolete pending key kept: %s", compact(t, state))
+	if len(f.launches()) != 1 || jsjson.Path(state, "redispatch", "conductor:none") != nil {
+		t.Fatalf("confirmed pending launch repeated or slot key kept after publication: %s", compact(t, state))
 	}
 }
 
-func TestRedispatchAbsentConductorStopsAfterFiveFailures(t *testing.T) {
+func TestRedispatchAbsentConductorSlowsAfterFiveFailures(t *testing.T) {
 	for _, decision := range []string{`{"action":"stay"}`, `{"action":"flip","to":"claude"}`} {
 		t.Run(decision, func(t *testing.T) {
 			f := relaunchFixture(t, "", `{"paused":true}`, decision)
@@ -337,14 +337,19 @@ func TestRedispatchAbsentConductorStopsAfterFiveFailures(t *testing.T) {
 					t.Errorf("attempt %d: launches=%d, records=%s", attempt, len(f.launches()), compact(t, jsjson.Path(state, "redispatch")))
 				}
 			}
-			f.at(4*601 + 2*3600)
+			f.at(4*601 + 1740) // the last check before the slow retry (checks run a minute apart)
 			state = f.mustTick(compact(t, state))
 			if len(f.launches()) != 5 || jsjson.Path(state, "redispatch", "conductor:none", "attempts") != float64(5) {
-				t.Fatalf("sixth launch after stop: %s", compact(t, state))
+				t.Fatalf("sixth launch before the slow retry: %s", compact(t, state))
 			}
-			messages := f.messages()
-			if len(messages) != 1 || !strings.Contains(messages[0], `"to":"human","kind":"blocked","subject":"conductor relaunch stopped after 5 failed attempts"`) {
-				t.Fatalf("blocked notes: %v", messages)
+			f.at(4*601 + 1800)
+			state = f.mustTick(compact(t, state))
+			if len(f.launches()) != 6 || jsjson.Path(state, "redispatch", "conductor:none", "attempts") != float64(6) {
+				t.Fatalf("no slow retry: %s", compact(t, state))
+			}
+			blocked := f.sent("blocked")
+			if len(blocked) != 1 || jsjson.Path(blocked[0], "to") != "human" || jsjson.Path(blocked[0], "subject") != "conductor relaunch stopped after 5 failed attempts" {
+				t.Fatalf("blocked notes: %v", blocked)
 			}
 		})
 	}
@@ -451,7 +456,7 @@ func TestRedispatchConductorReadsTopLevelLaunchFields(t *testing.T) {
 				key := "9:conductor"
 				if path == "pending" {
 					f.write("flip.json", `{"pending_launch":{"at":"a","to":"claude"}}`)
-					key = "pending:a"
+					key = "9:conductor" // the slot key: pending launches record under it
 				}
 				f.respond = func(spec SyncSpec) SyncResult {
 					if spec.Args[1] == "decide" {

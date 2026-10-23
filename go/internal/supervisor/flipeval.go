@@ -10,6 +10,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/incident"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
@@ -170,11 +171,16 @@ func (s *Supervisor) launchNeverStarted(state *jsjson.Object, t *tick, c conduct
 }
 
 // launchPending launches a hand-off recorded while the previous conductor still held the
-// lane. Each pending record has its own bounded retry backoff.
+// lane. Its attempts belong to the conductor slot's key: `flip run` removes pending_launch
+// before it launches, so only the slot key outlives a failed launch (decideAndRelaunch then
+// retries it).
 func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorView) error {
 	pending := jsjson.Path(c.flip, "pending_launch")
-	key := pendingRunKey(pending)
-	if !recordEligible(state, key, t.now) {
+	key := conductorRunKey(c.lane)
+	if err := s.expireStaleConfirmation(state, key, t, c); err != nil {
+		return err
+	}
+	if !recordEligible(state, key, conductorRetry, t.now) {
 		return nil
 	}
 	// The log shows pl.from as it is (undefined included); the argument is pl.from || activeDoor.
@@ -189,26 +195,36 @@ func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorVie
 		return err
 	}
 	runID, attempted := flipLaunchOutcome(result)
-	stopped := false
+	var attempts float64
+	blocked := false
 	if attempted {
-		stopped = recordRedispatch(state, key, t, runID)
+		attempts, blocked = recordRedispatch(state, key, t, runID, conductorRetry)
 		state.Set("last_relaunch_at", float64(t.now))
 	}
 	logErr := s.log(t, "pending launch "+argText(from)+"->"+argText(to)+": "+outputText(result, logOutputUnits))
-	if stopped {
-		argv, err := spawnArgs(append([]any{"flip"}, args...)...)
-		if err != nil {
-			return errors.Join(logErr, err)
-		}
-		s.noteRelaunchStopped(t, "conductor", "human", result, argv)
+	if blocked {
+		return errors.Join(logErr, s.noteConductorBlocked(t, attempts, result, args))
 	}
 	return logErr
+}
+
+// noteConductorBlocked posts a conductor key's blocked note to the human, who is the only
+// reader while no conductor runs.
+func (s *Supervisor) noteConductorBlocked(t *tick, attempts float64, result SyncResult, args []any) error {
+	argv, err := spawnArgs(append([]any{"flip"}, args...)...)
+	if err != nil {
+		return err
+	}
+	s.noteRelaunchBlocked(t, "conductor", "human", attempts, result, argv)
+	return nil
 }
 
 // decideAndRelaunch asks `flip decide` what an idle conductor's project should do and, at
 // most once per relaunchCooldown, launches the door it names: the target of a flip or
 // hand-back, or the active door again when the project was paused or the lane needs a
-// restart. The launch result is recorded in supervisor state before diagnostics.
+// restart (owner rule 5b18cc1c: only a gate or a pause holds a restart back). The launch
+// result is recorded in supervisor state before diagnostics; the first attempt of a
+// restart tells the human.
 func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conductorView) error {
 	decided, err := s.flipResult("", "decide", "--active", c.activeDoor, "--cwd", s.Root)
 	if err != nil {
@@ -220,12 +236,12 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	if err != nil {
 		return err
 	}
-	status := jsjson.Path(c.lane, "status")
 	key := conductorRunKey(c.lane)
-	// A legacy stamp marks only the restart as done; the attempt record gates every relaunch.
-	restartDone := legacyRedispatched(c.lane)
-	finishedEarly := jsjson.Truthy(c.lane) && status == "finished" && !handedOff && !restartDone
-	laneNeedsRestart := jsjson.Truthy(c.lane) && (isOneOf(status, "failed", "deferred", "interrupted") || finishedEarly) && !restartDone
+	if err := s.expireStaleConfirmation(state, key, t, c); err != nil {
+		return err
+	}
+	cause, reasonSuffix := restartCause(c, handedOff, jsjson.Path(state, "redispatch", key))
+	laneNeedsRestart := cause != ""
 
 	action := jsjson.Path(decision, "action")
 	var target any
@@ -238,7 +254,7 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	case action == "stay" && (paused || laneNeedsRestart):
 		target, targetIsActive = c.activeDoor, true
 	}
-	if !recordEligible(state, key, t.now) || !jsjson.Truthy(target) || !elapsed(t.now, jsjson.Path(state, "last_relaunch_at"), relaunchCooldown) {
+	if !recordEligible(state, key, conductorRetry, t.now) || !jsjson.Truthy(target) || !elapsed(t.now, jsjson.Path(state, "last_relaunch_at"), relaunchCooldown) {
 		return nil
 	}
 
@@ -246,20 +262,19 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	if session := jsjson.Path(c.lane, "session_id"); targetIsActive && jsjson.Truthy(session) && (doorOf(c.lane) == "claude") == (target == "claude") {
 		resumeArgs = []any{"--resume", session}
 	}
-	reason := jsjson.TemplateString(action) + ": " + jsjson.TemplateStringOf(jsjson.Lookup(decision, "reason"))
-	if finishedEarly {
-		reason += " (previous conductor exited without handoff)"
-	}
+	reason := jsjson.TemplateString(action) + ": " + jsjson.TemplateStringOf(jsjson.Lookup(decision, "reason")) + reasonSuffix
 	args := append([]any{"run", "--unless-gated", "--to", target, "--from", c.activeDoor, "--reason", reason, "--cwd", s.Root}, resumeArgs...)
 	result, err := s.flipResult("", args...)
 	if err != nil {
 		return err
 	}
 	runID, attempted := flipLaunchOutcome(result)
-	stopped := false
+	var attempts float64
+	blocked, noteRelaunch := false, false
 	if attempted {
-		stopped = recordRedispatch(state, key, t, runID)
+		attempts, blocked = recordRedispatch(state, key, t, runID, conductorRetry)
 		state.Set("last_relaunch_at", float64(t.now))
+		noteRelaunch = laneNeedsRestart && markRelaunchNoted(state, key)
 	}
 	wasPaused := ""
 	if paused {
@@ -273,14 +288,98 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 		Detail:    textOrEmpty(jsjson.Path(decision, "reason")),
 		Project:   s.Root,
 	})
-	if stopped {
-		argv, err := spawnArgs(append([]any{"flip"}, args...)...)
-		if err != nil {
-			return errors.Join(logErr, err)
-		}
-		s.noteRelaunchStopped(t, "conductor", "human", result, argv)
+	if noteRelaunch {
+		s.noteRelaunched(t, target, key, cause, runID)
+	}
+	if blocked {
+		return errors.Join(logErr, s.noteConductorBlocked(t, attempts, result, args))
 	}
 	return logErr
+}
+
+// restartCause names why an idle conductor slot needs a restart, "" when it does not, and
+// the suffix its relaunch reason carries. A legacy redispatched_at stamp means the lane's
+// restart is done. A lane still saying running or starting whose runner is gone and whose lock
+// is free died before its final state write (ee50690d). A handoff no longer suppresses a
+// restart; it only changes the text. Last, the slot's own record of a supervisor launch that
+// did not start (failed, or its confirmation expired) keeps the slot owed a retry even when
+// `flip run` has since removed the paused or pending_launch that caused it.
+func restartCause(c conductorView, handedOff bool, record any) (cause, reasonSuffix string) {
+	if cause := laneRestartCause(c, handedOff); cause != "" {
+		if isOneOf(cause, "failed", "deferred", "interrupted") {
+			return cause, ""
+		}
+		return cause, " (previous conductor " + cause + ")"
+	}
+	if c.idle && c.lockFree && toNumber(jsjson.Path(record, "attempts")) >= 1 && jsjson.Path(record, "confirmed_run_id") == nil {
+		cause = "previous supervisor launch did not start"
+		return cause, " (" + cause + ")"
+	}
+	return "", ""
+}
+
+// laneRestartCause is the restart cause the conductor lane file shows, "" for none.
+func laneRestartCause(c conductorView, handedOff bool) string {
+	if !jsjson.Truthy(c.lane) || legacyRedispatched(c.lane) {
+		return ""
+	}
+	status := jsjson.Path(c.lane, "status")
+	switch {
+	case isOneOf(status, "failed", "deferred", "interrupted"):
+		return status.(string)
+	case status == "finished" && handedOff:
+		return "handed off without flip run, pause or gate"
+	case status == "finished":
+		return "exited without handoff"
+	case isOneOf(status, "running", "starting") && c.idle && c.lockFree:
+		return "exited without a final status"
+	}
+	return ""
+}
+
+// expireStaleConfirmation (D1d): a launch confirmed by its launcher whose runner died before
+// publishing a lane leaves the slot showing the confirmed key. Once relaunchCooldown has
+// passed with the lane idle and its lock free, the confirmation counts as a failed attempt.
+func (s *Supervisor) expireStaleConfirmation(state *jsjson.Object, key string, t *tick, c conductorView) error {
+	record, ok := jsjson.Path(state, "redispatch", key).(*jsjson.Object)
+	if !ok || !c.lockFree {
+		return nil
+	}
+	confirmed := jsjson.Path(record, "confirmed_run_id")
+	since, parsed := secondsSince(record, "last_attempt_at", t.now)
+	if !jsjson.Truthy(confirmed) || !parsed || since < relaunchCooldown {
+		return nil
+	}
+	record.Set("confirmed_run_id", nil)
+	record.Set("attempts", toNumber(jsjson.Path(record, "attempts"))+1)
+	record.Set("last_attempt_at", t.nowISO)
+	return s.log(t, "conductor launch "+jsjson.TemplateString(confirmed)+" never published a lane; counted as a failed attempt")
+}
+
+// markRelaunchNoted stamps relaunch_noted on the key's record and reports whether it was
+// unset, so each run key's restart is announced once.
+func markRelaunchNoted(state *jsjson.Object, key string) bool {
+	record, ok := jsjson.Path(state, "redispatch", key).(*jsjson.Object)
+	if !ok || jsjson.Truthy(jsjson.Path(record, "relaunch_noted")) {
+		return false
+	}
+	record.Set("relaunch_noted", true)
+	return true
+}
+
+// noteRelaunched tells the human the supervisor restarted a conductor, so an unattended
+// restart is never silent.
+func (s *Supervisor) noteRelaunched(t *tick, door any, previousRun, cause string, runID any) {
+	outcome := "failed, retrying with backoff"
+	if runID != nil {
+		outcome = "started " + jsjson.TemplateString(runID)
+	}
+	s.postRedispatchNote(t, mailbox.Draft{
+		From: "supervisor", To: "human", Kind: "note",
+		Subject: jsjson.TemplateString(door) + " conductor relaunched by the supervisor: " + cause,
+		Body: fmt.Sprintf("Previous run %s %s.\nRelaunch: %s.\nTo keep the conductor stopped, run `orch flip gate`.",
+			previousRun, cause, outcome),
+	})
 }
 
 // handedOff reports whether the mailbox holds a handoff posted at or after the conductor

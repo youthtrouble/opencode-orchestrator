@@ -38,6 +38,16 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   or paused relaunch. A failed lane redispatch posts `<lane> re-dispatch failed (attempt <n> of 5)`
   instead of the success subject.
 
+- supervisor (S13o, owner defect `ee50690d`, owner rules `5b18cc1c` and `779604e2`, PE-59,
+  PE-60): an idle conductor is relaunched unless a gate or pause holds it, including one that
+  finished after a bare handoff or died before writing its final status; each restarted run posts
+  one informational note to the human. After five failures conductor and pending launches retry
+  every 30 minutes with the `blocked` note repeated at most every 6 hours (worker lanes still
+  stop); a confirmed launch whose runner never published a lane counts as failed after 600 s; and
+  ended lanes show a null `next_check`. Conductor launches have one owner (the flip evaluation, so
+  a deferred conductor respects gates and pauses), and retries, pending launches included, belong
+  to the conductor slot, so they survive `flip run` clearing the pause or pending launch.
+
 - flip (S13d, sol-5 R4, PE-32): serialize all flip state writers on the separate
   `flip.json.lock`. Corrupt or unreadable state gates decisions, blocks supervisor relaunch,
   and refuses writes with the file untouched; reply gate clearing reports failure and remote

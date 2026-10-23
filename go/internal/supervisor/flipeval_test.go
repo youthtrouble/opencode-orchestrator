@@ -312,7 +312,7 @@ func TestFlipPendingLaunch(t *testing.T) {
 			if got := f.logText(); got != iso(0)+" pending launch "+c.wantLog+": launched\n" {
 				t.Errorf("log %q", got)
 			}
-			wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "pending:undefined")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null}`)
+			wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "conductor:none")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null}`)
 
 			// The first failure waits 60 seconds before the next attempt.
 			f.at(60)
@@ -411,7 +411,7 @@ func TestFlipRelaunchOnFlip(t *testing.T) {
 
 	want := []SyncSpec{
 		{Name: "/bin/orch", Args: []string{"flip", "decide", "--active", "opencode", "--cwd", f.root}},
-		{Name: "/bin/orch", Args: []string{"flip", "run", "--unless-gated", "--to", "claude", "--from", "opencode", "--reason", "flip: anthropic green", "--cwd", f.root}},
+		{Name: "/bin/orch", Args: []string{"flip", "run", "--unless-gated", "--to", "claude", "--from", "opencode", "--reason", "flip: anthropic green (previous conductor handed off without flip run, pause or gate)", "--cwd", f.root}},
 	}
 	if !reflect.DeepEqual(f.runs, want) {
 		t.Errorf("runs %+v, want %+v", f.runs, want)
@@ -420,7 +420,7 @@ func TestFlipRelaunchOnFlip(t *testing.T) {
 	if got := compact(t, mustParse(t, conductorAtLaunch)); got != compact(t, mustParse(t, wantConductor)) {
 		t.Errorf("conductor.json at launch %s, want %s", got, wantConductor)
 	}
-	wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "9:conductor")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null}`)
+	wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "9:conductor")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null,"relaunch_noted":true}`)
 	if got := f.logText(); got != iso(0)+" relaunch opencode->claude (flip): launched\n" {
 		t.Errorf("log %q", got)
 	}
@@ -463,14 +463,15 @@ func TestFlipStayRelaunchesTheActiveDoor(t *testing.T) {
 		{"failed", lane("failed"), `{}`, nil, "stay: r", "stay"},
 		{"deferred", lane("deferred"), `{}`, nil, "stay: r", "stay"},
 		{"interrupted", lane("interrupted"), `{}`, nil, "stay: r", "stay"},
-		{"running but dead", lane("running"), `{}`, nil, "", ""},
+		{"running but dead", lane("running"), `{}`, nil, "stay: r (previous conductor exited without a final status)", "stay"},
+		{"starting but dead", lane("starting"), `{}`, nil, "stay: r (previous conductor exited without a final status)", "stay"},
 		{"finished early", deadConductor, `{}`, nil, "stay: r (previous conductor exited without handoff)", "stay"},
-		{"finished after a handoff", deadConductor, `{}`, []string{handoff("2027-01-15T08:00:00.000Z")}, "", ""},
+		{"finished after a handoff", deadConductor, `{}`, []string{handoff("2027-01-15T08:00:00.000Z")}, "stay: r (previous conductor handed off without flip run, pause or gate)", "stay"},
 		{"handoff before the start", deadConductor, `{}`, []string{handoff("2027-01-15T07:00:00.000Z")}, "stay: r (previous conductor exited without handoff)", "stay"},
 		{"odd mailbox lines", deadConductor, `{}`, []string{"", "null", "{bad", `{"kind": "handoff"}`, `{"kind": "note", "at": "2028"}`, `5`}, "stay: r (previous conductor exited without handoff)", "stay"},
 		{"null at, no started_at", strings.Replace(deadConductor, `"started_at"`, `"begun"`, 1), `{}`, []string{`{"kind": "handoff", "at": null}`}, "stay: r (previous conductor exited without handoff)", "stay"},
-		{"null at, null started_at", strings.Replace(deadConductor, `"2027-01-15T08:00:00.000Z"`, `null`, 1), `{}`, []string{`{"kind": "handoff", "at": null}`}, "", ""},
-		{"handoff compared as text", deadConductor, `{}`, []string{handoff("2027-02")}, "", ""},
+		{"null at, null started_at", strings.Replace(deadConductor, `"2027-01-15T08:00:00.000Z"`, `null`, 1), `{}`, []string{`{"kind": "handoff", "at": null}`}, "stay: r (previous conductor handed off without flip run, pause or gate)", "stay"},
+		{"handoff compared as text", deadConductor, `{}`, []string{handoff("2027-02")}, "stay: r (previous conductor handed off without flip run, pause or gate)", "stay"},
 		{"already redispatched", strings.Replace(deadConductor, `}`, `, "redispatched_at": "x"}`, 1), `{}`, nil, "", ""},
 		{"failed, redispatched", strings.Replace(lane("failed"), `}`, `, "redispatched_at": "x"}`, 1), `{}`, nil, "", ""},
 	}

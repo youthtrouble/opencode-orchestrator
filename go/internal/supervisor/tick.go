@@ -152,9 +152,15 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	sameRun := strictEquals(jsjson.Path(laneState, "run"), run)
 	nextCheck := jsjson.Path(laneState, "next_check")
 	ev := supervise.ChooseEvent(obs, supervise.State{Run: runIf(sameRun, obs), NextCheck: nextCheck, Events: t.events}, t.acks, t.now)
-	if !sameRun || !jsjson.Truthy(nextCheck) {
+	switch {
+	case obs.Phase != supervise.PhaseRunning:
+		// PE-59: only a running lane has checks ahead; an ended one would show a frozen time.
+		nextCheck = nil
+	case !sameRun || !jsjson.Truthy(nextCheck):
 		nextCheck = float64(t.now + obs.Interval)
 	}
+	// A running lane's next_check moves only when emit sends an event, so it stays frozen
+	// while a delivered reminder is unacknowledged (mirrored JS reminder behaviour).
 	entry, err := laneEntry(run, obs, t.nowISO, nextCheck)
 	if err != nil {
 		return err
@@ -210,11 +216,15 @@ func strictEquals(a, b any) bool {
 }
 
 // laneEntry is the lane's new state.lanes entry. nextCheck is a JS value (a hand-edited
-// next_check is passed through), so its ISO form may throw.
+// next_check is passed through), so its ISO form may throw; nil (no check ahead) stays null.
 func laneEntry(run any, obs supervise.Observation, checkedAt string, nextCheck any) (*jsjson.Object, error) {
-	nextCheckAt, err := isoSeconds(nextCheck)
-	if err != nil {
-		return nil, err
+	var nextCheckAt any
+	if nextCheck != nil {
+		at, err := isoSeconds(nextCheck)
+		if err != nil {
+			return nil, err
+		}
+		nextCheckAt = at
 	}
 	entry := jsjson.NewObject()
 	entry.Set("run", run)
@@ -259,8 +269,10 @@ func (s *Supervisor) emit(state *jsjson.Object, t *tick, lane string, obs superv
 	outcome := deliveryOutcome(results, mailboxID)
 	event.Set("status", outcome)
 	event.Set("channels", results)
-	entry.Set("next_check", float64(t.now+obs.Interval))
-	entry.Set("next_check_at", jsjson.ISOString(time.Unix(t.now+obs.Interval, 0)))
+	if obs.Phase == supervise.PhaseRunning {
+		entry.Set("next_check", float64(t.now+obs.Interval))
+		entry.Set("next_check_at", jsjson.ISOString(time.Unix(t.now+obs.Interval, 0)))
+	}
 
 	resultsJSON, err := jsjson.Marshal(results)
 	if err != nil {

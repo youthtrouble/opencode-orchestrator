@@ -344,27 +344,39 @@ messages rather than assuming every successful run did.
 
 **Supervisor.** One per project (`supervisor.lock`), started by `orch kickoff` or `orch supervisor
 start`. It ticks every 5 seconds: observes every lane, posts events to the mailbox (kind `wake`)
-first and then tries the wake channels, re-dispatches budget-deferred lanes after the reset, and
-once a minute evaluates the conductor:
+first and then tries the wake channels, re-dispatches budget-deferred worker lanes after the reset
+(a deferred conductor is relaunched only by the conductor evaluation below), and once a minute
+evaluates the conductor:
 
 - `awaiting_human` in `flip.json`, or unreadable/invalid flip state: do not relaunch; log the gate
   once until it is cleared or the state is repaired. Every automatic conductor launch uses
   `flip run --unless-gated` to recheck for a gate before writing.
 - `pending_launch`: launch the target once the lane is idle and unlocked.
-- an idle conductor lane that ended `failed`, `deferred` or `interrupted`, or `finished` without a
-  handoff, or a paused project: relaunch through `orch flip run`, resuming the previous session when
-  the door is the same; a flip or hand-back decision picks the other door.
+- an idle conductor lane that ended `failed`, `deferred` or `interrupted`, that `finished` (with
+  or without a bare `handoff`), or whose runner died before writing its final status (the lane
+  still says `running`/`starting`, its pid is dead and its lock free), or a paused project:
+  relaunch through `orch flip run`, resuming the previous session when the door is the same; a flip
+  or hand-back decision picks the other door. Only a gate or a pause (`decide` answering `pause`)
+  holds a restart back, so a conductor that must stay stopped uses `orch flip gate`. The first
+  relaunch of each run posts one informational `note` to `human` naming the previous run, the cause
+  and the outcome.
 
 Relaunch bookkeeping belongs to `.orchestrator/supervisor-state.json`, in `redispatch` keyed
-by the old lane's run id (or `<pid>:<lane>`) or `pending:<at>`. The supervisor never rewrites a
+by the old lane's run id (or `<pid>:<lane>`); a pending launch records under the conductor slot's
+key, and a slot that still holds an unconfirmed supervisor launch is retried even after `flip run`
+cleared the pause or pending launch that caused it. The supervisor never rewrites a
 worker's lane file. A launch confirms only after exit 0 and JSON containing a run id and runner
 pid (for a flip, the `run_id` and `runner_pid` fields of `orch flip run`'s answer, not its cut
 `launcher` quote); a legacy `redispatched_at` still means the lane's restart or redispatch is done,
 but never blocks a decided flip, hand-back or paused-project relaunch. A failed lane redispatch
 note says `re-dispatch failed (attempt <n> of 5)`. Failed attempts
 retry after 60, 120, 240 and 480 seconds, with a 30-minute backoff ceiling. After five failures
-for a key, retries stop and one `blocked` note includes the last output and a manual retry
-command. Conductor and pending-launch notes go to `human`; worker-lane notes go to
+for a key, one `blocked` note includes the last output and a manual retry command; a worker
+lane's retries then stop, while a conductor or pending launch is retried every 30 minutes until
+a launch is confirmed or a gate or pause holds it, repeating the `blocked` note at most every
+6 hours. A conductor launch that was confirmed but whose runner never published a lane (the slot
+still shows the old run, idle and unlocked, 600 seconds later) counts as a failed attempt. A
+lane that is not running shows `next_check` and `next_check_at` as null in the state. Conductor and pending-launch notes go to `human`; worker-lane notes go to
 `coordinator`. The decided conductor path also keeps its 600-second project cooldown;
 never-started flip targets keep their separate 120-second backoff. Gate refusals and answers
 that defer to `pending_launch` do not count as attempts. Failed redispatch-note posts log a
