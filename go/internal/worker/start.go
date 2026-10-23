@@ -233,7 +233,29 @@ func (l *Launch) initialState(rt Runtime) *jsjson.Object {
 	state.Set("started_at", jsjson.ISOString(rt.Now()))
 	state.Set("log_path", o.Or("log-path", nil))
 	state.Set("model", o.Or("model", nil))
+	state.Set("launch_options", l.launchOptions())
 	return state
+}
+
+// replayedOptions are the bridge options a redispatch passes again (PE-62). force, run-id,
+// log-path and detach belong to one run and are never replayed.
+var replayedOptions = []string{"effort", "timeout-min", "agent", "sandbox", "permission-mode", "allowed-tools", "max-turns"}
+
+// launchOptions is what a redispatch must pass again to start this lane the same way: each
+// given replayedOptions value, then, for a lane whose child cwd is not its project root,
+// root and cwd (both absolute, in that order, so they win over the replayed --cwd <root>).
+func (l *Launch) launchOptions() *jsjson.Object {
+	options := jsjson.NewObject()
+	for _, key := range replayedOptions {
+		if l.opts.Truthy(key) {
+			options.Set(key, l.opts.JS(key))
+		}
+	}
+	if l.cwd != l.project.Root {
+		options.Set("root", l.project.Root)
+		options.Set("cwd", l.cwd)
+	}
+	return options
 }
 
 // briefPath is the brief relative to the project root, as the state and the preamble name it.

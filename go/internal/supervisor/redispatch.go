@@ -271,8 +271,9 @@ func (s *Supervisor) pruneRedispatch(state *jsjson.Object) error {
 }
 
 // redispatchArgs is the JS worker.mjs argv as `orch worker` arguments, as JS values for
-// spawnArgs. Only the brief, harness, lane, breadth, model and session are carried over
-// (mirrored).
+// spawnArgs: the brief, harness, lane, breadth, model and session (mirrored), then each entry
+// of the worker's launch_options as `--<key> <value>` in its key order (PE-62). A worker state
+// written before launch_options existed carries nothing more.
 func redispatchArgs(lane string, worker *jsjson.Object, root string) []any {
 	args := []any{"worker", "start",
 		"--brief", property(worker, "brief"),
@@ -287,6 +288,12 @@ func redispatchArgs(lane string, worker *jsjson.Object, root string) []any {
 	}
 	if session := jsjson.Path(worker, "session_id"); jsjson.Truthy(session) {
 		args = append(args, "--resume", session)
+	}
+	if options, isObject := jsjson.Path(worker, "launch_options").(*jsjson.Object); isObject {
+		for _, key := range options.Keys() {
+			value, _ := options.Get(key)
+			args = append(args, "--"+key, value)
+		}
 	}
 	return args
 }

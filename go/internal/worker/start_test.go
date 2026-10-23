@@ -252,6 +252,7 @@ func TestForegroundFinishedRun(t *testing.T) {
   "started_at": "2026-10-19T12:00:01.000Z",
   "log_path": null,
   "model": null,
+  "launch_options": {},
   "updated_at": <time>,
   "state_storage": "available",
   "worker_pid": <pid>,
@@ -313,6 +314,7 @@ func TestForegroundStateKeyOrderPerBranch(t *testing.T) {
   "started_at": "2026-10-19T12:00:01.000Z",
   "log_path": null,
   "model": null,
+  "launch_options": {},
   "updated_at": "2026-10-19T12:00:04.000Z",
   "state_storage": "available",
   "worker_pid": <pid>,
@@ -1070,5 +1072,56 @@ func TestRunIsSafeUnderConcurrentEvents(t *testing.T) {
 	}
 	if got := stateFile(t, p, "b"); !strings.Contains(got, `"status": "interrupted"`) {
 		t.Errorf("state:\n%s", got)
+	}
+}
+
+// launchOptionsJSON is the launch_options a foreground start records in its state file.
+func launchOptionsJSON(t *testing.T, p Project, lane string) string {
+	t.Helper()
+	state, err := jsjson.Unmarshal([]byte(readText(t, p.StatePath(lane))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := jsjson.Marshal(jsjson.Path(state, "launch_options"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(options)
+}
+
+func TestStateRecordsReplayedLaunchOptionsOnly(t *testing.T) {
+	p := testProject(t, "brief")
+	f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+	code, err := startForeground(t, p, f, "--brief", "b.md", "--harness", "claude", "--effort", "high", "--timeout-min", "30",
+		"--agent", "conductor", "--permission-mode", "auto", "--force", "--run-id", "r", "--log-path", "/l", "--max-turns", "")
+	if err != nil || code != 0 {
+		t.Fatalf("Foreground = %d, %v", code, err)
+	}
+	if got, want := launchOptionsJSON(t, p, "b"), `{"effort":"high","timeout-min":"30","agent":"conductor","permission-mode":"auto"}`; got != want {
+		t.Errorf("launch_options %s, want %s", got, want)
+	}
+}
+
+func TestStateRecordsRootAndCwdOnlyForAChildCwd(t *testing.T) {
+	p := testProject(t, "brief")
+	child := filepath.Join(p.Root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--root", p.Root, "--cwd", child}, `{"sandbox":"read-only","root":"` + p.Root + `","cwd":"` + child + `"}`},
+		{[]string{"--root", p.Root}, `{"sandbox":"read-only"}`},
+		{[]string{"--cwd", p.Root}, `{"sandbox":"read-only"}`},
+	} {
+		f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+		if code, err := startForeground(t, p, f, append([]string{"--brief", "b.md", "--harness", "codex", "--sandbox", "read-only"}, tc.args...)...); err != nil || code != 0 {
+			t.Fatalf("%q: Foreground = %d, %v", tc.args, code, err)
+		}
+		if got := launchOptionsJSON(t, p, "b"); got != tc.want {
+			t.Errorf("%q: launch_options %s, want %s", tc.args, got, tc.want)
+		}
 	}
 }

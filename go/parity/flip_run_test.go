@@ -248,21 +248,24 @@ type flipLaunchCase struct {
 	args   []string // after "run"
 	bridge bridge
 	run    bridgeCase
+	// launchOptions is the PE-62 launch_options the launched conductor's state records.
+	launchOptions string
 }
 
 // testFlipLaunches compares full launches: the run's answer, which quotes the launcher's line,
 // and everything the settled runner wrote.
 func (h *harness) testFlipLaunches(t *testing.T) {
 	ok := bridgeCase{fixture: "ok"}
+	const claudeOptions, opencodeOptions = `{"agent":"conductor","permission-mode":"auto"}`, `{"agent":"conductor"}`
 	stale := seedProjectFile(conductorLock, strconv.Itoa(reapedPid(t)))
 	cases := []flipLaunchCase{
-		{"claude", []string{"--to", "claude"}, claudeBridge, ok},
+		{"claude", []string{"--to", "claude"}, claudeBridge, ok, claudeOptions},
 		{"opencode-handback", []string{"--to", "opencode", "--from", "claude", "--reason", "handback: home door opencode is stably green again"},
-			opencodeBridge, bridgeCase{script: opencodeRunOK}},
-		{"claude-resume", []string{"--to", "claude", "--resume", "00000000-0000-4000-8000-0000000000aa"}, claudeBridge, ok},
-		{"claude-force-anthropic-red", []string{"--to", "claude", "--force"}, claudeBridge, bridgeCase{fixture: "ok", usage: "anthropic-red"}},
-		{"claude-deferred-anthropic-red", []string{"--to", "claude"}, claudeBridge, bridgeCase{usage: "anthropic-red"}},
-		{"claude-stale-lock", []string{"--to", "claude"}, claudeBridge, bridgeCase{fixture: "ok", seed: stale}},
+			opencodeBridge, bridgeCase{script: opencodeRunOK}, opencodeOptions},
+		{"claude-resume", []string{"--to", "claude", "--resume", "00000000-0000-4000-8000-0000000000aa"}, claudeBridge, ok, claudeOptions},
+		{"claude-force-anthropic-red", []string{"--to", "claude", "--force"}, claudeBridge, bridgeCase{fixture: "ok", usage: "anthropic-red"}, claudeOptions},
+		{"claude-deferred-anthropic-red", []string{"--to", "claude"}, claudeBridge, bridgeCase{usage: "anthropic-red"}, claudeOptions},
+		{"claude-stale-lock", []string{"--to", "claude"}, claudeBridge, bridgeCase{fixture: "ok", seed: stale}, claudeOptions},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,6 +276,7 @@ func (h *harness) testFlipLaunches(t *testing.T) {
 				}
 			}
 			pinLaunchedRun(t, js, &orch)
+			withPE62(t, &js, &orch, c.launchOptions)
 			compareOutcomes(t, js, orch)
 		})
 	}
@@ -304,6 +308,8 @@ func (h *harness) testFlipLaunches(t *testing.T) {
 // brief was written, then compares the pair.
 func (h *harness) testFlipLaunchesASavedBrief(t *testing.T, state seed, prompt string, continued bool) {
 	js, orch := h.runFlipLaunchPair(t, flipLaunchCase{args: []string{"--to", "claude", "--from", "opencode"}, bridge: claudeBridge, run: bridgeCase{fixture: "ok", seed: state}})
+	// PE-62: the claude conductor launch records its agent and permission mode.
+	withPE62(t, &js, &orch, `{"agent":"conductor","permission-mode":"auto"}`)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
 		_, wrote := o.files["project/briefs/conductor-continue.md"]
 		if o.exitCode != 0 || !strings.HasPrefix(o.stdout, `{"flipped":true,`) || wrote != continued || !strings.Contains(o.files["fakelog/claude-argv.txt"], prompt) {

@@ -72,6 +72,7 @@ func (h *harness) testWorkerProjectAndChildRoots(t *testing.T) {
 				if state["status"] != "finished" {
 					t.Fatalf("unfinished state: %v", state)
 				}
+				requireRootLaunchOptions(t, stateFile, project, cwd)
 				if _, err := os.Stat(strings.TrimSuffix(stateFile, ".json") + ".lock"); !os.IsNotExist(err) {
 					t.Fatalf("lane lock not released: %v", err)
 				}
@@ -161,4 +162,25 @@ func readWorkerRootJSON(t *testing.T, file string) map[string]any {
 		t.Fatal(err)
 	}
 	return value
+}
+
+// requireRootLaunchOptions asserts PE-62 for a --root lane: the state records root then cwd,
+// both absolute, only when the child cwd is not the project root, so a redispatch replays them.
+func requireRootLaunchOptions(t *testing.T, stateFile, project, cwd string) {
+	t.Helper()
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{}`
+	if project != cwd {
+		root, _ := json.Marshal(project)
+		child, _ := json.Marshal(cwd)
+		want = `{"root":` + string(root) + `,"cwd":` + string(child) + `}`
+	}
+	m := launchOptionsBlock.FindStringSubmatch(string(data))
+	var compact bytes.Buffer
+	if m == nil || json.Compact(&compact, []byte(m[2])) != nil || compact.String() != want {
+		t.Fatalf("PE-62: launch_options %q, want %s directly after model:\n%s", compact.String(), want, data)
+	}
 }

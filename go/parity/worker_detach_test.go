@@ -37,6 +37,8 @@ type workerDetachCase struct {
 	// launchLine extracts the launch JSON from a successful command's stdout; nil means the
 	// stdout is the launch line itself, as `worker start --detach` prints it.
 	launchLine func(t *testing.T, stdout string) string
+	// launchOptions is the PE-62 launch_options the runner records; empty when it writes no state.
+	launchOptions string
 }
 
 // detachSteps runs commands in the sandbox while the runner runs, with worker naming the
@@ -76,40 +78,49 @@ func (h *harness) testWorkerDetach(t *testing.T) {
 		return bridgeCase{fixture: "ok", seed: seeds(lock, seedWorkerState("b", `{"lane":"b","status":"running","pid":`+dead+`,"extra":1}`))}
 	}
 	cases := []workerDetachCase{
-		{name: "finished", args: claude, run: ok},
-		{name: "keep-awake", args: claude, run: ok, keepAwake: true},
+		{name: "finished", launchOptions: `{}`, args: claude, run: ok},
+		{name: "keep-awake", launchOptions: `{}`, args: claude, run: ok, keepAwake: true},
 		// The launch flip.mjs makes.
-		{name: "conductor", run: ok, args: []string{"--brief", "b.md", "--lane", "conductor", "--harness", "claude", "--agent", "conductor",
+		{name: "conductor", launchOptions: `{"agent":"conductor","permission-mode":"auto"}`, run: ok, args: []string{"--brief", "b.md", "--lane", "conductor", "--harness", "claude", "--agent", "conductor",
 			"--breadth", "broad", "--cwd", ".", "--detach", "--permission-mode", "auto"}},
-		{name: "detach-repeated", run: ok, args: []string{"--detach", "--brief", "b.md", "--detach", "--harness", "claude", "--detach"}},
+		{name: "detach-repeated", launchOptions: `{}`, run: ok, args: []string{"--detach", "--brief", "b.md", "--detach", "--harness", "claude", "--detach"}},
 		// Every "--detach" token is dropped, also --lane's value: the launcher's lane is
 		// "--detach", the runner's --lane takes "--harness" as its value and the runner refuses
 		// the start without a harness, in its log.
 		{name: "detach-as-a-value", run: ok, args: []string{"--brief", "b.md", "--lane", "--detach", "--harness", "claude", "--detach"}, runnerRefuses: true},
 		// Sol S2/R6: the runner gets the absolute root as its last --cwd, so it works in sub/,
 		// not in sub/sub/, where it would refuse the missing brief after a successful launch.
-		{name: "relative-cwd", args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
+		{name: "relative-cwd", launchOptions: `{}`, args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
 			run: bridgeCase{fixture: "ok", seed: seedProjectFile("sub/b.md", "brief body\n")}},
-		{name: "relative-cwd-keep-awake", args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
+		{name: "relative-cwd-keep-awake", launchOptions: `{}`, args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
 			run: bridgeCase{fixture: "ok", seed: seedProjectFile("sub/b.md", "brief body\n")}, keepAwake: true},
 		{name: "locked/live-holder", args: claude, run: lockedBy(seedHeldLock(workerLockPath("b")))},
 		{name: "locked/live-holder-no-state", args: claude, run: bridgeCase{seed: seedHeldLock(workerLockPath("b"))}},
 		// PE-29: the JS launcher unlinks a stale lock, orch leaves it to its runner's claim;
 		// once the runner has released the lane, neither file is left.
-		{name: "locked/stale-holder", args: claude, run: lockedBy(seedWorkerLockHolding("b", dead))},
-		{name: "locked/not-a-pid", args: claude, run: lockedBy(seedWorkerLockHolding("b", "abc"))},
-		{name: "stop-running", args: claude, steps: h.stopRunningWorker, run: bridgeCase{script: map[string]string{
+		{name: "locked/stale-holder", launchOptions: `{}`, args: claude, run: lockedBy(seedWorkerLockHolding("b", dead))},
+		{name: "locked/not-a-pid", launchOptions: `{}`, args: claude, run: lockedBy(seedWorkerLockHolding("b", "abc"))},
+		{name: "stop-running", launchOptions: `{}`, args: claude, steps: h.stopRunningWorker, run: bridgeCase{script: map[string]string{
 			"jsonl": `{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-0000000000aa","model":"m"}` + "\n",
 			"sleep": "30\n", "pid": ""}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			js, orch := h.runDetachedPair(t, c)
+			if c.launchOptions != "" {
+				withPE62(t, &js, &orch, c.launchOptions)
+			}
 			switch {
 			case strings.HasPrefix(c.name, "locked/live-holder"):
 				requireLaneLocked(t, "js", js)
 				requireLaneLocked(t, "orch", orch)
 			case c.name == "stop-running":
+				// PE-62: the status step prints the running state, launch_options included.
+				const statusOptions = "    \"model\": null,\n    \"launch_options\": {},\n"
+				if strings.Contains(js.stdout, "launch_options") || strings.Count(orch.stdout, statusOptions) != 1 {
+					t.Errorf("PE-62: status of the running worker: js %q, orch %q", js.stdout, orch.stdout)
+				}
+				orch.stdout = strings.Replace(orch.stdout, statusOptions, "    \"model\": null,\n", 1)
 				js = withInterruptedRun(t, "js", js, jsInterruptedState, jsInterruptedLog, jsInterruptedMail, []string{jsInterruptedIncident}, false)
 				orch = withInterruptedRun(t, "orch", orch, orchInterruptedState, orchInterruptedLog, orchInterruptedMail,
 					[]string{orchBridgeIncident, orchInterruptedIncident}, true)

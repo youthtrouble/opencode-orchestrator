@@ -502,3 +502,29 @@ func TestRedispatchLaneNoteSubjects(t *testing.T) {
 		t.Fatalf("success notes %v", msgs)
 	}
 }
+
+func TestRedispatchArgsReplayLaunchOptions(t *testing.T) {
+	const head = `"brief":"b.md","harness":"claude","model":"m","session_id":"s"`
+	today := []string{"worker", "start", "--brief", "b.md", "--harness", "claude", "--lane", "b1", "--breadth", "standard", "--cwd", "/p", "--detach", "--model", "m", "--resume", "s"}
+	for _, tc := range []struct {
+		name   string
+		worker string
+		extra  []string
+	}{
+		{"older state", `{` + head + `}`, nil},
+		{"non-object value", `{` + head + `,"launch_options":"--effort high"}`, nil},
+		{"empty object", `{` + head + `,"launch_options":{}}`, nil},
+		{"options in key order", `{` + head + `,"launch_options":{"effort":"high","timeout-min":"30","agent":"conductor","permission-mode":"auto"}}`,
+			[]string{"--effort", "high", "--timeout-min", "30", "--agent", "conductor", "--permission-mode", "auto"}},
+		{"root lane", `{` + head + `,"launch_options":{"root":"/p","cwd":"/p/child"}}`, []string{"--root", "/p", "--cwd", "/p/child"}},
+	} {
+		worker, err := jsjson.Unmarshal([]byte(tc.worker))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := spawnArgs(redispatchArgs("b1", worker.(*jsjson.Object), "/p")...)
+		if want := append(append([]string{}, today...), tc.extra...); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: redispatchArgs %q, %v; want %q", tc.name, got, err, want)
+		}
+	}
+}

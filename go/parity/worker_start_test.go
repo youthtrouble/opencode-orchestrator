@@ -26,6 +26,8 @@ type workerStartCase struct {
 	crash       crashClass
 	errorLine   string
 	bridgeCrash bool
+	// launchOptions is the PE-62 launch_options orch records for a case that writes a state.
+	launchOptions string
 }
 
 // Fresh worker values, rewritten only in their exact place and format.
@@ -96,6 +98,7 @@ func (h *harness) workerStartInvocation(t *testing.T, c workerStartCase) invocat
 		inv.normalize = func(s string) string { return c.run.normalize(normalize(s)) }
 	}
 	inv.crash, inv.errorLine, inv.progress = c.crash, c.errorLine, ""
+	inv.launchOptions = c.launchOptions
 	runFileNames := inv.normalizeWrites
 	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
 		return withLockHolderPids(withWorkerLockPid(runFileNames(o, before), before))
@@ -179,35 +182,35 @@ func (h *harness) testWorkerStart(t *testing.T) {
 
 	cases := []workerStartCase{
 		// claude
-		{name: "claude/finished", args: claude, run: bridgeCase{fixture: "ok"}},
-		{name: "claude/conductor-lane", args: append(claude, "--lane", "conductor"), run: bridgeCase{fixture: "ok"}},
-		{name: "claude/permission-denials", args: claude, run: bridgeCase{fixture: "permission-denied"}},
-		{name: "claude/failed-bad-model", args: claude, run: bridgeCase{fixture: "bad-model"}},
-		{name: "claude/failed-exit-with-stderr", args: claude, run: bridgeCase{script: map[string]string{"stderr": "boom\nfatal: no auth\n", "exit": "1\n"}}},
-		{name: "claude/failed-rate-limit", args: claude, run: bridgeCase{script: map[string]string{"jsonl": `{"type":"result","is_error":true,"subtype":"rate_limited"}` + "\n", "exit": "1\n"}}},
-		{name: "claude/deferred-red-cache", args: claude, run: bridgeCase{usage: "red"}},
-		{name: "claude/deferred-usage-limit", args: claude, run: bridgeCase{fixture: "usage-limit", codex: true}},
-		{name: "claude/every-flag", run: bridgeCase{fixture: "ok"}, args: append(claude,
+		{name: "claude/finished", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "ok"}},
+		{name: "claude/conductor-lane", launchOptions: `{}`, args: append(claude, "--lane", "conductor"), run: bridgeCase{fixture: "ok"}},
+		{name: "claude/permission-denials", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "permission-denied"}},
+		{name: "claude/failed-bad-model", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "bad-model"}},
+		{name: "claude/failed-exit-with-stderr", launchOptions: `{}`, args: claude, run: bridgeCase{script: map[string]string{"stderr": "boom\nfatal: no auth\n", "exit": "1\n"}}},
+		{name: "claude/failed-rate-limit", launchOptions: `{}`, args: claude, run: bridgeCase{script: map[string]string{"jsonl": `{"type":"result","is_error":true,"subtype":"rate_limited"}` + "\n", "exit": "1\n"}}},
+		{name: "claude/deferred-red-cache", launchOptions: `{}`, args: claude, run: bridgeCase{usage: "red"}},
+		{name: "claude/deferred-usage-limit", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "usage-limit", codex: true}},
+		{name: "claude/every-flag", launchOptions: `{"effort":"high","timeout-min":"5","agent":"reviewer","sandbox":"read-only","permission-mode":"plan","allowed-tools":"Read,Edit","max-turns":"3"}`, run: bridgeCase{fixture: "ok"}, args: append(claude,
 			"--model", "claude-haiku-5-5", "--effort", "high", "--resume", "abc", "--force", "--allowed-tools", "Read,Edit", "--max-turns", "3",
 			"--timeout-min", "5", "--permission-mode", "plan", "--agent", "reviewer", "--breadth", "broad", "--run-id", "run-1",
 			"--log-path", "/tmp/w.log", "--sandbox", "read-only", "--lane", "w1")},
-		{name: "claude/bare-model", args: append(claude, "--model"), run: bridgeCase{fixture: "ok"}},
-		{name: "claude/bare-resume", args: append(claude, "--resume"), run: bridgeCase{fixture: "usage-limit", codex: true}},
-		{name: "claude/bare-lane-failed", args: append(claude, "--lane"), run: bridgeCase{fixture: "bad-model"}},
-		{name: "claude/long-final-message", args: claude, run: bridgeCase{script: result(`"result":"` + strings.Repeat("é", 2100) + `"`)}},
-		{name: "claude/empty-lane-cannot-post", args: []string{"--brief", ".md", "--harness", "claude"}, run: bridgeCase{fixture: "bad-model", seed: seedProjectFile(".md", "brief\n")},
+		{name: "claude/bare-model", launchOptions: `{}`, args: append(claude, "--model"), run: bridgeCase{fixture: "ok"}},
+		{name: "claude/bare-resume", launchOptions: `{}`, args: append(claude, "--resume"), run: bridgeCase{fixture: "usage-limit", codex: true}},
+		{name: "claude/bare-lane-failed", launchOptions: `{}`, args: append(claude, "--lane"), run: bridgeCase{fixture: "bad-model"}},
+		{name: "claude/long-final-message", launchOptions: `{}`, args: claude, run: bridgeCase{script: result(`"result":"` + strings.Repeat("é", 2100) + `"`)}},
+		{name: "claude/empty-lane-cannot-post", launchOptions: `{}`, args: []string{"--brief", ".md", "--harness", "claude"}, run: bridgeCase{fixture: "bad-model", seed: seedProjectFile(".md", "brief\n")},
 			crash: crashC1, errorLine: "Error: post needs from and subject"},
-		{name: "claude/array-final-message", args: claude, run: bridgeCase{script: result(`"result":["a",1,null]`)}},
-		{name: "claude/numeric-final-message", args: claude, run: bridgeCase{script: result(`"result":7`)}, crash: crashC2},
-		{name: "claude/bridge-crash-null-event", args: claude, run: bridgeCase{script: map[string]string{"jsonl": init + "null\n", "exit": "0\n"}}, bridgeCrash: true},
+		{name: "claude/array-final-message", launchOptions: `{}`, args: claude, run: bridgeCase{script: result(`"result":["a",1,null]`)}},
+		{name: "claude/numeric-final-message", launchOptions: `{}`, args: claude, run: bridgeCase{script: result(`"result":7`)}, crash: crashC2},
+		{name: "claude/bridge-crash-null-event", launchOptions: `{}`, args: claude, run: bridgeCase{script: map[string]string{"jsonl": init + "null\n", "exit": "0\n"}}, bridgeCrash: true},
 
 		// codex
-		{name: "codex/finished", args: append(brief, "--harness", "codex", "--agent", "x"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
-		{name: "codex/sandbox-read-only", args: append(brief, "--harness", "codex", "--sandbox", "read-only"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
+		{name: "codex/finished", launchOptions: `{"agent":"x"}`, args: append(brief, "--harness", "codex", "--agent", "x"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
+		{name: "codex/sandbox-read-only", launchOptions: `{"sandbox":"read-only"}`, args: append(brief, "--harness", "codex", "--sandbox", "read-only"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
 
 		// opencode
-		{name: "opencode/finished-with-agent", args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
-		{name: "opencode/effort-becomes-the-prompt", args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
+		{name: "opencode/finished-with-agent", launchOptions: `{"agent":"coder"}`, args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
+		{name: "opencode/effort-becomes-the-prompt", launchOptions: `{"effort":"X"}`, args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
 
 		// validation
 		{name: "usage/no-brief", args: []string{"--harness", "claude"}},
@@ -275,6 +278,7 @@ func (h *harness) testWorkerFailedRunScrubsTokens(t *testing.T) {
 	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
 	run := bridgeCase{script: map[string]string{"stderr": "401 invalid x-api-key " + apiKey + "\n", "exit": "1\n"}}
 	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: []string{"--brief", "b.md", "--harness", "claude"}, run: run}))
+	withPE62(t, &js, &orch, `{}`)
 	for _, file := range []string{"project/workers/b.json", "project/mailbox/messages.jsonl"} {
 		if !strings.Contains(js.files[file], apiKey) {
 			t.Errorf("js %s lacks the marker (PE-24 expects it verbatim):\n%s", file, js.files[file])

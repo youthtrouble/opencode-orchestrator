@@ -21,6 +21,10 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- worker/supervisor (S13q, PE-62): a worker records its replayable launch options
+  (`effort`, `timeout-min`, `agent`, `sandbox`, `permission-mode`, `allowed-tools`, `max-turns`,
+  and `root`/`cwd` for a `--root` lane) as `launch_options` in its state, and a budget-deferred
+  redispatch passes them again instead of dropping them (L19).
 - delegation (S13i, PE-42): bridges accept `--artifact-root DIR` or `ORCH_ARTIFACT_ROOT`
   (flag wins) for project run records independently of the child cwd. `worker --root DIR`
   explicitly owns lane state, locks, logs and records, independently of child `--cwd`, in both

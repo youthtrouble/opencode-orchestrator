@@ -780,20 +780,25 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 	claudeConductor := func(s seed) func(*testing.T) invocation {
 		return conductorOn(claudeBridge, bridgeCase{fixture: "ok"}, s)
 	}
-	redispatch := func(t *testing.T) invocation {
-		inv := h.workerStartInvocation(t, workerStartCase{run: bridgeCase{fixture: "ok"}})
-		inv.seed = seeds(inv.seed, seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2020-01-01T00:00:00.000Z", "brief": "b.md", "harness": "claude"}`))
-		return inv
+	redispatchWith := func(extra string) func(*testing.T) invocation {
+		return func(t *testing.T) invocation {
+			inv := h.workerStartInvocation(t, workerStartCase{run: bridgeCase{fixture: "ok"}})
+			inv.seed = seeds(inv.seed, seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2020-01-01T00:00:00.000Z", "brief": "b.md", "harness": "claude"`+extra+`}`))
+			return inv
+		}
 	}
+	redispatch := redispatchWith("")
 	cases := []struct {
 		name, lane string
 		inv        func(*testing.T) invocation
 		want       []string // in the supervisor log, the mailbox or the fake claude's argv
+		// launchOptions is the PE-62 launch_options of the launched lane's state.
+		launchOptions string
 	}{
 		// decide stays and the project is paused: its own door is relaunched.
-		{"conductor/paused-relaunch", "conductor", conductor(seeds(seedFlip(`{"paused": true}`), caches.green)), []string{"relaunch opencode->opencode (stay, was paused)"}},
+		{"conductor/paused-relaunch", "conductor", conductor(seeds(seedFlip(`{"paused": true}`), caches.green)), []string{"relaunch opencode->opencode (stay, was paused)"}, `{"agent":"conductor"}`},
 		// A hand-off recorded while the previous conductor held the lane: the target starts.
-		{"conductor/pending-launch", "conductor", conductor(seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode", "from": "claude", "reason": "handback: R"}}`)), []string{"pending launch claude->opencode"}},
+		{"conductor/pending-launch", "conductor", conductor(seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode", "from": "claude", "reason": "handback: R"}}`)), []string{"pending launch claude->opencode"}, `{"agent":"conductor"}`},
 		// A human gate cleared after the conductor stopped at it (its lane finished with the
 		// gate's hand-off, so no restart is due): the pending launch `gate --clear` queued
 		// relaunches the gated door.
@@ -801,25 +806,29 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			seedConductor(`{"status": "finished", "harness": "opencode", "pid": 0, "started_at": "2026-10-19T09:00:00.000Z"}`),
 			seedMailbox(lines(`{"id":"gggggggg-0000-0000-0000-000000000001","at":"2026-10-19T09:30:00.000Z","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: push","body":"","refs":[],"thread":null,"acked_by":[]}`), ""),
 			seedFlip(`{"to": "opencode", "at": "2026-10-19T08:00:00.000Z", "pending_launch": {"to": "opencode", "from": "opencode", "reason": "human gate cleared", "resume": null, "at": "2026-10-19T10:00:00.000Z"}}`), caches.green)),
-			[]string{"pending launch opencode->opencode"}},
+			[]string{"pending launch opencode->opencode"}, `{"agent":"conductor"}`},
 		// PE-36: orch never writes the stale lane snapshot. The frozen JS still does;
 		// these cases settle the runner before comparing its final state.
 		// decide flips the idle opencode project (flipped there long ago) to claude, openai
 		// being red: claude is launched.
-		{"conductor/decide-flip-to-claude", "conductor", claudeConductor(seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T09:00:00.000Z"}`), caches.openaiRed)), []string{"relaunch opencode->claude (flip)"}},
+		{"conductor/decide-flip-to-claude", "conductor", claudeConductor(seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T09:00:00.000Z"}`), caches.openaiRed)), []string{"relaunch opencode->claude (flip)"}, `{"agent":"conductor","permission-mode":"auto"}`},
 		// The claude conductor finished without a hand-off; decide stays on claude, so the lane
 		// is restarted on its own door with --resume of its session.
 		{"conductor/finished-early-resume", "conductor", claudeConductor(seeds(
 			seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z", "session_id": "00000000-0000-4000-8000-0000000000aa"}`),
 			seedFlip(`{"to": "claude", "at": "2026-10-19T09:00:00.000Z"}`), caches.green)),
-			[]string{"relaunch claude->claude (stay)", "--resume\n00000000-0000-4000-8000-0000000000aa\n"}},
+			[]string{"relaunch claude->claude (stay)", "--resume\n00000000-0000-4000-8000-0000000000aa\n"}, `{"agent":"conductor","permission-mode":"auto"}`},
 		// The flip to claude was recorded after the opencode conductor started, and that lane
 		// finished: the target never started, so it is launched.
 		{"conductor/never-started", "conductor", claudeConductor(seeds(
 			seedConductor(`{"status": "finished", "harness": "opencode", "pid": 0, "started_at": "2026-10-19T09:00:00.000Z"}`),
 			seedFlip(`{"to": "claude", "at": "2026-10-19T10:00:00.000Z"}`))),
-			[]string{"flip target never started: launching claude"}},
-		{"redispatch/deferred-due", "d", redispatch, []string{"d re-dispatched after budget reset"}},
+			[]string{"flip target never started: launching claude"}, `{"agent":"conductor","permission-mode":"auto"}`},
+		{"redispatch/deferred-due", "d", redispatch, []string{"d re-dispatched after budget reset"}, `{}`},
+		// PE-62: orch replays the recorded options, so the bridge gets them and the replacement
+		// records them again (in its own fixed key order); the frozen JS drops them.
+		{"redispatch/PE-62-replays-launch-options", "d", redispatchWith(`, "launch_options": {"max-turns": "3", "allowed-tools": "Read"}`),
+			[]string{"d re-dispatched after budget reset"}, `{"allowed-tools":"Read","max-turns":"3"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -864,7 +873,7 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 					key = "0:conductor" // PE-60: the slot key of the finished lane
 				case "conductor/finished-early-resume":
 					key = "0:conductor"
-				case "redispatch/deferred-due":
+				case "redispatch/deferred-due", "redispatch/PE-62-replays-launch-options":
 					key = "rd"
 				}
 				assertRedispatchRecord(t, &orch, key, true)
@@ -872,9 +881,28 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			if c.name == "conductor/finished-early-resume" {
 				removeRelaunchNote(t, &orch, "claude conductor relaunched by the supervisor: exited without handoff")
 			}
+			withPE62(t, &js, &orch, c.launchOptions)
+			if c.name == "redispatch/PE-62-replays-launch-options" {
+				removeReplayedClaudeOptions(t, &js, &orch)
+			}
 			compareOutcomes(t, js, orch)
 		})
 	}
+}
+
+// replayedClaudeOptions is what the replayed allowed-tools and max-turns add to the fake
+// claude's argv, before the prompt separator.
+const replayedClaudeOptions = "--allowedTools\nRead\n--max-turns\n3\n--\n"
+
+// removeReplayedClaudeOptions asserts PE-62 on the redispatched bridge: orch's claude gets the
+// replayed options and the frozen JS's does not; it then removes them from orch's argv log.
+func removeReplayedClaudeOptions(t *testing.T, js, orch *outcome) {
+	t.Helper()
+	const argv = "fakelog/claude-argv.txt"
+	if strings.Contains(js.files[argv], "--max-turns") || !strings.Contains(orch.files[argv], replayedClaudeOptions) {
+		t.Errorf("PE-62: claude argv js %q, orch %q; want the replayed options in orch's only", js.files[argv], orch.files[argv])
+	}
+	orch.files[argv] = strings.Replace(orch.files[argv], replayedClaudeOptions, "--\n", 1)
 }
 
 // quotedAnswerLengths lists, in UTF-16 units, how much of each launch answer the supervisor log

@@ -31,10 +31,10 @@ var kickoffSupervisorStarted = regexp.MustCompile(`(?m)^(supervisor: \{"started"
 // the pair is compared, so no case passes by both runtimes launching nothing.
 func (h *harness) testKickoffLaunches(t *testing.T) {
 	t.Run("headless/claude", func(t *testing.T) {
-		h.compareKickoffHeadless(t, claudeBridge, bridgeCase{fixture: "ok"}, nil, "--door", "claude")
+		h.compareKickoffHeadless(t, claudeBridge, bridgeCase{fixture: "ok"}, nil, `{"agent":"conductor","permission-mode":"auto"}`, "--door", "claude")
 	})
 	t.Run("headless/opencode", func(t *testing.T) {
-		h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, nil)
+		h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, nil, `{"agent":"conductor"}`)
 	})
 	t.Run("clears-gate-without-relaunch", h.testKickoffClearsGateWithoutRelaunch)
 	claudeTUI := func(script map[string]string) seed {
@@ -87,7 +87,7 @@ func kickoffRoutedGreen(t *testing.T) seed {
 // conductor itself, so a pending launch would start a second one.
 func (h *harness) testKickoffClearsGateWithoutRelaunch(t *testing.T) {
 	gate := seedFlip(`{"awaiting_human":{"at":"2026-01-01T00:00:00.000Z","door":"opencode","reason":"push","question":null}}`)
-	js, orch := h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, gate)
+	js, orch := h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, gate, `{"agent":"conductor"}`)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
 		if flipJSON := o.files["project/flip.json"]; flipJSON != "{}\n" {
 			t.Errorf("%s: flip.json = %q, want the gate cleared and no pending launch", side, flipJSON)
@@ -100,7 +100,8 @@ func (h *harness) testKickoffClearsGateWithoutRelaunch(t *testing.T) {
 // lane's runner by the pid each printed, and compares the kickoff's output with everything
 // the runner wrote (lane state, log, mailbox, run record). It returns both outcomes. The
 // routing refresh's feeds fail over the bridge's green cache (see withoutPostRunSession).
-func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase, state seed, door ...string) (js, orch outcome) {
+// launchOptions is the PE-62 launch_options the conductor lane's state records.
+func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase, state seed, launchOptions string, door ...string) (js, orch outcome) {
 	t.Helper()
 	inv := h.workerStartInvocation(t, workerStartCase{bridge: b, run: run, brief: text("")})
 	args := append(append(append([]string{}, kickoffLaunchArgs...), "--headless"), door...)
@@ -125,6 +126,7 @@ func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase,
 			t.Errorf("%s: exit %d, stdout %q; want a launched conductor lane that ran the fake %s", side, o.exitCode, o.stdout, b.name)
 		}
 	}
+	withPE62(t, &js, &orch, launchOptions)
 	compareOutcomes(t, js, orch)
 	return js, orch
 }
