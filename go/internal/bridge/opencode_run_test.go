@@ -43,9 +43,14 @@ func TestRunOpencodeNormalPath(t *testing.T) {
 	}
 }
 
+// The CLI's last process, not its shell, prints the event orch waits for. orch forwards the
+// SIGTERM as SIGINT (PE-65), and bash survives a SIGINT that arrives while it waits for a
+// command that then exits normally (wait-and-cooperative-exit): a fake whose shell printed the
+// event could go on to its final command, which the one forwarded signal never reaches.
 func TestRunOpencodeForwardsSIGTERM(t *testing.T) {
 	sb := newBridgeSandbox(t, "opencode")
-	cmd, stdout, stderr := sb.start(t, `{"part":{"type":"text","text":"hi"}}`+"\n", "[opencode] message: hi\n", "--prompt", "p")
+	write(t, filepath.Join(sb.home, "event"), `{"part":{"type":"text","text":"hi"}}`+"\n")
+	cmd, stdout, stderr := sb.startEnding(t, `exec /usr/bin/tail -f "$HOME/event"`, "", "[opencode] message: hi\n", "--prompt", "p")
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
