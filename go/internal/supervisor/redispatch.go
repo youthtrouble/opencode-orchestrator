@@ -1,6 +1,11 @@
 package supervisor
 
 import (
+	"fmt"
+	"math"
+	"path/filepath"
+	"strings"
+
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervise"
@@ -16,7 +21,7 @@ const noteBodyUnits = 500
 // not opted out (`config.auto_redispatch_deferred !== false`; a null config throws there), a
 // resume_after whose Date.parse plus a minute has passed (the clock is read again), and not
 // re-dispatched before.
-func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker *jsjson.Object) (bool, error) {
+func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker *jsjson.Object, state *jsjson.Object, t *tick) (bool, error) {
 	if obs.Phase != "deferred" {
 		return false, nil
 	}
@@ -34,31 +39,194 @@ func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker
 	if !parsed || resumeMs+redispatchGraceMs > s.Now().UnixMilli() {
 		return false, nil
 	}
-	return !jsjson.Truthy(jsjson.Path(worker, "redispatched_at")), nil
+	return redispatchEligible(state, jsjson.TemplateString(runValue(worker, obs)), worker, t.now), nil
 }
 
-// redispatch relaunches the lane's brief as a detached worker and waits for the launcher,
-// then records redispatched_at in the worker file (after the launch, so it may overwrite the
-// new runner's first state, as in the JS) and posts a note with the launcher's output. An
-// argument Node would reject, a failed write or a failed post aborts the tick.
-func (s *Supervisor) redispatch(lane string, worker *jsjson.Object, workerPath string) error {
+// redispatch runs the launcher before recording its outcome in supervisor state. The
+// worker file belongs exclusively to its runner, including when it publishes during RunSync.
+func (s *Supervisor) redispatch(lane string, worker *jsjson.Object, key string, state *jsjson.Object, t *tick) error {
 	args, err := spawnArgs(redispatchArgs(lane, worker, s.Root)...)
 	if err != nil {
 		return err
 	}
 	result := s.RunSync(SyncSpec{Name: s.Self, Args: args, Dir: s.Root})
-	worker.Set("redispatched_at", jsjson.ISOString(s.Now()))
-	if err := writeJSON(workerPath, worker); err != nil {
+	stopped := recordRedispatch(state, key, t, launcherRunID(result))
+	if stopped {
+		recipient := "coordinator"
+		if lane == "conductor" {
+			recipient = "human"
+		}
+		s.noteRelaunchStopped(t, lane, recipient, result, args)
+	} else {
+		s.postRedispatchNote(t, mailbox.Draft{
+			From: "supervisor", To: "coordinator", Kind: "note",
+			Subject: lane + " re-dispatched after budget reset", Body: outputText(result, noteBodyUnits),
+		})
+	}
+	return nil
+}
+
+const maxRedispatchAttempts = 5
+
+// redispatchEligible is shared by deferred lanes, decided conductor relaunches and
+// pending launches. Legacy stamps are read-only compatibility with older supervisors.
+func redispatchEligible(state *jsjson.Object, key string, worker any, now int64) bool {
+	if jsjson.Truthy(jsjson.Path(worker, "redispatched_at")) {
+		return false
+	}
+	record := jsjson.Path(state, "redispatch", key)
+	if jsjson.Path(record, "confirmed_run_id") != nil {
+		return false
+	}
+	attempts := toNumber(jsjson.Path(record, "attempts"))
+	if attempts >= maxRedispatchAttempts {
+		return false
+	}
+	if attempts == 0 {
+		return true
+	}
+	last, ok := jsjson.ParseDate(jsjson.TemplateString(jsjson.Path(record, "last_attempt_at")))
+	backoff := math.Min(60*math.Pow(2, attempts-1), 30*60)
+	return ok && float64(now)-float64(last)/1000 >= backoff
+}
+
+// recordRedispatch returns true only for the transition to the fifth failure. It is
+// called before logging or posting, so storage errors cannot erase retry bookkeeping.
+func recordRedispatch(state *jsjson.Object, key string, t *tick, runID any) bool {
+	records, ok := jsjson.Path(state, "redispatch").(*jsjson.Object)
+	if !ok {
+		records = jsjson.NewObject()
+		state.Set("redispatch", records)
+	}
+	attempts := toNumber(jsjson.Path(records, key, "attempts")) + 1
+	record := jsjson.NewObject()
+	record.Set("attempts", attempts)
+	record.Set("last_attempt_at", t.nowISO)
+	record.Set("confirmed_run_id", runID)
+	records.Set(key, record)
+	return runID == nil && attempts == maxRedispatchAttempts
+}
+
+// launcherRunID requires the runner pid as well as the run id: detach may return
+// exit zero and a run id even when its runner never started.
+func launcherRunID(result SyncResult) any {
+	if result.Status == nil || *result.Status != 0 || result.Err != nil {
+		return nil
+	}
+	return launchedRunID(lastJSONLine(result.Stdout))
+}
+
+func launchedRunID(value any) any {
+	object, ok := value.(*jsjson.Object)
+	if !ok {
+		return nil
+	}
+	runID, hasRun := jsjson.Path(object, "run_id").(string)
+	_, hasPID := jsjson.Path(object, "runner_pid").(float64)
+	if !hasRun || !hasPID {
+		return nil
+	}
+	return runID
+}
+
+// flipLaunchOutcome separates a refused/deferred run from a launch attempt. The
+// nested launcher is a JSON string, not an object, in flip run's output contract.
+func flipLaunchOutcome(result SyncResult) (runID any, attempted bool) {
+	answer := lastJSONLine(result.Stdout)
+	if jsjson.Path(answer, "flipped") == false &&
+		(jsjson.Path(answer, "pending") == true || jsjson.Path(answer, "reason") == "awaiting human") {
+		return nil, false
+	}
+	if result.Status == nil || *result.Status != 0 || result.Err != nil || jsjson.Path(answer, "flipped") != true {
+		return nil, true
+	}
+	launcher, ok := jsjson.Path(answer, "launcher").(string)
+	if !ok {
+		return nil, true
+	}
+	parsed, err := jsjson.Unmarshal([]byte(launcher))
+	if err != nil {
+		return nil, true
+	}
+	return launchedRunID(parsed), true
+}
+
+const conductorNoneKey = "conductor:none"
+
+func conductorRunKey(lane any) string {
+	worker, ok := lane.(*jsjson.Object)
+	if !ok {
+		return conductorNoneKey
+	}
+	worker = jsjson.Spread(worker)
+	worker.Set("lane", "conductor")
+	return workerRunKey(worker)
+}
+
+func workerRunKey(worker *jsjson.Object) string {
+	obs := supervise.Observe(worker, 0, supervise.Liveness{})
+	return jsjson.TemplateString(runValue(worker, obs))
+}
+
+func pendingRunKey(pending any) string {
+	return "pending:" + jsjson.TemplateStringOf(jsjson.Lookup(pending, "at"))
+}
+
+func (s *Supervisor) postRedispatchNote(t *tick, draft mailbox.Draft) {
+	if _, err := s.Mailbox().Post(draft); err != nil {
+		// The attempt is already in memory. A broken diagnostic sink must not abort a tick.
+		_ = s.log(t, "redispatch note post failed: "+err.Error())
+	}
+}
+
+func (s *Supervisor) noteRelaunchStopped(t *tick, lane, recipient string, result SyncResult, args []string) {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = arg
+		if arg == "" || strings.ContainsAny(arg, " \t\n\r'\"`$\\;|&<>()*?[]{}!#~") {
+			quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+		}
+	}
+	s.postRedispatchNote(t, mailbox.Draft{
+		From: "supervisor", To: recipient, Kind: "blocked",
+		Subject: lane + " relaunch stopped after 5 failed attempts",
+		Body:    fmt.Sprintf("%s\nRetry by hand: orch %s", outputText(result, noteBodyUnits), strings.Join(quoted, " ")),
+	})
+}
+
+// pruneRedispatch re-reads the lane files after the loop: a launcher may have
+// published a replacement run while the supervisor was waiting for it.
+func (s *Supervisor) pruneRedispatch(state *jsjson.Object) error {
+	records, ok := jsjson.Path(state, "redispatch").(*jsjson.Object)
+	if !ok {
+		return nil
+	}
+	lanes, err := s.workers.Lanes()
+	if err != nil {
 		return err
 	}
-	_, err = s.Mailbox().Post(mailbox.Draft{
-		From:    "supervisor",
-		To:      "coordinator",
-		Kind:    "note",
-		Subject: lane + " re-dispatched after budget reset",
-		Body:    outputText(result, noteBodyUnits),
-	})
-	return err
+	current := make(map[string]bool, len(lanes)+1)
+	// Match evaluateFlip's read, including arrays being interpreted as empty objects.
+	current[conductorRunKey(asObject(readJSON(s.conductorPath(), func() any { return nil })))] = true
+	for _, lane := range lanes {
+		worker, ok := readJSON(filepath.Join(s.workers.WorkersDir, lane+".json"), func() any { return nil }).(*jsjson.Object)
+		if ok {
+			worker.Set("lane", lane)
+			current[workerRunKey(worker)] = true
+		}
+	}
+	// A missing lane can still have a pending handoff. Reading flip state here
+	// performs no write and evaluateFlip retains its fail-closed gate handling.
+	flip := readJSON(s.flipPath(), func() any { return nil })
+	if pending := jsjson.Path(flip, "pending_launch"); jsjson.Truthy(pending) {
+		current[pendingRunKey(pending)] = true
+	}
+	for _, key := range records.Keys() {
+		if !current[key] {
+			records.Delete(key)
+		}
+	}
+	return nil
 }
 
 // redispatchArgs is the JS worker.mjs argv as `orch worker` arguments, as JS values for

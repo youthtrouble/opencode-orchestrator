@@ -100,6 +100,9 @@ func (s *Supervisor) Tick(state *jsjson.Object) error {
 			return err
 		}
 	}
+	if err := s.pruneRedispatch(state); err != nil {
+		return err
+	}
 	if err := s.evaluateFlip(state, &t); err != nil {
 		return err
 	}
@@ -162,12 +165,12 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	}
 	setProperty(lanes, lane, entry)
 
-	due, err := s.redispatchDue(obs, t.config, worker)
+	due, err := s.redispatchDue(obs, t.config, worker, state, t)
 	if err != nil {
 		return err
 	}
 	if due {
-		return s.redispatch(lane, worker, workerPath)
+		return s.redispatch(lane, worker, jsjson.TemplateString(run), state, t)
 	}
 	if ev == nil {
 		return nil

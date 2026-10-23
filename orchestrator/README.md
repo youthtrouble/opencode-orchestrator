@@ -355,6 +355,22 @@ once a minute evaluates the conductor:
   handoff, or a paused project: relaunch through `orch flip run`, resuming the previous session when
   the door is the same; a flip or hand-back decision picks the other door.
 
+Relaunch bookkeeping belongs to `.orchestrator/supervisor-state.json`, in `redispatch` keyed
+by the old lane's run id (or `<pid>:<lane>`) or `pending:<at>`. The supervisor never rewrites a
+worker's lane file. A launch confirms only after exit 0 and JSON containing a run id and runner
+pid (inside `launcher` for a flip); a legacy `redispatched_at` still means done. Failed attempts
+retry after 60, 120, 240 and 480 seconds, with a 30-minute backoff ceiling. After five failures
+for a key, retries stop and one `blocked` note includes the last output and a manual retry
+command. Conductor and pending-launch notes go to `human`; worker-lane notes go to
+`coordinator`. The decided conductor path also keeps its 600-second project cooldown;
+never-started flip targets keep their separate 120-second backoff. Gate refusals and answers
+that defer to `pending_launch` do not count as attempts. Failed redispatch-note posts log a
+diagnostic and let the tick continue; records for obsolete runs and pending launches are pruned.
+Absent, null or primitive conductor state uses the `conductor:none` slot key. Pruning
+retains the current conductor slot key, so failures accumulate to the five-attempt stop even
+before a conductor file exists. A newly published real run replaces that slot key; the next
+tick prunes `conductor:none`.
+
 Stopping the supervisor (`orch supervisor stop`) does not stop workers. `ack --event ID` records
 receipt of a reminder, not acceptance.
 

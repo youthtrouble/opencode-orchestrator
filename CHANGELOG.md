@@ -21,6 +21,17 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- supervisor (S13e, sol-5 R5, PE-36): keep relaunch attempt records in
+  `supervisor-state.json`, prune obsolete run/pending keys, and never overwrite a worker-owned
+  lane file; legacy `redispatched_at` is read-only.
+- supervisor (S13e, sol-5 R7, L24, PE-37): confirm launches only from successful launcher JSON
+  with a run id and runner pid. For current worker/pending keys, retry failures with
+  60/120/240/480 s waits, stop after five
+  failures and post one `blocked` note with output and a manual retry command. Gates and
+  deferred pending answers do not count as attempts; existing conductor cooldowns remain.
+- supervisor (S13e, L21, PE-38): failed redispatch/blocked-note posts log one diagnostic and
+  continue; attempt records survive diagnostic errors for the next successful state write.
+
 - flip (S13d, sol-5 R4, PE-32): serialize all flip state writers on the separate
   `flip.json.lock`. Corrupt or unreadable state gates decisions, blocks supervisor relaunch,
   and refuses writes with the file untouched; reply gate clearing reports failure and remote

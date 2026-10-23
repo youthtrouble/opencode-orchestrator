@@ -312,9 +312,9 @@ func TestFlipPendingLaunch(t *testing.T) {
 			if got := f.logText(); got != iso(0)+" pending launch "+c.wantLog+": launched\n" {
 				t.Errorf("log %q", got)
 			}
-			wantJSON(t, compact(t, state), `{"last_relaunch_at":1800000000,"last_flip_check":1800000000}`)
+			wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "pending:undefined")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null}`)
 
-			// No cooldown: flip.json unchanged, the next evaluation launches again.
+			// The first failure waits 60 seconds before the next attempt.
 			f.at(60)
 			f.mustEvaluate(compact(t, state))
 			if len(f.runs) != 2 {
@@ -416,11 +416,11 @@ func TestFlipRelaunchOnFlip(t *testing.T) {
 	if !reflect.DeepEqual(f.runs, want) {
 		t.Errorf("runs %+v, want %+v", f.runs, want)
 	}
-	wantConductor := strings.TrimSuffix(deadConductor, "}") + `, "redispatched_at": "2027-01-15T08:00:00.500Z"}`
+	wantConductor := deadConductor
 	if got := compact(t, mustParse(t, conductorAtLaunch)); got != compact(t, mustParse(t, wantConductor)) {
 		t.Errorf("conductor.json at launch %s, want %s", got, wantConductor)
 	}
-	wantJSON(t, compact(t, state), `{"last_relaunch_at":1800000000,"last_flip_check":1800000000}`)
+	wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "9:conductor")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null}`)
 	if got := f.logText(); got != iso(0)+" relaunch opencode->claude (flip): launched\n" {
 		t.Errorf("log %q", got)
 	}
@@ -549,12 +549,12 @@ func TestFlipRelaunchResumesTheSameDoorsSession(t *testing.T) {
 	}
 }
 
-func TestFlipRelaunchOfAPrimitiveLaneThrowsBeforeTheLaunch(t *testing.T) {
-	f := relaunchFixture(t, `7`, `{}`, `{"action": "flip", "to": "claude"}`)
-	_, err := f.evaluate(`{}`, `{}`)
-	wantError(t, err, "Cannot create property 'redispatched_at' on number '7'")
-	if len(f.launches()) != 0 {
-		t.Errorf("launched %+v", f.launches())
+// PE-36: even a hand-edited primitive lane is never written by the supervisor.
+func TestFlipRelaunchLeavesAPrimitiveLaneUntouched(t *testing.T) {
+	f := relaunchFixture(t, `7`, `{}`, `{"action":"flip","to":"claude"}`)
+	f.mustEvaluate(`{}`)
+	if f.read("workers/conductor.json") != "7" || len(f.launches()) != 1 {
+		t.Fatalf("lane changed or launch missing: %v", f.launches())
 	}
 }
 
@@ -574,14 +574,12 @@ func TestTickRunsTheFlipEvaluationLast(t *testing.T) {
 	wantJSON(t, strings.Join(state.Keys(), ","), "events,lanes,last_flip_check,checked_at,pid,status")
 }
 
-// TestFlipRelaunchRewritesAnArrayConductorAsAnObject: PE-16(1), the JS sets redispatched_at
-// on the array, which JSON.stringify drops; orch reads the array as {} and writes the object.
-func TestFlipRelaunchRewritesAnArrayConductorAsAnObject(t *testing.T) {
-	f := relaunchFixture(t, `[1]`, `{}`, `{"action": "flip", "to": "claude"}`)
+// PE-36 supersedes the old PE-16 rewrite on this path: no worker-owned file is written.
+func TestFlipRelaunchLeavesAnArrayConductorUntouched(t *testing.T) {
+	f := relaunchFixture(t, `[1]`, `{}`, `{"action":"flip","to":"claude"}`)
 	f.mustEvaluate(`{}`)
-	wantJSON(t, compact(t, mustParse(t, f.read("workers/conductor.json"))), `{"redispatched_at":"2027-01-15T08:00:00.000Z"}`)
-	if len(f.launches()) != 1 {
-		t.Errorf("launches %+v", f.launches())
+	if f.read("workers/conductor.json") != "[1]" || len(f.launches()) != 1 {
+		t.Fatalf("lane changed or launch missing: %v", f.launches())
 	}
 }
 

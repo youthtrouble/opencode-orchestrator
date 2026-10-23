@@ -340,7 +340,7 @@ func TestEventsArePrunedAfterSevenDaysAndKeptAtExactlySeven(t *testing.T) {
 
 func TestRedispatchOfADeferredLane(t *testing.T) {
 	deferred := `"status": "deferred", "brief": "b.md", "harness": "claude", "breadth": "broad", "model": "m", "session_id": "s1", "resume_after": "` + iso(-60) + `"`
-	t.Run("one minute after resume_after: launch, then redispatched_at, then the note", func(t *testing.T) {
+	t.Run("one minute after resume_after: launch, then supervisor record, then the note", func(t *testing.T) {
 		f := newFixture(t)
 		f.worker("b1", deferred)
 		f.runResult = SyncResult{Stdout: "  launched\n"}
@@ -352,7 +352,7 @@ func TestRedispatchOfADeferredLane(t *testing.T) {
 		if got := strings.Join(f.runs[0].Args, " "); f.runs[0].Name != "/bin/orch" || got != wantArgs || f.runs[0].Dir != f.root {
 			t.Errorf("run = %+v, want args %s", f.runs[0], wantArgs)
 		}
-		wantWorker := `{"run_id":"run-b1",` + strings.ReplaceAll(strings.ReplaceAll(deferred, `": `, `":`), `", "`, `","`) + `,"lane":"b1","redispatched_at":"` + iso(0) + `"}`
+		wantWorker := compactFile(t, `{"run_id":"run-b1",`+deferred+`}`)
 		if got := compactFile(t, f.read("workers/b1.json")); got != wantWorker {
 			t.Errorf("worker = %s\nwant %s", got, wantWorker)
 		}
@@ -407,20 +407,18 @@ func TestRedispatchOfADeferredLane(t *testing.T) {
 			t.Errorf("note = %q, want stderr when stdout is empty", messages)
 		}
 	})
-	t.Run("a failed note aborts the tick after the worker write", func(t *testing.T) {
+	t.Run("a failed note leaves the record and continues the tick", func(t *testing.T) {
 		f := newFixture(t)
+		f.mkdir("logs")
 		f.write("mailbox", "file")
 		f.worker("b1", deferred)
-		f.worker("b2", `"status": "finished"`)
-		state, err := f.tick(`{}`)
-		if err == nil || nodefs.ErrorCode(err) != "EEXIST" { // mkdirSync of the mailbox
-			t.Fatalf("error = %v (code %s), want EEXIST", err, nodefs.ErrorCode(err))
+		f.worker("b2", `"status": "paused"`)
+		state := f.mustTick(`{}`)
+		if strings.Contains(f.read("workers/b1.json"), `"redispatched_at"`) {
+			t.Error("worker file changed")
 		}
-		if !strings.Contains(f.read("workers/b1.json"), `"redispatched_at"`) {
-			t.Error("worker file not written before the note")
-		}
-		if jsjson.Path(state, "lanes", "b2") != nil || jsjson.Path(state, "checked_at") != nil {
-			t.Errorf("the tick went on: %s", compact(t, state))
+		if jsjson.Path(state, "redispatch", "run-b1", "attempts") != float64(1) || jsjson.Path(state, "lanes", "b2") == nil || jsjson.Path(state, "checked_at") == nil {
+			t.Fatalf("tick did not continue: %s", compact(t, state))
 		}
 	})
 	t.Run("a null config throws at the deferred lane only", func(t *testing.T) {

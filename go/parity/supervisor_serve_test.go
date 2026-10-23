@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
@@ -371,6 +372,9 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 			js, orch := h.runPair(t, h.serveInvocation(c))
 			requireFlipEvaluated(t, "js", js)
 			requireFlipEvaluated(t, "orch", orch)
+			if c.name == "flip/pending-launch-to-gemini" {
+				assertRedispatchRecord(t, &orch, "pending:undefined", false)
+			}
 			compareOutcomes(t, js, orch)
 		})
 	}
@@ -706,10 +710,8 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			seedMailbox(lines(`{"id":"gggggggg-0000-0000-0000-000000000001","at":"2026-10-19T09:30:00.000Z","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: push","body":"","refs":[],"thread":null,"acked_by":[]}`), ""),
 			seedFlip(`{"to": "opencode", "at": "2026-10-19T08:00:00.000Z", "pending_launch": {"to": "opencode", "from": "opencode", "reason": "human gate cleared", "resume": null, "at": "2026-10-19T10:00:00.000Z"}}`), caches.green)),
 			[]string{"pending launch opencode->opencode"}},
-		// Timing assumption: the serve's write of its stale in-memory lane lands before the
-		// runner's first state write, because the runner boots far slower, so the runner's own
-		// final state replaces the redispatched_at the serve wrote. Under heavy load the order
-		// can flip, in both runtimes alike.
+		// PE-36: orch never writes the stale lane snapshot. The frozen JS still does;
+		// these cases settle the runner before comparing its final state.
 		// decide flips the idle opencode project (flipped there long ago) to claude, openai
 		// being red: claude is launched.
 		{"conductor/decide-flip-to-claude", "conductor", claudeConductor(seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T09:00:00.000Z"}`), caches.openaiRed)), []string{"relaunch opencode->claude (flip)"}},
@@ -761,6 +763,20 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 				t.Errorf("the serves quote launch answers of different lengths: js %v, orch %v", jsQuoted, orchQuoted)
 			}
 			js, orch = js.normalized(cutLogPaths), orch.normalized(cutLogPaths)
+			if c.name != "conductor/never-started" {
+				key := "conductor:none"
+				switch c.name {
+				case "conductor/pending-launch":
+					key = "pending:undefined"
+				case "conductor/gate-cleared":
+					key = "pending:2026-10-19T10:00:00.000Z"
+				case "conductor/finished-early-resume":
+					key = "0:conductor"
+				case "redispatch/deferred-due":
+					key = "rd"
+				}
+				assertRedispatchRecord(t, &orch, key, true)
+			}
 			compareOutcomes(t, js, orch)
 		})
 	}
@@ -1057,4 +1073,50 @@ func (h *harness) testServePausedUncachedDecide(t *testing.T) {
 	requireFlipEvaluated(t, "js", js)
 	requireFlipEvaluated(t, "orch", orch)
 	compareOutcomes(t, js, orch)
+}
+
+// PE-36/37: only launch cases add supervisor-owned records. Assert their contents
+// before removing that one field for comparison with the frozen JS's old writes.
+func assertRedispatchRecord(t *testing.T, o *outcome, key string, confirmed bool) {
+	t.Helper()
+	const path = "project/supervisor-state.json"
+	text := o.files[path]
+	// Other fields already contain the harness's unquoted numeric placeholders.
+	// Parse only this scoped, still-valid JSON field and leave every other byte alone.
+	pattern := regexp.MustCompile(`(?ms)^  "redispatch": (\{.*?^  \})(,?)\n`)
+	match := pattern.FindStringSubmatchIndex(text)
+	if match == nil {
+		t.Fatalf("no redispatch field: %s", text)
+	}
+	parsed, err := jsjson.Unmarshal([]byte(text[match[2]:match[3]]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, ok := parsed.(*jsjson.Object)
+	if !ok || records.Len() != 1 {
+		t.Fatalf("redispatch records: %s", text)
+	}
+	record := jsjson.Path(records, key)
+	if jsjson.Path(record, "attempts") != float64(1) {
+		t.Fatalf("record %q: %s", key, o.files[path])
+	}
+	at, ok := jsjson.Path(record, "last_attempt_at").(string)
+	if !ok {
+		t.Fatalf("attempt date: %v", record)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
+		t.Fatalf("attempt date %q: %v", at, err)
+	}
+	if confirmed {
+		if jsjson.Path(record, "confirmed_run_id") != "<run-id>" {
+			t.Fatalf("unconfirmed launch: %s", o.files[path])
+		}
+	} else if jsjson.Path(record, "confirmed_run_id") != nil {
+		t.Fatalf("failed launch confirmed: %s", o.files[path])
+	}
+	prefix, suffix := text[:match[0]], text[match[1]:]
+	if text[match[4]:match[5]] == "" {
+		prefix = strings.TrimSuffix(prefix, ",\n") + "\n"
+	}
+	o.files[path] = prefix + suffix
 }

@@ -35,8 +35,8 @@ type conductorView struct {
 
 // evaluateFlip is the JS conductor flip / hand-back block of tickAll: once a minute, when the
 // project has a conductor lane or a flip.json, relaunch a conductor that is due. Each spawn
-// is a self-exec of `orch flip ...` waited for; a log append, the conductor.json write and an
-// argument Node would reject abort the tick, as they throw in the JS.
+// is a self-exec of `orch flip ...` waited for. Attempt records belong to supervisor state;
+// a log append or an argument Node would reject can still abort the tick.
 func (s *Supervisor) evaluateFlip(state *jsjson.Object, t *tick) error {
 	lane := asObject(readJSON(s.conductorPath(), func() any { return nil }))
 	if !jsjson.Truthy(lane) && !nodefs.Exists(s.flipPath()) {
@@ -170,10 +170,13 @@ func (s *Supervisor) launchNeverStarted(state *jsjson.Object, t *tick, c conduct
 }
 
 // launchPending launches a hand-off recorded while the previous conductor still held the
-// lane. It has no cooldown: a `flip run` that fails before clearing pending_launch is retried
-// at every evaluation (mirrored).
+// lane. Each pending record has its own bounded retry backoff.
 func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorView) error {
 	pending := jsjson.Path(c.flip, "pending_launch")
+	key := pendingRunKey(pending)
+	if !redispatchEligible(state, key, nil, t.now) {
+		return nil
+	}
 	// The log shows pl.from as it is (undefined included); the argument is pl.from || activeDoor.
 	from, to := property(pending, "from"), property(pending, "to")
 	args := []any{"run", "--unless-gated", "--to", to, "--from", or(jsjson.Path(pending, "from"), c.activeDoor),
@@ -181,21 +184,31 @@ func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorVie
 	if resume := jsjson.Path(pending, "resume"); jsjson.Truthy(resume) {
 		args = append(args, "--resume", resume)
 	}
-	out, err := s.flip(s.Root, args...)
+	result, err := s.flipResult(s.Root, args...)
 	if err != nil {
 		return err
 	}
-	if err := s.log(t, "pending launch "+argText(from)+"->"+argText(to)+": "+out); err != nil {
-		return err
+	runID, attempted := flipLaunchOutcome(result)
+	stopped := false
+	if attempted {
+		stopped = recordRedispatch(state, key, t, runID)
+		state.Set("last_relaunch_at", float64(t.now))
 	}
-	state.Set("last_relaunch_at", float64(t.now))
-	return nil
+	logErr := s.log(t, "pending launch "+argText(from)+"->"+argText(to)+": "+outputText(result, logOutputUnits))
+	if stopped {
+		argv, err := spawnArgs(append([]any{"flip"}, args...)...)
+		if err != nil {
+			return errors.Join(logErr, err)
+		}
+		s.noteRelaunchStopped(t, "conductor", "human", result, argv)
+	}
+	return logErr
 }
 
 // decideAndRelaunch asks `flip decide` what an idle conductor's project should do and, at
 // most once per relaunchCooldown, launches the door it names: the target of a flip or
 // hand-back, or the active door again when the project was paused or the lane needs a
-// restart. conductor.json is marked redispatched before the launch.
+// restart. The launch result is recorded in supervisor state before diagnostics.
 func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conductorView) error {
 	decided, err := s.flipResult("", "decide", "--active", c.activeDoor, "--cwd", s.Root)
 	if err != nil {
@@ -208,9 +221,10 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 		return err
 	}
 	status := jsjson.Path(c.lane, "status")
-	notRedispatched := !jsjson.Truthy(jsjson.Path(c.lane, "redispatched_at"))
-	finishedEarly := jsjson.Truthy(c.lane) && status == "finished" && !handedOff && notRedispatched
-	laneNeedsRestart := jsjson.Truthy(c.lane) && (isOneOf(status, "failed", "deferred", "interrupted") || finishedEarly) && notRedispatched
+	key := conductorRunKey(c.lane)
+	eligible := redispatchEligible(state, key, c.lane, t.now)
+	finishedEarly := jsjson.Truthy(c.lane) && status == "finished" && !handedOff && eligible
+	laneNeedsRestart := jsjson.Truthy(c.lane) && (isOneOf(status, "failed", "deferred", "interrupted") || finishedEarly) && eligible
 
 	action := jsjson.Path(decision, "action")
 	var target any
@@ -223,26 +237,34 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	case action == "stay" && (paused || laneNeedsRestart):
 		target, targetIsActive = c.activeDoor, true
 	}
-	if !jsjson.Truthy(target) || !elapsed(t.now, jsjson.Path(state, "last_relaunch_at"), relaunchCooldown) {
+	if !eligible || !jsjson.Truthy(target) || !elapsed(t.now, jsjson.Path(state, "last_relaunch_at"), relaunchCooldown) {
 		return nil
 	}
 
-	state.Set("last_relaunch_at", float64(t.now))
 	var resumeArgs []any
 	if session := jsjson.Path(c.lane, "session_id"); targetIsActive && jsjson.Truthy(session) && (doorOf(c.lane) == "claude") == (target == "claude") {
 		resumeArgs = []any{"--resume", session}
-	}
-	if err := s.markRedispatched(c.lane); err != nil {
-		return err
 	}
 	reason := jsjson.TemplateString(action) + ": " + jsjson.TemplateStringOf(jsjson.Lookup(decision, "reason"))
 	if finishedEarly {
 		reason += " (previous conductor exited without handoff)"
 	}
-	out, err := s.flip("", append([]any{"run", "--unless-gated", "--to", target, "--from", c.activeDoor, "--reason", reason, "--cwd", s.Root}, resumeArgs...)...)
+	args := append([]any{"run", "--unless-gated", "--to", target, "--from", c.activeDoor, "--reason", reason, "--cwd", s.Root}, resumeArgs...)
+	result, err := s.flipResult("", args...)
 	if err != nil {
 		return err
 	}
+	runID, attempted := flipLaunchOutcome(result)
+	stopped := false
+	if attempted {
+		stopped = recordRedispatch(state, key, t, runID)
+		state.Set("last_relaunch_at", float64(t.now))
+	}
+	wasPaused := ""
+	if paused {
+		wasPaused = ", was paused"
+	}
+	logErr := s.log(t, fmt.Sprintf("relaunch %s->%s (%s%s): %s", jsjson.TemplateString(c.activeDoor), jsjson.TemplateString(target), jsjson.TemplateString(action), wasPaused, outputText(result, logOutputUnits)))
 	s.Incident(incident.Draft{
 		Component: "flip",
 		Kind:      "flip",
@@ -250,25 +272,14 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 		Detail:    textOrEmpty(jsjson.Path(decision, "reason")),
 		Project:   s.Root,
 	})
-	wasPaused := ""
-	if paused {
-		wasPaused = ", was paused"
+	if stopped {
+		argv, err := spawnArgs(append([]any{"flip"}, args...)...)
+		if err != nil {
+			return errors.Join(logErr, err)
+		}
+		s.noteRelaunchStopped(t, "conductor", "human", result, argv)
 	}
-	return s.log(t, fmt.Sprintf("relaunch %s->%s (%s%s): %s", jsjson.TemplateString(c.activeDoor), jsjson.TemplateString(target), jsjson.TemplateString(action), wasPaused, out))
-}
-
-// markRedispatched records `conductorLane.redispatched_at` in conductor.json, when there is a
-// lane; a primitive lane cannot take the property (TypeError).
-func (s *Supervisor) markRedispatched(lane any) error {
-	if !jsjson.Truthy(lane) {
-		return nil
-	}
-	object, isObject := lane.(*jsjson.Object)
-	if !isObject {
-		return jsjson.CannotAssign(lane, "redispatched_at")
-	}
-	object.Set("redispatched_at", jsjson.ISOString(s.Now()))
-	return writeJSON(s.conductorPath(), object)
+	return logErr
 }
 
 // handedOff reports whether the mailbox holds a handoff posted at or after the conductor
