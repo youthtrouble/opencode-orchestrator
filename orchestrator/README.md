@@ -377,7 +377,11 @@ for a key, one `blocked` note includes the last output and a manual retry comman
 lane's retries then stop, while a conductor or pending launch is retried every 30 minutes until
 a launch is confirmed or a gate or pause holds it, repeating the `blocked` note at most every
 6 hours. A conductor launch that was confirmed but whose runner never published a lane (the slot
-still shows the old run, idle and unlocked, 600 seconds later) counts as a failed attempt. A
+still shows the old run, idle and unlocked, 600 seconds later) counts as a failed attempt.
+For a due, auto-enabled deferred worker lane, a confirmed launch that never publishes a
+replacement and has no kernel lock holder after the same 600-second grace loses its
+confirmation without adding an attempt, then retries under the existing backoff and
+five-launch cap, posting the one `blocked` note if the cap is reached this way. A
 lane that is not running shows `next_check` and `next_check_at` as null in the state. Conductor and pending-launch notes go to `human`; worker-lane notes go to
 `coordinator`. The decided conductor path also keeps its 600-second project cooldown;
 never-started flip targets keep their separate 120-second backoff. Gate refusals and answers

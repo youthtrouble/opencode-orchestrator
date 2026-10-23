@@ -21,6 +21,9 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- supervisor (S13 closure F2, PE-37): retry confirmed worker launches that never publish a
+  replacement lane after 600 seconds with no lane lock holder, preserving the five-launch cap
+  without counting expiry as an extra attempt; post the blocked note once at the cap.
 - parity tooling (S13m): derive `--only` groups from `TestParity` and list them on an unknown
   group (exit 2); replace only extracted JS reference tests with one passing doctor probe stub
   (PE-18), never modifying a supplied `ORCH_JS` tree.

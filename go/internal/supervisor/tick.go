@@ -206,7 +206,7 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	}
 	setProperty(lanes, lane, entry)
 
-	due, err := s.redispatchDue(obs, t.config, worker, state, t)
+	due, err := s.redispatchDue(obs, t.config, worker, state, t, lockHeld)
 	if err != nil {
 		return err
 	}

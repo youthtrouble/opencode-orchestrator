@@ -14,6 +14,9 @@ import (
 // redispatchGraceMs is how long after resume_after a deferred lane is re-dispatched.
 const redispatchGraceMs = 60_000
 
+// launchPublishGrace is how many seconds a confirmed launch has to publish its lane.
+const launchPublishGrace = 600
+
 // noteBodyUnits is how many UTF-16 units of the launcher's output the note keeps.
 const noteBodyUnits = 500
 
@@ -22,7 +25,7 @@ const noteBodyUnits = 500
 // resume_after whose Date.parse plus a minute has passed (the clock is read again), and not
 // re-dispatched before. The conductor lane is never re-dispatched here (PE-60): evaluateFlip
 // owns every conductor launch, behind its gate, pause and launch-time gate recheck.
-func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker *jsjson.Object, state *jsjson.Object, t *tick) (bool, error) {
+func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker *jsjson.Object, state *jsjson.Object, t *tick, lockHeld bool) (bool, error) {
 	if obs.Phase != "deferred" {
 		return false, nil
 	}
@@ -37,8 +40,51 @@ func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker
 	if !parsed || resumeMs+redispatchGraceMs > s.Now().UnixMilli() {
 		return false, nil
 	}
-	return obs.LaneText() != "conductor" && !legacyRedispatched(worker) &&
-		recordEligible(state, jsjson.TemplateString(runValue(worker, obs)), workerLaneRetry, t.now), nil
+	if obs.LaneText() == "conductor" || legacyRedispatched(worker) {
+		return false, nil
+	}
+	key := jsjson.TemplateString(runValue(worker, obs))
+	if !lockHeld {
+		if err := s.expireUnpublishedLaunch(obs.LaneText(), worker, state, key, t); err != nil {
+			return false, err
+		}
+	}
+	return recordEligible(state, key, workerLaneRetry, t.now), nil
+}
+
+// expireUnpublishedLaunch removes only the provisional confirmation: the worker launch
+// was already counted, so expiring it must not consume another of its five attempts.
+func (s *Supervisor) expireUnpublishedLaunch(lane string, worker *jsjson.Object, state *jsjson.Object, key string, t *tick) error {
+	record, ok := jsjson.Path(state, "redispatch", key).(*jsjson.Object)
+	if !ok {
+		return nil
+	}
+	confirmed := jsjson.Path(record, "confirmed_run_id")
+	since, parsed := secondsSince(record, "last_attempt_at", t.now)
+	if !jsjson.Truthy(confirmed) || !parsed || since < launchPublishGrace {
+		return nil
+	}
+	attempts := toNumber(jsjson.Path(record, "attempts"))
+	blocked := attempts >= maxRedispatchAttempts && !jsjson.Truthy(jsjson.Path(record, "blocked_noted_at"))
+	var args []string
+	if blocked {
+		// Keep the confirmation retryable if the manual retry command cannot be built.
+		var err error
+		args, err = spawnArgs(redispatchArgs(lane, worker, s.Root)...)
+		if err != nil {
+			return err
+		}
+	}
+	record.Set("confirmed_run_id", nil)
+	message := lane + " launch " + jsjson.TemplateString(confirmed) + " never published a lane; confirmation expired"
+	if err := s.log(t, message); err != nil {
+		return err
+	}
+	if blocked {
+		record.Set("blocked_noted_at", t.nowISO)
+		s.noteRelaunchBlocked(t, lane, "coordinator", maxRedispatchAttempts, SyncResult{Stdout: message}, args)
+	}
+	return nil
 }
 
 // redispatch runs the launcher before recording its outcome in supervisor state. The

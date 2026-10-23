@@ -1424,7 +1424,11 @@ The other documented differences, each asserted by its own parity case:
   and before diagnostics. Success needs exit 0 and the last stdout JSON object to contain a
   string `run_id` and numeric `runner_pid`; a conductor/pending answer additionally needs
   `flipped: true` and those fields at the answer's top level (PE-63); its 400-unit `launcher`
-  quote is display text and is not parsed (S13r). Success confirms once.
+  quote is display text and is not parsed (S13r). Worker confirmation is provisional: if the
+  runner never publishes a replacement lane and the lane lock is free 600 s after the launch,
+  a due, auto-enabled deferred lane loses its confirmation without an extra attempt and retries
+  under the same backoff and five-launch cap (S13 closure F2). Reaching the cap this way posts
+  the one `blocked` note.
   An unconfirmed key retries after `min(60 s × 2^(attempts-1), 30 min)`; a worker-lane key
   stops after five failures (conductor and pending keys then retry slowly, PE-60) with one
   `blocked` note: `human` for conductor/pending keys, `coordinator` for other
@@ -1524,7 +1528,9 @@ The other documented differences, each asserted by its own parity case:
   (`blocked_noted_at`, stamped even when the post fails). Worker lanes keep the PE-37 stop. A
   conductor launch confirmed by its launcher whose runner never published a lane (the slot still
   shows the confirmed key, idle and unlocked, 600 s after the attempt) loses its confirmation and
-  counts as a failed attempt (D1d). Conductor launches have one owner, the flip evaluation: the
+  counts as a failed attempt (D1d); the 600 s is the shared `launchPublishGrace`. Unlike D1d,
+  worker expiry adds no attempt because its already-counted launches have a hard cap (PE-37).
+  Conductor launches have one owner, the flip evaluation: the
   lane loop never re-dispatches the `conductor` lane, so a deferred conductor resumes through
   `flip run` (its gate, pause and launch-time gate recheck; the saved, continue or kickoff brief
   and `--resume <session>` on the same door) instead of `worker start` with the lane's own brief,
