@@ -113,7 +113,7 @@ func TestMailboxReplyToAMessageSharingTheGateQuestionsShortPrefixKeepsTheGate(t 
 	}
 }
 
-func TestMailboxReplyReportsAnUnreadableFlipJSONButSucceeds(t *testing.T) {
+func TestMailboxReplyRefusesAnUnreadableFlipJSON(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("ORCHESTRATOR_PROJECT", root)
 	questionID := postQuestion(t, root, "ship it?")
@@ -121,10 +121,10 @@ func TestMailboxReplyReportsAnUnreadableFlipJSONButSucceeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := run(t, Mailbox, []string{"reply", questionID, "yes"}, "")
-	if code != 0 || !strings.HasPrefix(stdout, "replied (") {
+	if code != 1 || stdout != "" {
 		t.Errorf("code %d stdout %q", code, stdout)
 	}
-	if want := "could not check for a human gate: .orchestrator/flip.json is not valid JSON\n"; stderr != want {
+	if want := "Error: flip state unreadable: " + filepath.Join(root, ".orchestrator", "flip.json") + ": INVALID_JSON\n"; stderr != want {
 		t.Errorf("stderr = %q, want %q", stderr, want)
 	}
 }

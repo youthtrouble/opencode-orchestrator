@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"os"
@@ -155,21 +157,6 @@ func TestFlipActiveDoor(t *testing.T) {
 	}
 }
 
-func TestFlipActiveDoorReadsANullConfigOnlyWhenNeeded(t *testing.T) {
-	f := newFixture(t)
-	f.write("flip.json", `{}`)
-	state, err := f.evaluate(`{}`, `null`)
-	wantError(t, err, "Cannot read properties of null (reading 'home')")
-	wantJSON(t, compact(t, state), `{"last_flip_check":1800000000}`)
-
-	f = newFixture(t)
-	f.write("flip.json", `{"to": "claude"}`)
-	f.decides("")
-	if _, err := f.evaluate(`{}`, `null`); err != nil {
-		t.Fatalf("flip.to set: config.home is not read, got %v", err)
-	}
-}
-
 func TestFlipAwaitingHumanIsLoggedOnceAndRearmedWhenCleared(t *testing.T) {
 	f := newFixture(t)
 	f.mkdir("logs")
@@ -226,7 +213,7 @@ func TestFlipTargetNeverStartedLaunchesIt(t *testing.T) {
 	f := newFixture(t)
 	neverStarted(f)
 	state := f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-120)) + `}`)
-	want := []SyncSpec{{Name: "/bin/orch", Args: []string{"flip", "run", "--to", "claude", "--from", "opencode", "--reason", "flip target never started", "--cwd", f.root}, Dir: f.root}}
+	want := []SyncSpec{{Name: "/bin/orch", Args: []string{"flip", "run", "--unless-gated", "--to", "claude", "--from", "opencode", "--reason", "flip target never started", "--cwd", f.root}, Dir: f.root}}
 	if !reflect.DeepEqual(f.runs, want) {
 		t.Errorf("runs %+v, want %+v", f.runs, want)
 	}
@@ -246,7 +233,7 @@ func TestFlipTargetNeverStartedNeedsEveryCondition(t *testing.T) {
 			f.write("flip.json", `{"to": "claude", "at": "2027-01-15T09:00:00.000Z", "pending_launch": {"to": "claude"}}`)
 		}, `{}`},
 		{"lane alive", func(f *fixture) { f.live[9] = true }, `{}`},
-		{"lock present", func(f *fixture) { f.write("workers/conductor.lock", "1") }, `{}`},
+		{"lock held", func(f *fixture) { f.holdLock("workers/conductor.lock") }, `{}`},
 		{"no lane", func(f *fixture) { f.write("workers/conductor.json", `null`) }, `{}`},
 		{"same door", func(f *fixture) {
 			f.write("workers/conductor.json", strings.Replace(deadConductor, `"opencode"`, `"claude"`, 1))
@@ -271,7 +258,7 @@ func TestFlipTargetNeverStartedNeedsEveryCondition(t *testing.T) {
 			c.setup(f)
 			f.mustEvaluate(c.state)
 			for _, spec := range f.launches() {
-				if spec.Args[7] == "flip target never started" {
+				if spec.Args[8] == "flip target never started" {
 					t.Errorf("launched %+v", spec)
 				}
 			}
@@ -300,7 +287,7 @@ func TestFlipPendingLaunch(t *testing.T) {
 			f.write("flip.json", `{"to": "door", "pending_launch": `+c.pending+`}`)
 			f.decides("")
 			state := f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-1)) + `}`)
-			args := append([]string{"flip", "run"}, c.wantArgs[:6]...)
+			args := append([]string{"flip", "run", "--unless-gated"}, c.wantArgs[:6]...)
 			args = append(args, "--cwd", f.root)
 			args = append(args, c.wantArgs[6:]...)
 			want := []SyncSpec{{Name: "/bin/orch", Args: args, Dir: f.root}}
@@ -310,9 +297,9 @@ func TestFlipPendingLaunch(t *testing.T) {
 			if got := f.logText(); got != iso(0)+" pending launch "+c.wantLog+": launched\n" {
 				t.Errorf("log %q", got)
 			}
-			wantJSON(t, compact(t, state), `{"last_relaunch_at":1800000000,"last_flip_check":1800000000}`)
+			wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "conductor:none")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null}`)
 
-			// No cooldown: flip.json unchanged, the next evaluation launches again.
+			// The first failure waits 60 seconds before the next attempt.
 			f.at(60)
 			f.mustEvaluate(compact(t, state))
 			if len(f.runs) != 2 {
@@ -325,12 +312,37 @@ func TestFlipPendingLaunch(t *testing.T) {
 func TestFlipPendingLaunchWaitsForAnIdleLaneAndAFreeLock(t *testing.T) {
 	f := newFixture(t)
 	f.write("flip.json", `{"pending_launch": {"to": "claude"}}`)
-	f.write("workers/conductor.lock", "1")
+	f.holdLock("workers/conductor.lock")
 	f.decides("")
 	f.mustEvaluate(`{}`)
 	if len(f.launches()) != 0 || len(f.runs) != 1 {
 		t.Errorf("runs %+v, want only decide", f.runs)
 	}
+}
+
+// PE-30: a conductor lock file no process holds (a runner killed with SIGKILL) no longer
+// blocks the relaunch of an idle lane; the JS waits for the file to go.
+func TestFlipStaleConductorLockDoesNotBlockARelaunch(t *testing.T) {
+	t.Run("pending launch", func(t *testing.T) {
+		f := newFixture(t)
+		f.mkdir("logs")
+		f.write("flip.json", `{"pending_launch": {"to": "claude"}}`)
+		f.write("workers/conductor.lock", "999999999")
+		f.decides("")
+		f.mustEvaluate(`{}`)
+		if launches := f.launches(); len(launches) != 1 || launches[0].Args[1] != "run" {
+			t.Errorf("runs %+v, want one flip run", f.runs)
+		}
+	})
+	t.Run("flip target never started", func(t *testing.T) {
+		f := newFixture(t)
+		neverStarted(f)
+		f.write("workers/conductor.lock", "999999999")
+		f.mustEvaluate(`{"last_relaunch_at": ` + jsjson.TemplateString(float64(t0-120)) + `}`)
+		if launches := f.launches(); len(launches) != 1 || launches[0].Args[8] != "flip target never started" {
+			t.Errorf("runs %+v, want the never-started launch", f.runs)
+		}
+	})
 }
 
 func TestFlipDecideOutputs(t *testing.T) {
@@ -384,16 +396,16 @@ func TestFlipRelaunchOnFlip(t *testing.T) {
 
 	want := []SyncSpec{
 		{Name: "/bin/orch", Args: []string{"flip", "decide", "--active", "opencode", "--cwd", f.root}},
-		{Name: "/bin/orch", Args: []string{"flip", "run", "--to", "claude", "--from", "opencode", "--reason", "flip: anthropic green", "--cwd", f.root}},
+		{Name: "/bin/orch", Args: []string{"flip", "run", "--unless-gated", "--to", "claude", "--from", "opencode", "--reason", "flip: anthropic green (previous conductor handed off without flip run, pause or gate)", "--cwd", f.root}},
 	}
 	if !reflect.DeepEqual(f.runs, want) {
 		t.Errorf("runs %+v, want %+v", f.runs, want)
 	}
-	wantConductor := strings.TrimSuffix(deadConductor, "}") + `, "redispatched_at": "2027-01-15T08:00:00.500Z"}`
+	wantConductor := deadConductor
 	if got := compact(t, mustParse(t, conductorAtLaunch)); got != compact(t, mustParse(t, wantConductor)) {
 		t.Errorf("conductor.json at launch %s, want %s", got, wantConductor)
 	}
-	wantJSON(t, compact(t, state), `{"last_relaunch_at":1800000000,"last_flip_check":1800000000}`)
+	wantJSON(t, compact(t, jsjson.Path(state, "redispatch", "9:conductor")), `{"attempts":1,"last_attempt_at":"2027-01-15T08:00:00.000Z","confirmed_run_id":null,"relaunch_noted":true}`)
 	if got := f.logText(); got != iso(0)+" relaunch opencode->claude (flip): launched\n" {
 		t.Errorf("log %q", got)
 	}
@@ -411,7 +423,7 @@ func TestFlipRelaunchOnHandbackWithoutALane(t *testing.T) {
 	f := relaunchFixture(t, ``, `{"to": "claude", "paused": 1}`, `{"action": "handback", "to": "opencode"}`)
 	f.mustEvaluate(`{}`)
 	launches := f.launches()
-	if len(launches) != 1 || !reflect.DeepEqual(launches[0].Args[2:8], []string{"--to", "opencode", "--from", "claude", "--reason", "handback: undefined"}) || len(launches[0].Args) != 10 {
+	if len(launches) != 1 || !reflect.DeepEqual(launches[0].Args[3:9], []string{"--to", "opencode", "--from", "claude", "--reason", "handback: undefined"}) || len(launches[0].Args) != 11 {
 		t.Fatalf("launches %+v", launches)
 	}
 	if f.incidents[0].Detail != "" {
@@ -436,14 +448,15 @@ func TestFlipStayRelaunchesTheActiveDoor(t *testing.T) {
 		{"failed", lane("failed"), `{}`, nil, "stay: r", "stay"},
 		{"deferred", lane("deferred"), `{}`, nil, "stay: r", "stay"},
 		{"interrupted", lane("interrupted"), `{}`, nil, "stay: r", "stay"},
-		{"running but dead", lane("running"), `{}`, nil, "", ""},
+		{"running but dead", lane("running"), `{}`, nil, "stay: r (previous conductor exited without a final status)", "stay"},
+		{"starting but dead", lane("starting"), `{}`, nil, "stay: r (previous conductor exited without a final status)", "stay"},
 		{"finished early", deadConductor, `{}`, nil, "stay: r (previous conductor exited without handoff)", "stay"},
-		{"finished after a handoff", deadConductor, `{}`, []string{handoff("2027-01-15T08:00:00.000Z")}, "", ""},
+		{"finished after a handoff", deadConductor, `{}`, []string{handoff("2027-01-15T08:00:00.000Z")}, "stay: r (previous conductor handed off without flip run, pause or gate)", "stay"},
 		{"handoff before the start", deadConductor, `{}`, []string{handoff("2027-01-15T07:00:00.000Z")}, "stay: r (previous conductor exited without handoff)", "stay"},
 		{"odd mailbox lines", deadConductor, `{}`, []string{"", "null", "{bad", `{"kind": "handoff"}`, `{"kind": "note", "at": "2028"}`, `5`}, "stay: r (previous conductor exited without handoff)", "stay"},
 		{"null at, no started_at", strings.Replace(deadConductor, `"started_at"`, `"begun"`, 1), `{}`, []string{`{"kind": "handoff", "at": null}`}, "stay: r (previous conductor exited without handoff)", "stay"},
-		{"null at, null started_at", strings.Replace(deadConductor, `"2027-01-15T08:00:00.000Z"`, `null`, 1), `{}`, []string{`{"kind": "handoff", "at": null}`}, "", ""},
-		{"handoff compared as text", deadConductor, `{}`, []string{handoff("2027-02")}, "", ""},
+		{"null at, null started_at", strings.Replace(deadConductor, `"2027-01-15T08:00:00.000Z"`, `null`, 1), `{}`, []string{`{"kind": "handoff", "at": null}`}, "stay: r (previous conductor handed off without flip run, pause or gate)", "stay"},
+		{"handoff compared as text", deadConductor, `{}`, []string{handoff("2027-02")}, "stay: r (previous conductor handed off without flip run, pause or gate)", "stay"},
 		{"already redispatched", strings.Replace(deadConductor, `}`, `, "redispatched_at": "x"}`, 1), `{}`, nil, "", ""},
 		{"failed, redispatched", strings.Replace(lane("failed"), `}`, `, "redispatched_at": "x"}`, 1), `{}`, nil, "", ""},
 	}
@@ -461,7 +474,7 @@ func TestFlipStayRelaunchesTheActiveDoor(t *testing.T) {
 				}
 				return
 			}
-			if len(launches) != 1 || launches[0].Args[3] != "opencode" || launches[0].Args[7] != c.wantReason {
+			if len(launches) != 1 || launches[0].Args[4] != "opencode" || launches[0].Args[8] != c.wantReason {
 				t.Fatalf("launches %+v, want reason %q", launches, c.wantReason)
 			}
 			if got := f.logText(); got != iso(0)+" relaunch opencode->opencode ("+c.wantLogAction+"): launched\n" {
@@ -515,19 +528,19 @@ func TestFlipRelaunchResumesTheSameDoorsSession(t *testing.T) {
 			if len(launches) != 1 {
 				t.Fatalf("launches %+v", launches)
 			}
-			if got := launches[0].Args[10:]; !reflect.DeepEqual(got, c.wantResume) && (len(got) != 0 || c.wantResume != nil) {
+			if got := launches[0].Args[11:]; !reflect.DeepEqual(got, c.wantResume) && (len(got) != 0 || c.wantResume != nil) {
 				t.Errorf("resume args %q, want %q", got, c.wantResume)
 			}
 		})
 	}
 }
 
-func TestFlipRelaunchOfAPrimitiveLaneThrowsBeforeTheLaunch(t *testing.T) {
-	f := relaunchFixture(t, `7`, `{}`, `{"action": "flip", "to": "claude"}`)
-	_, err := f.evaluate(`{}`, `{}`)
-	wantError(t, err, "Cannot create property 'redispatched_at' on number '7'")
-	if len(f.launches()) != 0 {
-		t.Errorf("launched %+v", f.launches())
+// PE-36: even a hand-edited primitive lane is never written by the supervisor.
+func TestFlipRelaunchLeavesAPrimitiveLaneUntouched(t *testing.T) {
+	f := relaunchFixture(t, `7`, `{}`, `{"action":"flip","to":"claude"}`)
+	f.mustEvaluate(`{}`)
+	if f.read("workers/conductor.json") != "7" || len(f.launches()) != 1 {
+		t.Fatalf("lane changed or launch missing: %v", f.launches())
 	}
 }
 
@@ -547,13 +560,89 @@ func TestTickRunsTheFlipEvaluationLast(t *testing.T) {
 	wantJSON(t, strings.Join(state.Keys(), ","), "events,lanes,last_flip_check,checked_at,pid,status")
 }
 
-// TestFlipRelaunchRewritesAnArrayConductorAsAnObject: PE-16(1), the JS sets redispatched_at
-// on the array, which JSON.stringify drops; orch reads the array as {} and writes the object.
-func TestFlipRelaunchRewritesAnArrayConductorAsAnObject(t *testing.T) {
-	f := relaunchFixture(t, `[1]`, `{}`, `{"action": "flip", "to": "claude"}`)
+// PE-36 supersedes the old PE-16 rewrite on this path: no worker-owned file is written.
+func TestFlipRelaunchLeavesAnArrayConductorUntouched(t *testing.T) {
+	f := relaunchFixture(t, `[1]`, `{}`, `{"action":"flip","to":"claude"}`)
 	f.mustEvaluate(`{}`)
-	wantJSON(t, compact(t, mustParse(t, f.read("workers/conductor.json"))), `{"redispatched_at":"2027-01-15T08:00:00.000Z"}`)
-	if len(f.launches()) != 1 {
-		t.Errorf("launches %+v", f.launches())
+	if f.read("workers/conductor.json") != "[1]" || len(f.launches()) != 1 {
+		t.Fatalf("lane changed or launch missing: %v", f.launches())
+	}
+}
+
+// The fake self-exec is the boundary after evaluateFlip's snapshot and before Run's
+// transaction. Install a human gate there for each of the three automatic launch paths.
+func TestSupervisorRelaunchCannotEraseAGateInstalledAfterItsRead(t *testing.T) {
+	for _, branch := range []string{"never-started", "pending", "decided"} {
+		t.Run(branch, func(t *testing.T) {
+			f := newFixture(t)
+			f.mkdir("logs")
+			switch branch {
+			case "never-started":
+				neverStarted(f)
+			case "pending":
+				f.write("flip.json", `{"pending_launch":{"to":"claude","from":"opencode"}}`)
+			case "decided":
+				f.write("flip.json", `{"paused":{"door":"opencode"}}`)
+			}
+			project := flipcmd.NewProject(f.root)
+			launches := 0
+			f.respond = func(spec SyncSpec) SyncResult {
+				if spec.Args[1] == "decide" {
+					return SyncResult{Status: status(0), Stdout: `{"action":"flip","to":"claude","reason":"headroom"}` + "\n"}
+				}
+				gateOpts := cliargs.Opts{"reason": {Value: "installed after supervisor read"}}
+				if _, err := project.Gate(gateOpts); err != nil {
+					t.Fatal(err)
+				}
+				before, err := os.ReadFile(project.FlipPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				opts, _ := cliargs.ParseArgs(spec.Args[2:], []string{"to", "from", "reason", "cwd", "resume"}, []string{"unless-gated"})
+				answer, code, err := project.Run(opts, func([]string) (*int, string, string) { launches++; return status(0), "", "" })
+				if err != nil || code != 1 || compact(t, answer) != `{"flipped":false,"reason":"awaiting human"}` {
+					t.Fatalf("automatic run = %v, %d, %v", answer, code, err)
+				}
+				after, err := os.ReadFile(project.FlipPath)
+				if err != nil || string(after) != string(before) {
+					t.Fatalf("gate changed: %s, %v", after, err)
+				}
+				return SyncResult{Status: status(code), Stdout: compact(t, answer) + "\n"}
+			}
+			f.mustEvaluate(`{}`)
+			if len(f.launches()) != 1 || launches != 0 {
+				t.Fatalf("flip runs %v, worker launches %d", f.launches(), launches)
+			}
+		})
+	}
+}
+
+func TestUnreadableFlipStateBlocksRelaunchAndLogsOnce(t *testing.T) {
+	for _, kind := range []string{"corrupt", "mode-0000"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.mkdir("logs")
+			text := "{"
+			if kind == "mode-0000" {
+				text = `{}`
+			}
+			f.write("flip.json", text)
+			if kind == "mode-0000" {
+				if err := os.Chmod(f.sup.flipPath(), 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(f.sup.flipPath(), 0600) })
+				if _, err := os.ReadFile(f.sup.flipPath()); err == nil {
+					t.Skip("process can read mode-0000 files")
+				}
+			}
+			state := f.mustEvaluate(`{}`)
+			first := f.logText()
+			state.Delete("last_flip_check")
+			f.mustEvaluate(compact(t, state))
+			if len(f.runs) != 0 || first == "" || f.logText() != first || !strings.Contains(first, "flip state unreadable:") {
+				t.Fatalf("runs %v, first log %q, now %q", f.runs, first, f.logText())
+			}
+		})
 	}
 }

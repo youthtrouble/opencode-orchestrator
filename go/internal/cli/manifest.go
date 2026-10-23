@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/manifest"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 )
 
 // jsonSyntaxError is a manifest file JSON.parse rejects. V8's wording is not reproduced.
@@ -23,7 +26,7 @@ func (e *jsonSyntaxError) Error() string { return e.err.Error() }
 // Where the JS dies of an uncaught exception, Manifest prints only the error line and exits 1.
 func Manifest(args []string, stdio Stdio) int {
 	parsed := cliargs.ParseManifest(decodeArgv(args))
-	root, err := nodefs.Resolve(parsed.Values["root"]) // "" resolves to the working directory
+	root, err := paths.ProjectRoot(parsed.Values["root"])
 	if err != nil {
 		return crash(stdio, err)
 	}
@@ -90,6 +93,14 @@ func writeManifest(out string, m *jsjson.Object) error {
 func manifestVerify(root string, positional []string, stdio Stdio) int {
 	m, err := readManifest(positional, 0)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) && len(positional) > 0 {
+			file, resolveErr := nodefs.Resolve(positional[0])
+			if resolveErr != nil {
+				return crash(stdio, resolveErr)
+			}
+			fmt.Fprintf(stdio.Err, "manifest not found: %s; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)\n", file)
+			return 1
+		}
 		return crash(stdio, err)
 	}
 	v, err := manifest.Verify(root, m)

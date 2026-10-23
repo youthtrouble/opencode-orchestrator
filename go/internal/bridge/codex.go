@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	codexValueKeys = []string{"model", "effort", "sandbox", "cwd", "resume", "schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
+	codexValueKeys = []string{"model", "effort", "sandbox", "cwd", "artifact-root", "resume", "schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
 	codexFlagKeys  = []string{"force", "quiet", "ephemeral", "help"}
 )
 
@@ -41,7 +41,7 @@ type codexRequest struct {
 // a bare --cwd is the path.resolve TypeError, and a bare --model the TypeError of the gate's
 // `model.includes`, both before the gate runs.
 func newCodexRequest(opts options) (codexRequest, error) {
-	cwd, err := resolvePath(opts.Or("cwd", "."))
+	cwd, err := resolveProjectRoot(opts.Or("cwd", "."))
 	if err != nil {
 		return codexRequest{}, err
 	}
@@ -202,7 +202,7 @@ var toolHostFailure = regexp.MustCompile(`timed out negotiating with the code-mo
 
 // flagToolHostOutage is l.86-89: a completed turn that ran nothing and whose message reports
 // a tool-host failure is a failed run, with an incident of its own.
-func (r *codexResult) flagToolHostOutage() {
+func (r *codexResult) flagToolHostOutage(root string) {
 	if !r.ok || len(r.commands) > 0 || len(r.filesChanged) > 0 || !matchesIgnoringCase(toolHostFailure, r.finalMessage) {
 		return
 	}
@@ -218,7 +218,7 @@ func (r *codexResult) flagToolHostOutage() {
 		Summary:   "codex turn completed with zero tool calls; code-mode host timeout reported in prose",
 		Detail:    jsstr.Slice(r.finalMessage, 0, 400), // PE-1
 		Context:   context,
-		Project:   r.cwd,
+		Project:   root,
 	})
 }
 
@@ -267,7 +267,27 @@ func (e *codexEvents) handleEvent(line string) error {
 		}
 		r.errors = append(r.errors, failure)
 		r.ok = false
+	case "error":
+		return e.handleError(ev)
 	}
+	return nil
+}
+
+// handleError collects a top-level {"type":"error","message":...} event, one of codex's
+// `exec --json` events, into errors, so that a usage limit is filed as kind limit with its text
+// (PE-44). It does not decide ok: codex also reports stream retries this way, and the turn may
+// still complete.
+func (e *codexEvents) handleError(ev any) error {
+	message := jsjson.Path(ev, "message")
+	if !jsjson.Truthy(message) {
+		data, err := jsjson.Marshal(ev)
+		if err != nil {
+			return err
+		}
+		message = string(data)
+	}
+	e.result.errors = append(e.result.errors, message)
+	e.log.printf("error: %s", text(message))
 	return nil
 }
 

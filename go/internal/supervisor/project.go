@@ -24,7 +24,7 @@ type Project struct {
 	ConfigPath string // supervisor.json
 	StatePath  string // supervisor-state.json
 	AcksPath   string // supervisor-acks.json
-	LockPath   string // supervisor.lock: the serving supervisor's pid as text
+	LockPath   string // supervisor.lock: held by the serving supervisor (ownlock); its pid text is metadata
 	StopPath   string // supervisor.stop
 	LogPath    string // logs/supervisor.log
 	workers    worker.Project

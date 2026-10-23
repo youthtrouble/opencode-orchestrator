@@ -3,6 +3,8 @@
 package parity
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
 
 // kickoffLaunchArgs is the kickoff every launching case runs, before its door and mode flags.
@@ -28,10 +31,10 @@ var kickoffSupervisorStarted = regexp.MustCompile(`(?m)^(supervisor: \{"started"
 // the pair is compared, so no case passes by both runtimes launching nothing.
 func (h *harness) testKickoffLaunches(t *testing.T) {
 	t.Run("headless/claude", func(t *testing.T) {
-		h.compareKickoffHeadless(t, claudeBridge, bridgeCase{fixture: "ok"}, nil, "--door", "claude")
+		h.compareKickoffHeadless(t, claudeBridge, bridgeCase{fixture: "ok"}, nil, `{"agent":"conductor","permission-mode":"auto"}`, "--door", "claude")
 	})
 	t.Run("headless/opencode", func(t *testing.T) {
-		h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, nil)
+		h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, nil, `{"agent":"conductor"}`)
 	})
 	t.Run("clears-gate-without-relaunch", h.testKickoffClearsGateWithoutRelaunch)
 	claudeTUI := func(script map[string]string) seed {
@@ -84,7 +87,7 @@ func kickoffRoutedGreen(t *testing.T) seed {
 // conductor itself, so a pending launch would start a second one.
 func (h *harness) testKickoffClearsGateWithoutRelaunch(t *testing.T) {
 	gate := seedFlip(`{"awaiting_human":{"at":"2026-01-01T00:00:00.000Z","door":"opencode","reason":"push","question":null}}`)
-	js, orch := h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, gate)
+	js, orch := h.compareKickoffHeadless(t, opencodeBridge, bridgeCase{script: opencodeRunOK}, gate, `{"agent":"conductor"}`)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
 		if flipJSON := o.files["project/flip.json"]; flipJSON != "{}\n" {
 			t.Errorf("%s: flip.json = %q, want the gate cleared and no pending launch", side, flipJSON)
@@ -97,7 +100,8 @@ func (h *harness) testKickoffClearsGateWithoutRelaunch(t *testing.T) {
 // lane's runner by the pid each printed, and compares the kickoff's output with everything
 // the runner wrote (lane state, log, mailbox, run record). It returns both outcomes. The
 // routing refresh's feeds fail over the bridge's green cache (see withoutPostRunSession).
-func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase, state seed, door ...string) (js, orch outcome) {
+// launchOptions is the PE-62 launch_options the conductor lane's state records.
+func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase, state seed, launchOptions string, door ...string) (js, orch outcome) {
 	t.Helper()
 	inv := h.workerStartInvocation(t, workerStartCase{bridge: b, run: run, brief: text("")})
 	args := append(append(append([]string{}, kickoffLaunchArgs...), "--headless"), door...)
@@ -105,8 +109,12 @@ func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase,
 	inv.orch = append([]string{h.orchBin, "kickoff"}, args...)
 	inv.seed = seeds(inv.seed, supervisorHeldByThisTest(), kickoffBrief(), kickoffFeedsFail(), orNothing(state))
 	inv.extraFiles = []string{".git/info/exclude"}
+	normalizeWrites := inv.normalizeWrites
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		return normalizeWrites(flipTransactionSidecar(o, before), before)
+	}
 	worker, fresh := inv.normalize, normalizeFlip(time.Now())
-	inv.normalize = func(s string) string { return fresh(normalizeGeneratedAt(worker(s))) }
+	inv.normalize = func(s string) string { return withSupervisorHolder(fresh(normalizeGeneratedAt(worker(s)))) }
 	launched := workerDetachCase{launchLine: kickoffLauncherLine}
 	runners := strings.NewReplacer(h.runnerPrefixes(t)...)
 	js = h.runDetached(t, inv, nil, inv.js, launched, runners)
@@ -118,6 +126,7 @@ func (h *harness) compareKickoffHeadless(t *testing.T, b bridge, run bridgeCase,
 			t.Errorf("%s: exit %d, stdout %q; want a launched conductor lane that ran the fake %s", side, o.exitCode, o.stdout, b.name)
 		}
 	}
+	withPE62(t, &js, &orch, launchOptions)
 	compareOutcomes(t, js, orch)
 	return js, orch
 }
@@ -275,14 +284,12 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, awaitFlipChe
 	since := time.Now()
 	sb := h.newSandbox(t)
 	s(t, sb)
+	before := map[string]string{}
+	collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
 	o := h.run(t, sb, argv, nil, []string{noPostRunRefresh})
-	started := kickoffSupervisorStarted.FindStringSubmatch(o.stdout)
-	pid := 0
-	if started != nil {
-		pid, _ = strconv.Atoi(started[2])
-	}
+	pid := startedServePid(o.stdout)
 	if pid < 2 {
-		stopUnreadServe(t, sb)
+		stopUnreadServe(t, sb, argv[0] == h.node)
 		t.Fatalf("%s: no started supervisor with a pid in %q (stderr %q)", argv[0], o.stdout, o.stderr)
 	}
 	if awaitFlipCheck {
@@ -291,10 +298,11 @@ func (h *harness) runKickoffSupervisorStarted(t *testing.T, s seed, awaitFlipChe
 	h.stopLaunched(t, sb, pid)
 	o.stdout = kickoffSupervisorStarted.ReplaceAllString(o.stdout, "${1}<pid>${3}<log>")
 	o.files = sb.files(t)
-	if state := o.files["project/supervisor-state.json"]; !strings.Contains(state, `"pid": `+started[2]+",") {
+	if state := o.files["project/supervisor-state.json"]; !strings.Contains(state, `"pid": `+strconv.Itoa(pid)+",") {
 		t.Errorf("%s: no tick of the started serve %d in the state %q", argv[0], pid, state)
 	}
 	collectExtraFiles(t, sb, invocation{extraFiles: []string{".git/info/exclude"}}, o.files)
+	o = flipTransactionSidecar(o, before)
 	return o.withProjectPlaceholder(t, sb).normalized(func(s string) string {
 		return normalizeFlip(since)(normalizeGeneratedAt(normalizeServe(since)(s)))
 	})
@@ -321,20 +329,21 @@ func waitForFlipCheck(t *testing.T, sb sandbox, side string) {
 }
 
 // stopUnreadServe stops a serve the kickoff may have started in sb when its pid could not be
-// read from the output. A serve starting after the stop file exists stops at its first tick;
-// one already running is named by sb's lock, which only that serve writes, and is waited for
-// and killed after serveExitWait.
-func stopUnreadServe(t *testing.T, sb sandbox) {
+// read from the output, and returns only once that serve has exited, so the sandbox (and its
+// stop file) outlives it. A serve starting after the stop file exists stops at its first tick.
+// A running one is found by unreadServePid, waited for and killed after serveExitWait.
+// legacyPidText is set for the frozen JS oracle, which takes no kernel lock.
+func stopUnreadServe(t *testing.T, sb sandbox, legacyPidText bool) {
 	t.Helper()
 	dir := filepath.Join(sb.project, ".orchestrator")
 	if err := os.WriteFile(filepath.Join(dir, "supervisor.stop"), nil, 0o644); err != nil {
 		t.Error(err)
 	}
-	lock, err := os.ReadFile(filepath.Join(dir, "supervisor.lock"))
+	pid, err := unreadServePid(filepath.Join(dir, "supervisor.lock"), legacyPidText)
 	if err != nil {
+		t.Error(err)
 		return
 	}
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(lock)))
 	if pid < 2 {
 		return
 	}
@@ -346,5 +355,97 @@ func stopUnreadServe(t *testing.T, sb sandbox) {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// unreadServePid polls, for at most serveLockWait, for the pid of the serve holding lock: the
+// kernel's holder (ownlock.Probe) for orch, the lock's text for the frozen JS, whose serve
+// writes its pid there and holds no record lock. The text is read only here, in the harness,
+// which holds no lock on that inode (contract C2). 0 when none appears: no serve started, or
+// one already stopped and released its lock.
+func unreadServePid(lock string, legacyPidText bool) (int, error) {
+	deadline := time.Now().Add(serveLockWait)
+	for {
+		pid, err := servePid(lock, legacyPidText)
+		if err != nil || pid >= 2 || time.Now().After(deadline) {
+			return pid, err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func servePid(lock string, legacyPidText bool) (int, error) {
+	if !legacyPidText {
+		held, pid, err := ownlock.Probe(lock)
+		if !held {
+			pid = 0
+		}
+		return pid, err
+	}
+	text, err := os.ReadFile(lock)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(text))) // "" while the JS is writing it
+	return pid, nil
+}
+
+// startedServePid is the pid of the serve a kickoff's supervisor line reports started, 0 when
+// the line is missing or malformed.
+func startedServePid(stdout string) int {
+	started := kickoffSupervisorStarted.FindStringSubmatch(stdout)
+	if started == nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(started[2])
+	return pid
+}
+
+// testKickoffUnreadServeCleanup is the failure path of runKickoffSupervisorStarted: with a
+// supervisor line missing or malformed, each runtime's serve (launched by its own `supervisor
+// start`, as kickoff's preflight does) must have exited before the case ends and its sandbox
+// goes, whether it holds a kernel lock (orch) or only writes its pid (the frozen JS).
+func (h *harness) testKickoffUnreadServeCleanup(t *testing.T) {
+	for _, side := range []struct {
+		name   string
+		argv   []string
+		legacy bool
+	}{
+		{"js", []string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, true},
+		{"orch", []string{h.orchBin, "supervisor"}, false},
+	} {
+		for name, stdout := range map[string]string{"missing": "", "malformed": "supervisor: {\"started\":true,\"supervisor_pid\":\"x\"}\n"} {
+			t.Run(side.name+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				if pid := startedServePid(stdout); pid >= 2 {
+					t.Fatalf("pid %d read from %q", pid, stdout)
+				}
+				sb := h.newSandbox(t)
+				o := h.run(t, sb, append(side.argv, "start", "--cwd", "."), nil, []string{noPostRunRefresh})
+				var launched struct {
+					Pid int `json:"supervisor_pid"`
+				}
+				if err := json.Unmarshal([]byte(o.stdout), &launched); err != nil || launched.Pid < 2 {
+					t.Fatalf("start output %q: %v", o.stdout, err)
+				}
+				// The cleanup must find the running serve itself: the JS one by its text, orch's
+				// through the kernel (a JS serve found by Probe would read as none).
+				lock := filepath.Join(sb.project, ".orchestrator", "supervisor.lock")
+				if pid, err := unreadServePid(lock, side.legacy); err != nil || pid != launched.Pid {
+					t.Errorf("serve pid %d, %v; want the launched %d", pid, err, launched.Pid)
+				}
+				stopUnreadServe(t, sb, side.legacy)
+				if err := syscall.Kill(launched.Pid, 0); !errors.Is(err, syscall.ESRCH) {
+					t.Errorf("serve %d still running after the cleanup (%v)", launched.Pid, err)
+				}
+				state, _ := os.ReadFile(filepath.Join(sb.project, ".orchestrator", "supervisor-state.json"))
+				if !strings.Contains(string(state), `"status": "stopped"`) {
+					t.Errorf("serve did not stop through its stop file: state %q", state)
+				}
+			})
+		}
 	}
 }

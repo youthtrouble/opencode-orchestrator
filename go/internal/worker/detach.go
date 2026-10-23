@@ -6,11 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/registry"
@@ -32,16 +32,26 @@ type DetachRuntime struct {
 	KeepAwake func(cmd string, args []string) (string, []string)
 }
 
-// Detach is `worker.mjs start --detach` (l.65-84). It refuses a lane whose lock is held by a
-// live process, synchronously, as flip.mjs relies on: the lane-locked JSON without a hint on
-// stderr, nothing on stdout, exit ExitLaneLocked. A lock whose holder is gone is removed. It
-// then creates the run's log, starts the runner (this command without --detach, in the
-// foreground, writing to the log) in a session of its own in the project root, and prints
-// {lane, runner_pid, log_path, run_id, keep_awake}, exit 0. A runner that cannot be found or
-// executed is not waited for in the JS (its error event never runs): runner_pid is left out
-// and the exit is still 0. A returned error is the exception the JS dies of (exit 1).
+// Detach is `worker.mjs start --detach` (l.65-84). It refuses a lane whose lock is held,
+// synchronously, as flip.mjs relies on: the lane-locked JSON without a hint on stderr, nothing
+// on stdout, exit ExitLaneLocked. It then creates the run's log, starts the runner (this
+// command without --detach, in the foreground, writing to the log) in a session of its own in
+// the project root, and prints {lane, runner_pid, log_path, run_id, keep_awake}, exit 0. A
+// runner that cannot be found or executed is not waited for in the JS (its error event never
+// runs): runner_pid is left out and the exit is still 0. A returned error is the exception the
+// JS dies of (exit 1).
+//
+// PE-29: the lane is held only while the kernel says a runner holds its lock (ownlock.Probe).
+// The JS reads the pid in the lock and unlinks the file when that pid is dead, so two
+// launchers could each remove the other's fresh lock and leave two runners on the lane. Here
+// the launcher never touches the lock: a dead runner's file is left for the new runner's
+// Acquire to reclaim. The Probe is advisory (C9); the runner's Acquire decides. When two
+// launchers both find the lane free, both print their launch and exit 0, and the runner that
+// loses refuses the lane into its log with exit 3. The loser's run_id is still sound for a
+// caller that waits for the lane to be served: the winner started after the loser's Probe, so
+// the lane has a runner.
 func (l *Launch) Detach(rt DetachRuntime) (int, error) {
-	held, err := l.reclaimLock()
+	held, _, err := ownlock.Probe(l.project.LockPath(l.lane))
 	if err != nil {
 		return 1, err
 	}
@@ -60,7 +70,11 @@ func (l *Launch) Detach(rt DetachRuntime) (int, error) {
 		return 1, err
 	}
 	defer log.Close() // the runner holds its own copy of the descriptor
-	cmd, args := rt.KeepAwake(rt.Self, runnerArgs(rt.Argv, l.project.Root, logPath, runID))
+	childCWD := ""
+	if l.opts.Truthy("root") {
+		childCWD = l.cwd
+	}
+	cmd, args := rt.KeepAwake(rt.Self, runnerArgs(rt.Argv, l.project.Root, childCWD, logPath, runID))
 	pid, err := procs.Detached{Name: cmd, Args: args, Dir: l.project.Root, Output: log}.Start()
 	var notStarted *procs.StartError
 	if err != nil && !(errors.As(err, &notStarted) && notStarted.Code != "") {
@@ -82,31 +96,6 @@ func (l *Launch) Detach(rt DetachRuntime) (int, error) {
 	return 0, nil
 }
 
-// reclaimLock reports whether the lane's lock is held by a live process: the lock holds the
-// holder's pid as text, read as Number(text.trim()) and checked with Alive. A lock whose
-// holder is gone (or whose text is no pid) is removed, so the runner can claim it.
-//
-// The read and the unlink are not atomic: a lock claimed by another launcher's runner in
-// between is removed too, leaving two runners on the lane. The JS has the same race; it is
-// mirrored on purpose and fixed in both after S12 (Q-S6-6).
-func (l *Launch) reclaimLock() (held bool, err error) {
-	lock := l.project.LockPath(l.lane)
-	if !nodefs.Exists(lock) {
-		return false, nil
-	}
-	data, err := nodefs.ReadFile(lock)
-	if err != nil {
-		return false, err
-	}
-	if Alive(jsjson.ToNumber(jsstr.DecodeUTF8(data))) { // ToNumber trims as .trim() does
-		return true, nil
-	}
-	if err := syscall.Unlink(lock); err != nil {
-		return false, nodefs.FileError(err, "unlink", lock)
-	}
-	return false, nil
-}
-
 // createLog creates the run's log for writing only, failing if it exists (openSync(path, "wx",
 // 0o600)).
 func createLog(path string) (*os.File, error) {
@@ -120,17 +109,21 @@ func createLog(path string) (*os.File, error) {
 // runnerArgs is the runner's command line after the executable: `worker`, the raw arguments
 // without every token that is exactly "--detach" (even one that was another key's value, so
 // that key takes the next token in the runner), then --log-path, --run-id and --cwd with the
-// absolute project root, which win in the runner's parse by coming last. The runner already
-// runs in the root, so a relative --cwd from the command line would be applied twice (Sol
-// S2/R6).
-func runnerArgs(argv []string, root, logPath, runID string) []string {
+// absolute project root, which win in the runner's parse by coming last. With an explicit
+// root, childCWD is nonempty and both absolute selectors are appended instead. The runner
+// runs in the project root; neither relative selector may be applied twice (Sol S2/R6).
+func runnerArgs(argv []string, root, childCWD, logPath, runID string) []string {
 	args := []string{"worker"}
 	for _, arg := range argv {
 		if arg != "--detach" {
 			args = append(args, arg)
 		}
 	}
-	return append(args, "--log-path", logPath, "--run-id", runID, "--cwd", root)
+	args = append(args, "--log-path", logPath, "--run-id", runID)
+	if childCWD != "" {
+		return append(args, "--root", root, "--cwd", childCWD)
+	}
+	return append(args, "--cwd", root)
 }
 
 // KeepAwakeEnabled is `loadRegistry().runtime?.keep_awake !== false`, where any failure to

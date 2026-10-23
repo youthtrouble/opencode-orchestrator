@@ -41,6 +41,7 @@ func watchProject(rel, content string) seed {
 // testWatch compares `orch watch` with bin/watch.mjs. The usage cache is fresh, so neither
 // runtime refreshes the feeds; all seeded times are relative to one instant.
 func (h *harness) testWatch(t *testing.T) {
+	h.testNestedProjectRoot(t, "watch")
 	green, _ := readCacheFixtures(t).Get("green")
 	instant := time.Now().Add(-time.Minute).UTC()
 	iso := func(offset time.Duration) string { return jsjson.ISOString(instant.Add(offset)) }

@@ -18,19 +18,19 @@ Commands (ported from the JS at that parity reference; differences are listed be
 | `orch routing [--refresh \| --cached] [--json]` | `getRouting()` in `lib/usage.mjs` | The routing prompt text, or `{usage, registry, channels, resolved, prompt}` with `--json`. `--cached` never collects and exits 3 when there is no cache; bad flags exit 2. |
 | `orch budget gate --vendor anthropic\|openai [--force] [--frontier]` | `budgetGate()` in `lib/budget.mjs` | Compact `{allowed, level, resets_at, note}`; exit 0 whether or not the work is allowed, 2 on bad flags or an unknown vendor. It never draws ChatGPT credits: only `orch codex-exec` does (see `openai_credits` in [orchestrator/README.md](../orchestrator/README.md#openai-credits)). |
 | `orch effort --role ROLE [--size SIZE]` | `effortFor()` in `lib/routing.mjs` | The effort-policy value as plain text, or `null`; exit 2 on bad flags or without `--role`. |
-| `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --kind question` requires a non-empty `--recommended TEXT` and takes `--blocking true\|false` (default and bare: true), written as `"recommended"` and `"blocking"` after `"thread"`; a missing recommendation, another `--blocking` value or either option on another kind prints `mailbox post: <usage>` on stderr and exits 2 with nothing written. `--ask decision\|action` (WT25): `decision` is the default and is not written; an `action` question takes no `--recommended` and is written as `"blocking"` then `"ask":"action"`; `--recommended` with `--ask action`, a recommendation that opens (after the JS `trim()`, ASCII case aside) with a completion claim (`completed`, `all done`, `i ran`, `i've done`, `i have done` or `i did`, then a word boundary; `done` then `:` `,` `.` `!` `—`, the end or a clause cue; `ran`, `created`, `installed`, `finished`, `deployed` or `rebuilt` then `:` `,` or a clause cue; a clause cue is `[ \t]+` then `it`, `the`, `that`, `this`, `successfully`, `ok` or `all` and a word boundary; a guard rail, not a guarantee), another `--ask` value, or `--ask` on another kind exits 2 the same way; `inbox` ends a blocking question's header with ` (blocking)` and prints its `recommended:` line (first 200 UTF-16 units) under the body. `post --json` prints the whole message instead of `{id, at}` (PE-3). `inbox` names `orch mailbox reply` in its reply hint (PE-19). A `reply` to the message that the human gate's `awaiting_human.question` (a non-empty string in `flip.json`, a full id or a prefix) resolves to, as the reply's own id is resolved, clears the gate as `orch flip gate --clear` does and prints `cleared the human gate; the supervisor relaunches the <door> conductor within a minute` (`cleared the human gate` when the kept `pending_launch` names no door); a question that resolves to no single message is reported on stderr as `could not match the human gate's question: <ambiguous message id prefix X \| no message with id X>` and clears nothing; a `flip.json` that exists but cannot be read or parsed is reported on stderr as `could not check for a human gate: ...`; the reply still exits 0. Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
+| `orch mailbox post\|list\|ack\|reply\|inbox` | `bin/mailbox.mjs` | Byte-identical output and `.orchestrator/mailbox/*.jsonl` lines (one `write` per line on an append-only descriptor, so concurrent JS and Go appenders do not interleave). `post --kind question` requires a non-empty `--recommended TEXT` and takes `--blocking true\|false` (default and bare: true), written as `"recommended"` and `"blocking"` after `"thread"`; a missing recommendation, another `--blocking` value or either option on another kind prints `mailbox post: <usage>` on stderr and exits 2 with nothing written. `--ask decision\|action` (WT25): `decision` is the default and is not written; an `action` question takes no `--recommended` and is written as `"blocking"` then `"ask":"action"`; `--recommended` with `--ask action`, a recommendation that opens (after the JS `trim()`, ASCII case aside) with a completion claim (`completed`, `all done`, `i ran`, `i've done`, `i have done` or `i did`, then a word boundary; `done` then `:` `,` `.` `!` `—`, the end or a clause cue; `ran`, `created`, `installed`, `finished`, `deployed` or `rebuilt` then `:` `,` or a clause cue; a clause cue is `[ \t]+` then `it`, `the`, `that`, `this`, `successfully`, `ok` or `all` and a word boundary; a guard rail, not a guarantee), another `--ask` value, or `--ask` on another kind exits 2 the same way; `inbox` ends a blocking question's header with ` (blocking)` and prints its `recommended:` line (first 200 UTF-16 units) under the body. `post --json` prints the whole message instead of `{id, at}` (PE-3). `inbox` names `orch mailbox reply` in its reply hint (PE-19). A `reply` to the message that the human gate's `awaiting_human.question` (a non-empty string in `flip.json`, a full id or a prefix) resolves to, as the reply's own id is resolved, clears the gate as `orch flip gate --clear` does and prints `cleared the human gate; the supervisor relaunches the <door> conductor within a minute` (`cleared the human gate` when the kept `pending_launch` names no door); a question that resolves to no single message is reported on stderr as `could not match the human gate's question: <ambiguous message id prefix X \| no message with id X>` and clears nothing; a `flip.json` that exists but cannot be read or parsed refuses gate clearing with an error naming that file and exit 1 (PE-32); a reply note and ack already posted remain recorded, and a remote retry finishes the same reply after repair. Uncaught JS errors print only their error line (see "Crash output and parity exceptions"). |
 | `orch manifest create\|verify\|diff` | `bin/manifest.mjs` | Byte-identical output, exit codes and manifest files: the same walk (symlinks, FIFOs and other non-regular entries inside a walked directory are skipped and never opened; an explicit symlink argument is followed), UTF-16 key order and `manifest_sha256`. `create` replaces its output through a private (0600) temp file and a rename, the same in both runtimes, so a symlink at `--out` is replaced, never followed. Each runtime draws its own random temp name, so a failed rename (a directory at `--out`) prints the same error line except for that name's `.tmp-<random>` suffix, which the parity check normalizes. Uncaught JS errors print only their error line. |
 | `orch incident record\|list\|report\|share` | `bin/incident.mjs` | Byte-identical output, exit codes, incident log lines and share bundle: the same redaction (home directory, `/Users/<name>`, `/home/<name>`, emails, tokens, uuids, `ses_` ids, with JS white space and a 2000-unit cut), fingerprint (JS `toLowerCase`, final sigma included) and report order (V8's TimSort, `internal/jssort`, so ties and incomparable timestamps order as in Node). Appends to `~/.local/state/opencode/orchestrator/incidents.jsonl` like the mailbox does; an explicitly empty `HOME` is kept as Node keeps it (the log is then relative to the working directory and redaction uses an empty home), never replaced by the account's home. Entries carry `orch`'s version instead of the checkout's git HEAD (PE-4). `share` writes no `project` key and uploads nothing. `record --request -` (orch only, PE-25) reads the whole incident as one JSON object on stdin, so no summary or context reaches argv. |
 | `orch policy show\|set key=value...\|unattended [--cwd DIR]` | `bin/policy.mjs` | Byte-identical output, exit codes and `.orchestrator/policy.json`: the registry's `autonomy` (without `$comment`) overridden by the project file; `set` refuses `key=never` except `force_push`, any `force_push` other than `never`, an `openai_credits` other than `off` or `on`, and an `openai_credits_floor` that is not a number, 0 or more. The registry is read as `JSON.parse` of the file, then `.autonomy`, as the JS does (Node's fs errors, a `SyntaxError`, a `TypeError` for `null`, no autonomy for any other shape); `set` has written its file when that fails. A `policy.json` holding an array makes `set` fail instead (PE-6). |
-| `orch claude-exec [--model M] [--effort E] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/claude-exec.mjs` | Byte-identical argv passed to `claude`, stdout JSON, `[claude]` progress lines, exit codes (0, 1, 2, 75), `.orchestrator/runs/*.json` record, incident lines and usage cache: the same option values (a trailing bare value key is the JS `true`: `--model` alone runs model `true`, `--timeout-min` alone is one minute), budget gate and refusal, event handling (lines split as readline splits them, U+2028 and U+2029 included; UTF-16 cuts; `tools_used` property-key quirks), stderr tail, timeout with Node's timer clamp, usage-limit path with its awaited refresh, and `CLAUDECODE` removed from claude's environment. Differences: a bare `--prompt` is refused (PE-8); no Node warnings (PE-9); claude is killed 10 s after a signal it ignores and its pipes are waited on for at most 10 s (PE-10); SIGTERM/SIGINT are forwarded to claude and the run is reported (PE-11); claude runs in a process group of its own, which the timeout and the PE-10 kill reach whole (PE-22); the run record and `runs/` are owner-only and written atomically (PE-21); the post-run usage refresh runs detached and completes (PE-12); U+FFFD where a UTF-16 cut leaves a lone surrogate (PE-1). Uncaught JS errors print only their error line, after the progress lines printed so far. |
-| `orch codex-exec [--model M] [--effort E] [--sandbox S] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/codex-exec.mjs` | Byte-identical argv passed to `codex` (`exec --json ... -`, with `--approve-for-me` instead of `-s` exactly when the sandbox is `workspace-write`, and the `exec`-only options before `resume <id>`, as codex-cli 0.162.1 requires), the prompt written to codex's stdin, codex's working directory and whole inherited environment, stdout JSON, `[codex]` progress lines, exit codes (0, 1, 2, 75), run record, incident lines and usage cache: the same option values (a bare `--model` is the JS `TypeError: model.includes is not a function` before the gate; a bare `--sandbox` is `-s true` without `--approve-for-me`), budget gate (frontier is a case-sensitive `astra` substring) and refusal, event handling (a `thread.started` without `thread_id` leaves the key out of the JSON yet keeps its place; absent `command`, `exit_code`, `path` and `kind` are left out; `turn.failed` serialized with JS key order and numbers), stderr tail, timeout with Node's timer clamp, and the tool-host no-op path with its two incidents. With `openai_credits=on` in the project's (`--cwd`'s) policy, a red OpenAI window whose routing is credit-funded is allowed once a fresh usage reading confirms it (refused when that reading fails), and the result and run record gain `credits: {before, after}` (the balance at the gate and from a fresh usage reading after the run; `after` is `null` when that reading failed). Differences: PE-1, PE-8 to PE-13, PE-21 (the run record), PE-22. Uncaught JS errors print only their error line, after the progress lines printed so far. |
-| `orch opencode-exec [--agent A] [--resume ID] [--model M] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/opencode-exec.mjs` | Byte-identical argv passed to `opencode` (`run --format json --auto --agent A ...` with the prompt last), its working directory and whole inherited environment (stdin on `/dev/null`), stdout JSON, `[opencode]` progress lines, exit codes (0, 1, 2, 75), run record and incident lines: the same option values, budget gate and refusal, event handling (the first truthy `sessionID` unless resuming, the last text part), the bare stderr tail of a failed run (`""` included), and a timeout that sends SIGTERM without a log line. Like the JS it has no `--help` (the flag is ignored and the run proceeds), no `--effort` key (`--effort X` makes `X` the prompt), no start or done line, an incident `context.model` that is always `null`, and no post-run usage refresh. Differences: PE-1, PE-8 to PE-11, PE-21 (the run record), PE-22. Uncaught JS errors print only their error line, after the progress lines printed so far. |
-| `orch worker start --brief FILE --harness claude\|codex\|opencode [--lane L] [--model M] [--effort E] [--sandbox S] [--permission-mode P] [--allowed-tools T] [--max-turns N] [--timeout-min N] [--resume ID] [--agent A] [--breadth B] [--run-id ID] [--log-path F] [--force] [--detach] [--cwd DIR] \| status [--lane L] [--cwd DIR] \| stop --lane L [--cwd DIR]` | `bin/worker.mjs` | Byte-identical output and exit codes over the same `.orchestrator/workers/<lane>.json` and `<lane>.lock`. `start` (foreground) validates as the JS does (usage, `brief must be an existing .md file`, `harness must be codex, claude or opencode`, exit 2), reads the brief before it claims the lock (an unreadable brief is the JS error, exit 1, and leaves no lock or state, even on a locked lane), claims the lock (`{"error":"lane locked",...,"hint":...}` on stderr, exit 3, a stale lock is not reclaimed), publishes the state with the JS keys in the JS order (`state_storage` from the second write, `last_state_write_error` after a failed one), runs `orch <harness>-exec` (the JS runs `node <harness>-exec.mjs`) in a session of its own with the same arguments and the same prompt on stdin (the preamble and the brief, or the brief alone for the `conductor` lane), relays the bridge's stderr to stdout while recording `session_id`, `last_progress_at` and `last_tool`, and ends deferred (exit 75 or `budget_red`: limit incident, `deferred` message), finished (no message) or failed (incident, `blocked` message with the run record as ref), then prints `{lane, status, session_id, exit_code}` (exit 0 for finished or deferred, else 1). SIGINT and SIGTERM publish `interrupted` and are passed on to the bridge's process group. `status` lists the given lane, or every `*.json` in byte order, each state spread as the JS spreads it (any JSON value; unreadable or falsy as `{lane, status: "unknown"}`) with `process_alive` (Node's `process.kill(pid, 0)` coercion: an integer in the int32 range, EPERM alive) and `lock_present`; `stop` sends SIGINT to the stored pid's process group, else to the pid. Lane names are the JS values (a bare `--lane` is the lane `true`, no `--lane` on `stop` reads `undefined.json`); a lane containing `/` is refused by `start` (after the harness check), `status` and `stop` with `lane must not contain "/"` on stderr, exit 2, before anything is read or written (both runtimes; `.` and `..` stay names inside `workers/`). Differences: `stop` signals only a pid of at least 2 (PE-14) that the lane's lock holds (PE-23); the state is written owner-only through a private temp and a rename, and `workers/` and `logs/` are 0700 (PE-21); a failed `start` writes `<token>` for token-shaped text in the state's `errors` and the blocked message (PE-24); `start` survives a bridge that never reads its prompt (PE-13), waits at most 10 s for the bridge's pipes once it exits and never kills it (PE-10), records the Go bridge's report of an interrupted run (PE-11) and cuts UTF-16 text as PE-1 says. `start --detach` first refuses a lane whose lock holds a live pid synchronously, as `flip.mjs run` relies on (`{"error":"lane locked","lane":...,"previous":...}` with `alive: true` and no `hint` on stderr, nothing on stdout, exit 3), removes a lock whose holder is gone (or whose text is no pid), creates `.orchestrator/logs/<lane>-<first 8 of the run id>.log` (exclusive, 0600), and launches `orch worker` with the same arguments minus every exact `--detach` token plus `--log-path`, `--run-id` and `--cwd <absolute project root>` (last, so a relative `--cwd` is not applied twice; both runtimes) in the project root, in a session of its own, stdin on `/dev/null` and stdout and stderr on the log; it prints `{lane, runner_pid, log_path, run_id, keep_awake}` and exits 0 (`runner_pid` is left out when the runner cannot be started, as the JS never sees that error). Keep-awake wraps the runner in `caffeinate -i -s` (macOS) or `systemd-inhibit --what=idle:sleep --why=opencode-orchestrator` (Linux) when `which` finds it, unless the registry's `runtime.keep_awake` is `false` (any registry error leaves it on); `keep_awake` reports whether it was wrapped. |
-| `orch flip decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] \| pause [--active D] [--reason R] [--brief FILE] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | `bin/flip.mjs` | Byte-identical stdout, stderr, exit codes, `.orchestrator/flip.json` (indent 2; both replace it through a temp file and a rename, orch's private and owner-only, the JS's the fixed `flip.json.tmp`, PE-21), mailbox lines and, for `run`, the repository's `info/exclude`, the continue brief and everything the launched conductor worker writes. `flip.json` is read as `JSON.parse` of the file, any failure being no record, so every JSON value is handled as the JS handles it: `status` prints the record or `{"state": "never flipped"}` for a falsy one; `pause` creates `.orchestrator/` and writes `{...previous, paused: {at, door, reason[, brief]}}` (`brief` only for a non-empty `--brief`; a string spreads into index keys, a number or `true` into nothing, an existing `paused` keeps its position, `awaiting_human` is kept) and posts a `handoff` to `supervisor`; `gate` reads `flip.json` first, then creates `.orchestrator/` and sets `awaiting_human: {at, door, reason, question}` (an existing one keeps its position; an array `flip.json` is replaced by an object holding the gate, not by `--clear`, which writes an array back unchanged), deletes `paused` and posts a `handoff` to `human` whose subject keeps 80 UTF-16 units of the reason; `gate --clear` deletes `awaiting_human` and writes any other shape back as it is; when an object held a truthy `awaiting_human`, it also sets `pending_launch: {to, from, reason: "human gate cleared", resume: null, at}` with `to` and `from` the gate's door (`opencode` when it has none), so the supervisor relaunches that conductor, unless a truthy `pending_launch` is already queued (a flip queued before the gate), which is kept; it prints `{"awaiting_human":false,"relaunch":"<door>"}` with the door of the queued launch (when it has a truthy `to`) instead of `{"awaiting_human":false}`; `--no-relaunch` (kickoff) never queues one and removes any queued `pending_launch` and `paused`. `decide` prints `{"action":"gate","to":null,"reason":"awaiting human: <reason>"}` when `flip.json` is an object with a truthy `awaiting_human` (`<reason>` is `${awaiting_human.reason}`, so `undefined` without one), without reading or collecting usage; otherwise it prints `{action, to, reason}` (`flip`, `handback`, `stay` or `pause`) from the cached routing (collecting when the cache is missing or stale, as `getRouting` does) and the time of the last flip (`flip_cooldown_minutes`); `--active` absent or empty prints `--active opencode\|claude required` (exit 2), and a non-door (`true`, `gemini`, `constructor`, `__proto__`) is red with the JS reason text (`undefined`, or the inherited Object.prototype text). `run` refuses a `--to` other than `opencode` or `claude` (`--to opencode\|claude required`, exit 2, nothing written); otherwise, in this order, it adds `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir) when the project has a git repository (a `.git` file that is not `gitdir: <path>` naming a directory, or whose git dir's `commondir` names no directory, is none, and nothing is written) and no line of the file is `.orchestrator` or `.orchestrator/` (lines end at `\n` and one trailing `\r` is dropped, as Git reads the file; a lone `\r`, U+2028 or U+2029 is part of a line, so such a "line" does not count and the line is appended; a newline is added first unless the file is empty or ends in one), writes `.orchestrator/briefs/conductor-continue.md` (atomically, 0600, PE-21; it launches the brief a kickoff saved instead of writing the continue brief, and names it in the handoff, when the record it replaces has one: `paused.brief`, else `pending_launch.brief`, a non-empty string naming an existing file), replaces `flip.json` with `{at, from, to, reason, previous: {at, to}}` (clearing `paused` and `awaiting_human`), posts a `handoff` from `conductor-<from>` to `conductor-<to>`, and launches the conductor by running this executable as `orch worker start --brief .orchestrator/briefs/conductor-continue.md --lane conductor --harness <to> --agent conductor --breadth broad --cwd <root> --detach` (plus `--permission-mode auto` for claude, `--resume`, `--force`) to completion, so a Go-driven flip runs the conductor on `orch worker` and the Go bridges (the JS runs `node worker.mjs`). It prints `{flipped, to, from, launcher}` with 400 UTF-16 units of the launcher's trimmed output, exit 0 when the launcher exited 0, else 1. A launcher that cannot be started (no executable path, or the start fails) gives `{"flipped":false,...,"launcher":""}` and exit 1 with no diagnostic, as the JS `spawnSync` error result has no status and no output. When the launcher refuses with `lane locked` (usually because the calling conductor holds the lane), `flip.json` gains `pending_launch: {to, from, reason, resume, at[, brief]}` for the supervisor (`brief`: the saved brief this run launched, kept for the retry) and `run` prints `{"flipped":false,"pending":true,...}`, exit 0. Option values are the JS ones: a bare `--active`, `--from`, `--reason`, `--question` or `--resume` is `true` in the file, the mailbox and stdout (`--resume true` reaches the conductor). A routing failure prints `orch flip: <error>` and exits 1, as `orch usage` does (the JS dies of the rejection with Node's crash output). Any other command prints `commands: decide \| run \| pause \| gate [--clear [--no-relaunch]] \| status` (exit 2). Differences: PE-15 (the date formats of `at`), PE-1 (the gate subject and `launcher` cuts), PE-2 (a launcher crash quoted in `launcher` as its error line only), PE-10 (`run` waits at most 10 s for the launcher's pipes), PE-20 (a launcher whose output passes 1 MiB is stopped), PE-21 (`flip.json` and the continue brief) and PE-22 (the launcher runs in a process group of its own). |
-| `orch supervisor start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | `bin/supervisor.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/supervisor-acks.json` (indent 2, written through a temp file and renamed, as the JS `writeJson` does; PE-21). `status` prints `supervisor-state.json` as `JSON.parse` reads it, whatever the value (`null`, a number, a string, an array), or `{"status": "not_started"}` when it cannot be read or parsed (missing, a directory, unparsable, a BOM), and never writes. `stop` writes an empty `.orchestrator/supervisor.stop` and prints `stop requested; workers are unaffected`, whether or not a supervisor runs. `ack` refuses with `unknown event id` (exit 1) unless `--event` is truthy and names a truthy property of the state's `events`, read as a JS property: an Object.prototype name (`constructor`, `toString`, `__proto__`, ...) is present (mirrored); then it sets `acks[<event>] = {by: <--by or coordinator>, at}` (an existing key keeps its position; a bare `--event` is the key `true`, a bare `--by` writes `true`; `__proto__` without an own key of that name adds nothing and rewrites the file unchanged, as the JS prototype setter does) and prints `acknowledged (receipt, not acceptance)`. Usage: no command prints `commands: start \| serve \| status \| stop \| ack --event ID` (exit 2); any other command prints nothing and exits 0 (mirrored). `start` creates `.orchestrator/logs/` (0700), prints `{"started":false,"reason":"already running","pid":N}` when the pid in `supervisor.lock` is alive, else removes `supervisor.stop`, launches this executable as `orch supervisor serve --cwd <root>` in a session of its own (wrapped in `caffeinate -i -s` or `systemd-inhibit` unless the registry's `runtime.keep_awake` is `false`) with its output appended to `logs/supervisor.log` (0600; a symlink there fails `start` with ELOOP, PE-21), and prints `{"started":true,"supervisor_pid":N,"log":"<path>"}` (`supervisor_pid` left out when the command cannot be started). `serve` claims `supervisor.lock` (created exclusively, 0600, with its pid; a stale lock is replaced atomically through a private temp, PE-21; a lock whose pid is dead is taken over; a live one prints `a supervisor already owns this project`, exit 1), then every 5 s after each tick: looks at every worker lane (phases, the two-phase intent, events), re-dispatches budget-deferred lanes as `orch worker start --detach`, wakes the coordinator through the configured channels (`command`, `codex-queue`, `opencode-run`, `claude-resume` as `orch claude-exec`), evaluates the conductor flip (relaunching through `orch flip decide\|run`), and records the outcome in `supervisor-state.json` (a failed tick: `storage_error` persisted once by the next successful write, `storage_failures` counting). The stop file makes it record `status: "stopped"` and `stopped_at`, release the lock and exit 0; it has no signal handlers of its own, so a killed serve leaves its lock for the next one. While it waits for a child (a channel, a flip, a re-dispatch), RunSync relays a SIGINT, SIGTERM or SIGHUP to that child's process group, and serve then dies of the signal once the child is reaped, at most 10 s later (PE-22), still leaving its lock. A state that is `null` or a primitive crashes as in the JS (C1). Differences: PE-16 (hand-edited non-object shapes), PE-17 (a missing `opencode`), PE-10 (a child that ignores the channel timeout's SIGTERM is killed 10 s later), PE-20 (a child whose output passes 1 MiB is stopped), PE-21 (state, acks, lock and log) and PE-22 (every child it waits for runs in a process group of its own). |
+| `orch claude-exec [--model M] [--effort E] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/claude-exec.mjs` | Byte-identical argv passed to `claude`, stdout JSON, `[claude]` progress lines, exit codes (0, 1, 2, 75), `.orchestrator/runs/*.json` record, incident lines and usage cache: the same option values (a trailing bare value key is the JS `true`: `--model` alone runs model `true`, `--timeout-min` alone is one minute), budget gate and refusal, event handling (lines split as readline splits them, U+2028 and U+2029 included; UTF-16 cuts; `tools_used` property-key quirks), stderr tail, timeout with Node's timer clamp, usage-limit path with its awaited refresh, and `CLAUDECODE` removed from claude's environment. Differences: a bare `--prompt` is refused (PE-8); no Node warnings (PE-9); claude is killed 10 s after a signal it ignores and its pipes are waited on for at most 10 s (PE-10); SIGTERM/SIGINT are forwarded to claude and the run is reported (PE-11); a failed run stopped at the `--timeout-min` cap is a `timeout` incident (PE-45); claude runs in a process group of its own, which the timeout and the PE-10 kill reach whole (PE-22); the run record and `runs/` are owner-only and written atomically (PE-21); the post-run usage refresh runs detached and completes (PE-12); U+FFFD where a UTF-16 cut leaves a lone surrogate (PE-1). Uncaught JS errors print only their error line, after the progress lines printed so far. |
+| `orch codex-exec [--model M] [--effort E] [--sandbox S] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/codex-exec.mjs` | Byte-identical argv passed to `codex` (`exec --json ... -`, with `--approve-for-me` instead of `-s` exactly when the sandbox is `workspace-write`, and the `exec`-only options before `resume <id>`, as codex-cli 0.162.1 requires), the prompt written to codex's stdin, codex's working directory and whole inherited environment, stdout JSON, `[codex]` progress lines, exit codes (0, 1, 2, 75), run record, incident lines and usage cache: the same option values (a bare `--model` is the JS `TypeError: model.includes is not a function` before the gate; a bare `--sandbox` is `-s true` without `--approve-for-me`), budget gate (frontier is a case-sensitive `astra` substring) and refusal, event handling (a `thread.started` without `thread_id` leaves the key out of the JSON yet keeps its place; absent `command`, `exit_code`, `path` and `kind` are left out; `turn.failed` serialized with JS key order and numbers), stderr tail, timeout with Node's timer clamp, and the tool-host no-op path with its two incidents. With `openai_credits=on` in the project's (`--cwd`'s) policy, a red OpenAI window whose routing is credit-funded is allowed once a fresh usage reading confirms it (refused when that reading fails), and the result and run record gain `credits: {before, after}` (the balance at the gate and from a fresh usage reading after the run; `after` is `null` when that reading failed). Differences: PE-1, PE-8 to PE-13, PE-21 (the run record), PE-22, PE-44 (top-level `error` events are collected) and PE-45 (a cap stop is a `timeout` incident). Uncaught JS errors print only their error line, after the progress lines printed so far. |
+| `orch opencode-exec [--agent A] [--resume ID] [--model M] ... [--prompt TEXT \| --prompt-file FILE \| TEXT... \| stdin]` | `bin/opencode-exec.mjs` | Byte-identical argv passed to `opencode` (`run --format json --auto --agent A ...` with the prompt last), its working directory and whole inherited environment (stdin on `/dev/null`), stdout JSON, `[opencode]` progress lines, exit codes (0, 1, 2, 75), run record and incident lines: the same option values, budget gate and refusal, event handling (the first truthy `sessionID` unless resuming, the last text part), the bare stderr tail of a failed run that reported no error event (`""` included), and a timeout without a log line. Like the JS it has no start or done line and no post-run usage refresh. Differences: PE-1, PE-8 to PE-11, PE-21 (the run record), PE-22, PE-44 (`error` events are collected, so a usage limit is a `limit` incident with its text), PE-45 (a cap stop is a `timeout` incident), PE-46 (`--help` prints help; `--effort X` is accepted and ignored), PE-47 (the failure incident's `context.model` is `--model`) and PE-65 (opencode is stopped with SIGINT, not SIGTERM). Uncaught JS errors print only their error line, after the progress lines printed so far. |
+| `orch worker start --brief FILE --harness claude\|codex\|opencode [--lane L] [--model M] [--effort E] [--sandbox S] [--permission-mode P] [--allowed-tools T] [--max-turns N] [--timeout-min N] [--resume ID] [--agent A] [--breadth B] [--run-id ID] [--log-path F] [--force] [--detach] [--cwd DIR] \| status [--lane L] [--cwd DIR] \| stop --lane L [--cwd DIR]` | `bin/worker.mjs` | Byte-identical output and exit codes over the same `.orchestrator/workers/<lane>.json` and `<lane>.lock`. `start` (foreground) validates as the JS does (usage, `brief must be an existing .md file`, `harness must be codex, claude or opencode`, exit 2), reads the brief before it claims the lock (an unreadable brief is the JS error, exit 1, and leaves no lock or state, even on a locked lane), claims the lane with a kernel record lock on `<lane>.lock` held for the whole run (`{"error":"lane locked",...,"hint":...}` on stderr, exit 3, while another runner holds it; a lock file no process holds is reclaimed, PE-28), publishes the state with the JS keys in the JS order plus `launch_options` after `model` (PE-62; `state_storage` from the second write, `last_state_write_error` after a failed one), runs `orch <harness>-exec` (the JS runs `node <harness>-exec.mjs`) in a session of its own with the same arguments and the same prompt on stdin (the preamble and the brief, or the brief alone for the `conductor` lane), relays the bridge's stderr to stdout while recording `session_id`, `last_progress_at` and `last_tool`, and ends deferred (exit 75 or `budget_red`: limit incident, `deferred` message), finished (no message) or failed (incident, `blocked` message with the run record as ref), then prints `{lane, status, session_id, exit_code}` (exit 0 for finished or deferred, else 1). SIGINT and SIGTERM publish `interrupted` and are passed on to the bridge's process group. `status` lists the given lane, or every `*.json` in byte order, each state spread as the JS spreads it (any JSON value; unreadable or falsy as `{lane, status: "unknown"}`) with `process_alive` (Node's `process.kill(pid, 0)` coercion: an integer in the int32 range, EPERM alive) and `lock_present`; `stop` sends SIGINT to the stored pid's process group, else to the pid. Lane names are the JS values (a bare `--lane` is the lane `true`, no `--lane` on `stop` reads `undefined.json`); a lane containing `/` is refused by `start` (after the harness check), `status` and `stop` with `lane must not contain "/"` on stderr, exit 2, before anything is read or written (both runtimes; `.` and `..` stay names inside `workers/`). Differences: `stop` signals only a pid of at least 2 (PE-14) that the kernel reports as the holder of the lane's lock (PE-23); a lock file left by a dead runner is reclaimed and the lane-locked hint never says to remove the lock (PE-28); the state is written owner-only through a private temp and a rename, and `workers/` and `logs/` are 0700 (PE-21); a failed `start` writes `<token>` for token-shaped text in the state's `errors` and the blocked message (PE-24); `start` survives a bridge that never reads its prompt (PE-13), waits at most 10 s for the bridge's pipes once it exits and never kills it (PE-10), records the Go bridge's report of an interrupted run (PE-11), cuts UTF-16 text as PE-1 says, and its usage line names `codex|claude|opencode` (PE-48). `start --detach` first refuses a lane whose lock a runner holds synchronously, as `flip.mjs run` relies on (`{"error":"lane locked","lane":...,"previous":...}` with `alive: true` and no `hint` on stderr, nothing on stdout, exit 3), leaves a lock file no process holds for its runner to reclaim (PE-29), creates `.orchestrator/logs/<lane>-<first 8 of the run id>.log` (exclusive, 0600), and launches `orch worker` with the same arguments minus every exact `--detach` token plus `--log-path`, `--run-id` and `--cwd <absolute project root>` (last, so a relative `--cwd` is not applied twice; both runtimes) in the project root, in a session of its own, stdin on `/dev/null` and stdout and stderr on the log; it prints `{lane, runner_pid, log_path, run_id, keep_awake}` and exits 0 (`runner_pid` is left out when the runner cannot be started, as the JS never sees that error). Keep-awake wraps the runner in `caffeinate -i -s` (macOS) or `systemd-inhibit --what=idle:sleep --why=opencode-orchestrator` (Linux) when `which` finds it, unless the registry's `runtime.keep_awake` is `false` (any registry error leaves it on); `keep_awake` reports whether it was wrapped. |
+| `orch flip decide --active D \| run --to D [--from D] [--reason R] [--resume ID] [--force] [--unless-gated] \| pause [--active D] [--reason R] [--brief FILE] \| gate [--active D] [--reason R] [--question ID] [--clear [--no-relaunch]] \| status [--cwd DIR]` | `bin/flip.mjs` | Byte-identical stdout, stderr, exit codes, `.orchestrator/flip.json` (indent 2; both replace it through a temp file and a rename, orch's private and owner-only, the JS's the fixed `flip.json.tmp`, PE-21), mailbox lines and, for `run`, the repository's `info/exclude`, the continue brief and everything the launched conductor worker writes. `flip.json` is read as `JSON.parse` of the file; only ENOENT is absent state. Invalid JSON or unreadable state makes `decide` print `{"action":"gate","reason":"flip state unreadable: <code>; fix or remove .orchestrator/flip.json"}` (exit 0, no usage collection), makes every writer refuse with exit 1 and the file untouched, and blocks supervisor relaunches with one log entry (PE-32). Each writer reads and atomically replaces the data under a transaction on the separate, persistent `flip.json.lock`; no child is launched while it is held. Valid JSON values retain their previous handling except primitive gate records (PE-34): `status` prints the record or `{"state": "never flipped"}` for a falsy one; `pause` creates `.orchestrator/` and writes `{...previous, paused: {at, door, reason[, brief]}}` (`brief` only for a non-empty `--brief`; a string spreads into index keys, a number or `true` into nothing, an existing `paused` keeps its position, `awaiting_human` is kept) and posts a `handoff` to `supervisor`; `gate` creates `.orchestrator/`, then transactionally reads `flip.json` and sets `awaiting_human: {at, door, reason, question}` (an existing one keeps its position; an array or primitive `flip.json` is replaced by an object holding the gate, not by `--clear`, which writes truthy non-object values back unchanged), deletes `paused` and posts a `handoff` to `human` whose subject keeps 80 UTF-16 units of the reason; `gate --clear` deletes `awaiting_human` and writes any other shape back as it is; when an object held a truthy `awaiting_human`, it also sets `pending_launch: {to, from, reason: "human gate cleared", resume: null, at}` with `to` and `from` the gate's door (`opencode` when it has none), so the supervisor relaunches that conductor, unless a truthy `pending_launch` is already queued (a flip queued before the gate), which is kept; it prints `{"awaiting_human":false,"relaunch":"<door>"}` with the door of the queued launch (when it has a truthy `to`) instead of `{"awaiting_human":false}`; `--no-relaunch` (kickoff) never queues one and removes any queued `pending_launch` and `paused`. `decide` prints `{"action":"gate","to":null,"reason":"awaiting human: <reason>"}` when `flip.json` is an object with a truthy `awaiting_human` (`<reason>` is `${awaiting_human.reason}`, so `undefined` without one), without reading or collecting usage; otherwise it prints `{action, to, reason}` (`flip`, `handback`, `stay` or `pause`) from the cached routing (collecting when the cache is missing or stale, as `getRouting` does) and the time of the last flip (`flip_cooldown_minutes`); `--active` absent or empty prints `--active opencode\|claude required` (exit 2), and a non-door string (`gemini`, `constructor`, `__proto__`) is red with the JS reason text (`undefined`, or the inherited Object.prototype text). `run` refuses a `--to` other than `opencode` or `claude` (`--to opencode\|claude required`, exit 2, nothing written); otherwise it first reads state under the transaction, then adds `.orchestrator/` to the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir) when the project has a git repository (a `.git` file that is not `gitdir: <path>` naming a directory, or whose git dir's `commondir` names no directory, is none, and nothing is written) and no line of the file is `.orchestrator` or `.orchestrator/` (lines end at `\n` and one trailing `\r` is dropped, as Git reads the file; a lone `\r`, U+2028 or U+2029 is part of a line, so such a "line" does not count and the line is appended; a newline is added first unless the file is empty or ends in one), writes `.orchestrator/briefs/conductor-continue.md` (atomically, 0600, PE-21; it launches the brief a kickoff saved instead of writing the continue brief, and names it in the handoff, when the record it replaces has one: `paused.brief`, else `pending_launch.brief`, a non-empty string naming an existing file), replaces `flip.json` with `{at, from, to, reason, previous: {at, to}}` (clearing `paused` and `awaiting_human`), posts a `handoff` from `conductor-<from>` to `conductor-<to>`, and launches the conductor by running this executable as `orch worker start --brief .orchestrator/briefs/conductor-continue.md --lane conductor --harness <to> --agent conductor --breadth broad --cwd <root> --detach` (plus `--permission-mode auto` for claude, `--resume`, `--force`) to completion, so a Go-driven flip runs the conductor on `orch worker` and the Go bridges (the JS runs `node worker.mjs`). It prints `{flipped, to, from, launcher[, run_id, runner_pid]}` with 400 UTF-16 units of the launcher's trimmed output, exit 0 when the launcher exited 0, else 1; a launch whose launcher exited 0 with a last stdout line holding a string `run_id` and a numeric `runner_pid` (the detach answer) also carries those two, after `launcher` (PE-63). A launcher that cannot be started (no executable path, or the start fails) gives `{"flipped":false,...,"launcher":""}` and exit 1 with no diagnostic, as the JS `spawnSync` error result has no status and no output. When the launcher refuses with `lane locked` (usually because the calling conductor holds the lane), `flip.json` gains `pending_launch: {to, from, reason, resume, at[, brief]}` for the supervisor (`brief`: the saved brief this run launched, kept for the retry) and `run` prints `{"flipped":false,"pending":true,...}`, exit 0. A bare `--active`, `--from`, `--reason`, `--question`, `--resume`, `--to` or `--brief` is a one-line usage error (exit 2, no writes, PE-35). With `--unless-gated`, `run` checks `awaiting_human` under the lock and refuses with `{"flipped":false,"reason":"awaiting human"}` (exit 1, no state, brief, exclude or handoff write); every supervisor run passes it. Explicit human and kickoff runs keep clearing gates. A failed lane launch adds `pending_launch` in a second transaction against current state, preserving a gate installed during launch (PE-33). A routing failure prints `orch flip: <error>` and exits 1, as `orch usage` does (the JS dies of the rejection with Node's crash output). Any other command prints `commands: decide \| run \| pause \| gate [--clear [--no-relaunch]] \| status` (exit 2). Differences: PE-15 (the date formats of `at`), PE-1 (the gate subject and `launcher` cuts), PE-2 (a launcher crash quoted in `launcher` as its error line only), PE-10 (`run` waits at most 10 s for the launcher's pipes), PE-20 (a launcher whose output passes 1 MiB is stopped), PE-21 (`flip.json` and the continue brief), PE-22 (the launcher runs in a process group of its own), PE-32 (transactions and unreadable state), PE-33 (automatic runs preserve gates), PE-34 (primitive gate records and default gate reasons), PE-35 (required option values) and PE-63 (the launched run's `run_id` and `runner_pid`). |
+| `orch supervisor start \| serve \| status \| stop \| ack --event ID [--by NAME] [--cwd DIR]` | `bin/supervisor.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/supervisor-acks.json` except the documented differences (indent 2, written through a temp file and renamed, as the JS `writeJson` does; PE-21). `status` prints `supervisor-state.json` as `JSON.parse` reads it, whatever the value (`null`, a number, a string, an array), or `{"status": "not_started"}` when it cannot be read or parsed (missing, a directory, unparsable, a BOM), and never writes. `stop` writes an empty `.orchestrator/supervisor.stop` and prints `stop requested; workers are unaffected`, whether or not a supervisor runs. `ack` refuses with `unknown event id` (exit 1) unless `--event` is truthy and names a truthy own property of the state's `events` (inherited Object.prototype names are refused, PE-39); then it sets `acks[<event>] = {by: <--by or coordinator>, at}` under a transaction on the separate persistent `supervisor-acks.json.lock`, retaining concurrent receipts (an existing key keeps its position; a bare `--event` is the key `true`, a bare `--by` writes `true`; `__proto__` without an own ack key of that name adds nothing and rewrites the file unchanged, as the JS prototype setter does) and prints `acknowledged (receipt, not acceptance)`. Usage: no command prints `commands: start \| serve \| status \| stop \| ack --event ID` (exit 2); any other command prints the same line (exit 2, PE-49). `start` creates `.orchestrator/logs/` (0700), prints `{"started":false,"reason":"already running","pid":N}` when a process holds the kernel lock on `supervisor.lock` (`N` is the kernel's holder, PE-30), else removes `supervisor.stop`, launches this executable as `orch supervisor serve --cwd <root>` in a session of its own (wrapped in `caffeinate -i -s` or `systemd-inhibit` unless the registry's `runtime.keep_awake` is `false`) with its output appended to `logs/supervisor.log` (0600; a symlink there fails `start` with ELOOP, PE-21), and prints `{"started":true,"supervisor_pid":N,"log":"<path>"}` (`supervisor_pid` left out when the command cannot be started). `serve` claims `supervisor.lock` with a kernel record lock it holds for its life, its pid written into the file as metadata (created 0600, PE-21; a lock file no process holds is claimed in place, PE-30; a held one prints `a supervisor already owns this project`, exit 1), then every 5 s after each tick: looks at every worker lane (phases, the two-phase intent, events), re-dispatches budget-deferred lanes as `orch worker start --detach`, wakes the coordinator through the configured channels (`command`, `codex-queue`, `opencode-run`, `claude-resume` as `orch claude-exec`), evaluates the conductor flip (relaunching through `orch flip decide\|run`), and records the outcome in `supervisor-state.json` (a failed tick: `storage_error` persisted once by the next successful write, `storage_failures` counting). The stop file makes it record `status: "stopped"` and `stopped_at`, release the lock and exit 0; it has no signal handlers of its own, so a killed serve leaves its lock file, which the kernel stops holding when the process exits and the next serve or start treats as free. While it waits for a child (a channel, a flip, a re-dispatch), RunSync relays a SIGINT, SIGTERM or SIGHUP to that child's process group, and serve then dies of the signal once the child is reaped, at most 10 s later (PE-22), still leaving its lock file. A state that is `null` or a primitive crashes as in the JS (C1). Differences: PE-16 (hand-edited non-object shapes), PE-17 (a missing `opencode`), PE-10 (a child that ignores the channel timeout's SIGTERM is killed 10 s later), PE-20 (a child whose output passes 1 MiB is stopped), PE-21 (state, acks, lock and log), PE-22 (every child it waits for runs in a process group of its own), PE-30 (ownership is the kernel lock: one serve per project; the tick's lane `stale_lock` and the flip evaluation's free conductor lock ask the kernel, not the file) PE-36 (supervisor-owned records), PE-37 (confirmation, backoff and five-failure stop), PE-38 (best-effort notes), PE-39 (serialized ack writes and own event keys), PE-49 (an unknown command is a usage error), PE-50 (a non-object `supervisor.json`), PE-51 (a non-object worker file), PE-52 (vanished lanes and null events), PE-59 (no next check for an ended lane), PE-60 (conductor restarts, relaunch notes, slow retry and stale confirmations) and PE-64 (failed lane redispatch subject). |
 | `orch doctor` | `bin/doctor.mjs` | The same rows in the same order with the same texts (`OK  `/`WARN`/`FAIL`, name, `  —  detail` when the detail is truthy) and exit code (1 if any row is FAIL). Each probe (`opencode`/`codex`/`claude`/`node --version`, `codex login status`, `claude auth status`, `opencode auth list\|plugin list\|debug agents`) runs with a 20 s timeout and reads stdout then stderr; the usage feeds and routing come from a refreshed `orch usage`, rows pushed before a failure are kept and the failure adds `FAIL usage/routing`; the last 400 lines of `~/.local/share/opencode/log/opencode.log` are scanned for orchestrator `ERROR`s, the last three joined, redacted as an incident is (home, emails, tokens, uuids, `ses_` ids) and cut at 300 (cuts in UTF-16 units). Both print `orch binary` after `node present`. Differences: PE-18 (a missing `node` is a WARN, `needed only by install.sh and uninstall.sh`; an `orch on PATH` row after `orch binary`; `orch self-test` row; `unit tests` runs the Go tests; the JS warns when it finds no binary); each probe stops at 1 MiB of output (PE-20) and runs in a process group of its own (PE-22). |
 | `orch watch [--cwd DIR] [--follow] [--interval 20]` | `bin/watch.mjs` | The same dashboard line for line: header (project, clock, usage time, `STALE`), the first two prompt lines, routing (`role=<model>@effort`/`#variant`/`PAUSED`), supervisor, flip, lanes, questions for the human with the reply command (`orch mailbox reply`, PE-19), the human gate, the last 8 messages, incidents of the last 24 h and the `next:` line of `STATE.md`, with the JS value semantics (`undefined` fields, UTF-16 cuts). Reads the usage cache when fresh, else refreshes it. `--follow` clears the screen and redraws every interval (Node's timer clamp: a non-number, below 1 ms or above 2^31-1 ms waits 1 ms), printing a failed render's message to stderr instead, until killed. A routing failure prints `orch watch: <error>` and exits 1 (PE-2). |
-| `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b> (looked in <root>; cd into the project or pass --cwd <project dir>)` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else the preflight below, the prompt written to `.orchestrator/briefs/conductor-kickoff.md`, `orch flip pause --active <home> --brief .orchestrator/briefs/conductor-kickoff.md` with its answer, and the message, exit 75, so the supervisor's relaunch at the reset starts from that brief; when `orch supervisor start` exits non-zero (before the brief) or the pause does, `Both vendors are red, but the supervisor did not start\|the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.` on stderr, exit 1), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear --no-relaunch`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir); `--dry-run` skips it and prints `supervisor: not started (dry-run)` instead, so it changes nothing in the project, though its routing read still refreshes the shared usage cache), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (the brief is written atomically, 0600, PE-21; the lane's trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). Differences: the captured self-execs stop at 1 MiB of output (PE-20) and run in a process group of their own (PE-22). |
+| `orch kickoff --brief FILE [--brief FILE2 ...] [--door auto\|claude\|opencode] [--headless] [--unattended] [--cwd DIR] [--dry-run]` | `bin/kickoff.mjs` | The same stdout, stderr, exit codes and files: the usage line (exit 0 with a brief, 2 without), `brief not found: <b> (looked in <root>; cd into the project or pass --cwd <project dir>)` (exit 2), the first two routing-prompt lines after a refreshed `orch usage`, the door (the home door if its vendor is available and not red, else the other; a given `--door` is not validated), both red (`--dry-run`: the message, exit 75; else the preflight below, the prompt written to `.orchestrator/briefs/conductor-kickoff.md`, `orch flip pause --active <home> --brief .orchestrator/briefs/conductor-kickoff.md` with its answer, and the message, exit 75, so the supervisor's relaunch at the reset starts from that brief; when `orch supervisor start` exits non-zero (before the brief) or the pause does, `Both vendors are red, but the supervisor did not start\|the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.` on stderr, exit 1), the preflight (`orch policy unattended` with `--unattended`, `orch flip gate --clear --no-relaunch`, `supervisor: ` + the first 120 UTF-16 units of `orch supervisor start`'s trimmed answer, `.orchestrator/` in the repository's `info/exclude` (`.git/info/exclude`, or for a `.git` file, the linked worktree's common dir or the submodule's git dir); `--dry-run` skips it and prints `supervisor: not started (dry-run)` instead, so it changes nothing in the project, though its routing read still refreshes the shared usage cache), the `door:` line, then `prompt: ...` (`--dry-run`), a headless `orch worker start ... --detach` conductor lane on `.orchestrator/briefs/conductor-kickoff.md` (the brief is written atomically, 0600, PE-21; the lane's trimmed answer, the watch hint, its exit code or 1), or the interactive `claude --agent conductor <prompt>` / `opencode --prompt <prompt>` in the project root with this terminal (its exit code, 0 after a signal; a missing binary is `Error: spawn <cmd> ENOENT`, exit 1). The orchestrator children are self-execs of `orch`. A routing failure prints `orch kickoff: <error>` and exits 1 (PE-2). A refused gate clear stops the preflight with exit 1 (PE-61). Differences: the captured self-execs stop at 1 MiB of output (PE-20) and run in a process group of their own (PE-22), and PE-61. |
 | `orch session beat --door opencode\|claude [--state working\|waiting\|done\|ended] [--now TEXT] [--slice ID] [--progress N/M] [--session ID] [--hook] [--cwd DIR] \| show [--cwd DIR]` | `bin/session.mjs` | Byte-identical stdout, stderr, exit codes and `.orchestrator/sessions/<door>.json` (indent 2; the directory 0700, an existing one this user owns tightened to 0700, the file 0600, written through a private temp file and a rename in both runtimes). `beat` keeps each field not given, clears `--now`, `--slice` or `--session` given as `""` (`--progress` must always be `N/M`), defaults the state to `working` and refreshes `updated_at`; `--now` is cut to 200 UTF-16 units and `--slice` to 40 (a split surrogate pair becomes U+FFFD in both). Bad options exit 2. `--hook` reads a Claude Code hook's JSON on stdin (`session_id`, `cwd`, `hook_event_name` only; never the prompt): `UserPromptSubmit` and `SessionStart` record `working`, `Stop` `waiting`, `SessionEnd` `ended`, any other event writes nothing; it never exits 2 (every failure is one `session beat: ...` line and exit 1; a `cwd` with a NUL character is refused before any filesystem call) and never creates `.orchestrator/`. `show` prints `{door: record}` (indent 2) and refuses to run outside a project. |
 
 Comments citing `bin/*.mjs` or `lib/*.mjs` name the JS at parity reference `9e3a456`
@@ -253,6 +253,29 @@ Files:
   `AbandonProcessGroup`) has not been tested: the end-to-end test runs `once` without launchd. If
   the supervisor dies with `serve`, the plist needs `AbandonProcessGroup`.
 
+The `claude-exec`, `codex-exec`, `opencode-exec`, `worker start` and `supervisor` rows above
+also differ from JS by PE-58: when setting a child's directory, orch replaces its `PWD`.
+References above to the whole inherited environment exclude that normalized `PWD`.
+
+## Ownership primitive (S13a; not yet used by commands)
+
+`internal/ownlock` provides non-blocking `Acquire`, non-acquiring `Probe`, idempotent
+`Release` and blocking `Transaction` using POSIX record locks on regular files opened
+without following the final symlink. Kernel locks, not decimal PID metadata, determine
+ownership; process death releases them. An inode-keyed process registry excludes local
+owners and transactions, handles hard-link aliases, and prevents package-internal closes
+from dropping another owner's lock. Acquisition rechecks pathname identity, retrying at
+most eight times; release refuses an already replaced pathname with an error and anchors
+relative paths at acquisition, independently of later working-directory changes. Probe
+re-resolves a pending reservation that ends without acquiring. Transactions retain their
+lock file and release on callback errors or panics. This is a cooperative protocol: all
+same-process access to lock inodes must use this package (even closing an unrelated read
+descriptor drops POSIX locks); callers must not rename/unlink active lock paths, and
+transaction data must be a separate file. Identity checking cannot make check-and-unlink
+atomic against an unrelated replacer. `orch worker` lanes use it (S13b: PE-23, PE-28,
+PE-29), and so do `orch supervisor`'s lock and every reader of a lane or supervisor lock
+(S13c: PE-30), flip writers (S13d: PE-32) and supervisor acks (S13f: PE-39).
+
 ## Build
 
 Go 1.25+, no third-party dependencies, no cgo.
@@ -399,6 +422,7 @@ The steps below use `X.Y.Z = 0.6.0` (0.5.0 was released this way on 2026-10-19).
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
 | `ORCH_REMOTE_CONFIG` | `~/.config/orch/remote.json` | The `orch remote` config file. |
 | `ORCH_NO_POST_RUN_REFRESH` | unset | `1` stops `orch claude-exec` and `orch codex-exec` from starting their detached post-run usage refresh (PE-12). Set only by the parity harness. |
+| `ORCH_ARTIFACT_ROOT` | child cwd | Bridge project root for run records and incident project attribution; `--artifact-root DIR` wins (PE-42). |
 | `ORCH_JS` | unset | Parity only: the JS `orchestrator/` tree `parity/run.sh` compares against. Set, it wins over `ORCH_JS_REF` and nothing is extracted. |
 | `ORCH_JS_REF` | the commit in `go/parity/js-ref` | Parity only: the commit-ish (e.g. `v0.5.0`) whose `orchestrator/` `parity/run.sh` extracts from git when `ORCH_JS` is unset. |
 | `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
@@ -567,13 +591,16 @@ Groups:
   refused), `workers` as a regular file (C1), a bare and a relative `--cwd`. Status only sends
   signal 0. `stop` over no state, a dead pid, a falsy state, an empty lane, the lane `../flip`
   (refused, `flip.json` and `flip.lock` untouched), and live victims each runtime's seed starts
-  (`/bin/sleep`, as its own group leader or not, the pid stored as a number or a string, under
-  the lane given, bare or absent, its lock holding its pid), each required to die of SIGINT. The
-  PE-14 pids (`1`, `true`, `"1"`, `[1]`, `-1`, `-12345`, `"0"`, `[]`, minus a victim's pid, each
-  with a lock holding the pid as `process.kill` coerces it) and the PE-23 cases (a live victim
-  recorded as a finished state's pid with no lock, or with a lock holding a dead pid) run `orch`
-  only, never the JS, and require the victim and the test process to survive. Normalised: the
-  sandbox project path and, for victim cases, the stored `pid` and the lock's pid.
+  (a helper process holding the lane's kernel lock with its own pid, as a runner does, as its
+  own group leader or not, the pid stored as a number or a string, under the lane given, bare
+  or absent), each required to die of SIGINT. The PE-14 pids (`1`, `true`, `"1"`, `[1]`, `-1`,
+  `-12345`, `"0"`, `[]`, minus a victim's pid, each with a lock file holding the pid as
+  `process.kill` coerces it) and the PE-23 cases (a live `/bin/sleep` recorded as the state's
+  pid with no lock, with a lock file naming a dead pid, with a lock file naming the victim that
+  no process holds, or with the lock held by another helper) run `orch` only, never the JS, and
+  require the victim and the test process to survive. Normalised: the sandbox project path and,
+  for victim cases, the stored `pid` and the lock's pid. A live lock holder in any parity case
+  is such a helper (contract CA2); a lock file with pid text alone models a stale lock.
   Foreground `start` runs each runtime's own bridge (`node <harness>-exec.mjs` for the JS,
   `orch <harness>-exec` for `orch`) over the bridges' scripted fakes, with
   `ORCH_NO_POST_RUN_REFRESH=1`: claude finished (the `ok` capture; the fake's argv log holds the
@@ -588,8 +615,11 @@ Groups:
   `--effort X`; the validation refusals (a lane with `/` among them, with and without `--detach`; an
   unknown harness is reported first), a bare `--brief` or `--cwd` (C1) and a brief that is a
   directory (C1 EISDIR read before the lane is claimed: no lock and no state, and with the lane
-  locked the read error still wins, exit 1 not 3); the lane locked with a live or dead
-  holder and previous states absent, `null`, `0`, a string or without `status`; a state path that
+  locked the read error still wins, exit 1 not 3); the lane locked by a helper holding its
+  kernel lock, with previous states naming a live or dead pid, absent, `null`, `0`, a string or
+  without `status` (PE-28: orch's hint is rewritten to the JS's for the comparison); PE-28 as an
+  asserted difference (a lock file naming a reaped pid that no process holds: the JS refuses the
+  lane, pinned, `orch` runs to `finished` and removes the lock); a state path that
   is a directory (the final line; PE-21 as an asserted difference: the JS leaves `b.json.tmp`, orch no temp); a lane written by one runtime's `start`
   read by both runtimes' `status`; PE-24 as an asserted difference (claude exits 1 with a
   synthetic credential on stderr: the JS state and blocked message hold it, `orch`'s hold
@@ -613,9 +643,11 @@ Groups:
   `--detach` repeated, and as `--lane`'s value (the launcher's lane is `--detach`, the runner's
   `--lane` takes `--harness` and the runner logs the usage line); a launch with `--cwd sub` from
 the sandbox, with and without keep-awake (the runner must work in `sub/`, not `sub/sub/`, and the
-wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
+wrapper's argv log ends `--cwd <root>`); a lock held by a helper process (with
   and without a state: exit 3, the lane-locked JSON without `hint` on stderr, empty stdout, no log,
-  as `flip.mjs` expects), by a dead pid and holding `abc` (removed, the launch proceeds); and a
+  as `flip.mjs` expects), and lock files naming a dead pid and holding `abc` that no process
+  holds (the launch proceeds; the JS launcher removes the file, `orch`'s runner reclaims it,
+  PE-29); and a
   worker stopped while its bridge runs the sleeping fake claude: launch, wait for the state's
   `running`, `worker_pid` and `session_id`, `status` (`process_alive` and `lock_present` true),
   `stop` (only once the state's pid is the launched runner), settle. Its PE-11 differences are
@@ -637,13 +669,13 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   malformed UTF-8 files, a directory and `__proto__`/`constructor` keys; `pause` fresh, over kept
   keys (`paused` in place, `awaiting_human` kept), `--active`, `--reason`, both bare, a string,
   array, number and prototype-key record, `.orchestrator` a regular file (C1) and `flip.json` a
-  directory (PE-21: both fail at the rename, orch's naming its private temp, the JS leaving
+  directory (PE-32: orch refuses unreadable state; the JS reaches its failed rename and leaves
   `flip.json.tmp`), and a mailbox directory that is a
   file (no message, same output); `gate` fresh, deleting `paused`, appending and keeping the
-  gate's position, `--question` given and bare, a reason over 80 units, a bare `--reason` (no
-  message), `--active` given and bare, the TypeErrors of `5`, `1.5`, `"abc"` and `true` (C1), an
+  gate's position, `--question` given and bare, a reason over 80 units, a bare `--reason` (PE-35 usage refusal; the frozen JS posts no
+  message), `--active` given and bare, primitive states `5`, `1.5`, `"abc"` and `true` (PE-34: orch gates, the JS throws), an
   array replaced by the gate, `.orchestrator` a file (C1), and `--clear` over a gate, no gate,
-  nothing, a string, a number, an array, `null` and a directory (PE-21, as for `pause`); PE-1
+  nothing, a string, a number, an array, `null` and a directory (PE-32, as for `pause`); PE-1
   (the subject cut inside an emoji) as an asserted difference.
   `decide` runs over fresh usage caches built when the group starts (`resets_at` relative to
   that time; no case collects, and each requires the seeded `usage.json` left as it was):
@@ -652,13 +684,14 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   (its 2099 resets read as freshly reset); `flip.json` absent, `at` 2 and 30 minutes ago,
   unparsable, `null`, a string, an array, a future `2030`, `garbage` and a `paused` record
   without `at`; a human gate with and without a reason, over a both-red cache (gate, not pause), `awaiting_human: false` and an array holding a gate (both routed as usual); `--active` absent, empty, bare, `gemini`, `constructor` and `__proto__`. Each
-  case also pins the decision printed. PE-15 is asserted (a legacy local date two minutes ago).
+  case also pins the decision printed; unreadable state gates under PE-32 and a bare active is
+  a PE-35 usage refusal. PE-15 is asserted (a legacy local date two minutes ago).
   Cross-runtime: `flip.json` written by each runtime's `pause` and `gate` is read by both
   runtimes' `status` and `gate --clear`.
   `run` cases never reach a model: each sandbox's `PATH` holds the fakes first and a fresh
-  cache. Pending launches lock the conductor lane with the test process's own pid (only ever
-  sent signal 0), so both launchers refuse and nothing runs; each such case requires the
-  pending answer from both runtimes. Through that path: `--to` absent, `gemini` or bare and a
+  cache. Pending launches have a helper process hold the conductor lane's lock with its own pid
+  (only ever sent signal 0 by the JS), so both launchers refuse and nothing runs; each such case requires the
+  pending answer from both runtimes except PE-32/35 refusals. Through that path: `--to` absent, `gemini` or bare and a
   bare `--cwd` (C1), with nothing written; a seeded `conductor.json`; `--reason` and `--resume`
   carried into `pending_launch`; bare `--from`, `--reason` and `--resume`; `--force`; a mailbox
   that is a file; `previous` over a run record, a `paused`-only record, a record whose gate and
@@ -670,12 +703,12 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   `gitdir:` whose `commondir` is `../..`: the common dir's exclude is appended). Crashes before
   the launch (C1): the exclude a directory (EISDIR read); the brief
   a directory (after the exclude; the JS fails at open, orch at the rename of
-  `<file>.tmp-<random>`) and `flip.json` a directory (after the brief; both fail at the rename,
-  the JS leaving `flip.json.tmp`) are PE-21 differences. Full launches
+  `<file>.tmp-<random>`, PE-21). A directory `flip.json` is unreadable state (PE-32): orch
+  refuses before the exclude or brief, the JS leaves `flip.json.tmp` after its failed rename. Full launches
   run the conductor worker to its end against the fakes and settle its runner as the detached
   worker cases do: claude, opencode handing back with a reason (no `--permission-mode`), claude
   with `--resume`, claude with `--force` over an Anthropic-red cache (finished) and without it
-  (deferred), and a stale lock (a reaped pid) the launcher removes; the `launcher` line quoted
+  (deferred), and a stale lock (a reaped pid) the JS launcher removes and `orch`'s runner reclaims (PE-29); the `launcher` line quoted
   in the answer must be whole (under 400 units) and is parsed as the launch. PE-2 is asserted
   for a launcher that dies because `.orchestrator/logs` is a file. Cross-runtime: a
   `pending_launch` written by each runtime's `run` is read by both runtimes' `status`.
@@ -683,7 +716,10 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   `awaiting_human`, `pending_launch` or `previous`) that is not earlier than the moment the case
   was built, so seeded and previously written timestamps are compared verbatim; a new mailbox
   line's `id` and `at`; and, for full launches, the worker cases' values, with `runner_pid` also
-  in its JSON-escaped form inside `launcher`.
+  in its JSON-escaped form inside `launcher`. Only an unseeded, empty `flip.json.lock` is
+  masked for writer cases, including full launches and kickoff writes (PE-32); status and
+  dry runs retain all files in the comparison. PE-33 pins the frozen JS clearing a gate
+  despite `--unless-gated`, while orch refuses without writing or launching.
 - `supervisor` (S8a part): `orch supervisor status|stop|ack` against `bin/supervisor.mjs`, always
   in the sandbox project. Usage: no command (exit 2), `foo` (nothing, exit 0), a bare `--cwd`
   with and without a command (C1) and a relative `--cwd`; `status` over no `.orchestrator/`,
@@ -704,7 +740,7 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   file and waits for the exit (at most 20 s; on timeout it kills the pid it started and fails).
   Cases: no workers, a realistic state, a stale lock, a restart over a stopped state with a
   `storage_error`; lanes finished (command channel exit 0 and 3), failed, interrupted,
-  deferred not yet due, unknown status, stale lock, process exited, a primitive lane file and
+  deferred not yet due, unknown status, stale lock (held by a helper process), process exited, a primitive lane file and
   primitive `lanes`; events acknowledged, a failed one past `retry_after`, a queued one not
   retried, `logs/` absent (the ENOENT path) and the mailbox directory a file; channels
   `codex-queue` (the fake's `queue` mode: exit 0, 1, unscripted 97), `opencode-run`, unknown
@@ -729,7 +765,8 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   required: a paused project relaunched on its own door (opencode bridge), a pending launch, a
   `decide` flip to claude, a finished-early claude conductor restarted with `--resume` of its
   session, a never-started flip target launched, and a due deferred lane re-dispatched (claude
-  bridge; the runner's final state replaces the serve's `redispatched_at` in both).
+  bridge). PE-36/37 assert supervisor-owned attempt records before comparing the remaining
+  files; the frozen JS still writes `redispatched_at` into a stale lane snapshot.
   `channel/claude-resume` runs the claude
   bridge detached over the fake and compares once a run record exists and the sandbox is
   quiet for 300 ms; the record's `prompt_sha256` must be the digest of the wake text posted
@@ -741,7 +778,8 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   collect usage. `channel/delivered` checks that the event reaches the command, the mailbox
   and the log in both runtimes. Asserted differences: PE-16(1) (`[]` state), PE-16(2)
   (`null` acks with a failed event due) and PE-17 (no `opencode` on PATH). `start`: fresh, stop
-  file removed, stale lock, already running (this test's pid), keep-awake through the fake
+  file removed, stale lock, already running (a helper process holding the lock; its pid is
+  written `<holder>`), keep-awake through the fake
   `which` (the wrapper's argv checked per runtime); each launched serve is stopped through its
   stop file and waited for by the pid `start` printed. Normalised, only inside the run's time
   window: `checked_at`, `created_at`, `stopped_at`, log line times, `next_check`, `retry_after`
@@ -792,8 +830,8 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
 
 - `kickoff`: `orch kickoff` against `bin/kickoff.mjs` in cases that never launch a conductor (each
   stops at the usage, the brief check, the both-red path or `--dry-run`, or crashes before the
-  launch), with the project's `supervisor.lock` held by the test's pid so neither `supervisor
-  start` starts a serve, and both usage feeds failing so each refresh keeps the seeded cache's
+  launch), with the project's `supervisor.lock` held by a helper process (its kernel lock and its
+  pid as text, written `<holder>` in the answer) so neither `supervisor start` starts a serve, and both usage feeds failing so each refresh keeps the seeded cache's
   readings: no arguments, `--help` with and without a brief, `--brief ""`, a missing brief, `--brief
   --brief x`, a directory brief, a bare `--cwd` (C1); dry runs with the home door usable, the home
   door red, `--door claude`, `--door auto` with Anthropic red, `--headless`, side briefs,
@@ -822,8 +860,11 @@ wrapper's argv log ends `--cwd <root>`); a lock held by a live pid (with
   without the lock, where each `supervisor start` really starts a serve in its sandbox: the
   serve's tick is checked by the pid the kickoff printed, the serve stopped through its stop file
   and waited for (killed by that pid after 20 s, failing the case; a pid the output does not
-  show is read from the sandbox's lock, after the stop file is written); normalised: that pid,
-  the cut log path and the serve's fresh values.
+  show is found after the stop file is written, polling up to 10 s: orch's through the kernel
+  lock, the frozen JS's from the lock's text, as its serve holds no record lock; the case ends
+  only after that serve has exited, so its sandbox is never removed under it); normalised: that
+  pid, the cut log path and the serve's fresh values. `cleanup/unread-serve/{js,orch}/{missing,
+  malformed}` asserts that failure path against each runtime's real `supervisor start`.
 
 - `session`: `orch session` against `bin/session.mjs`: usage errors (no or unknown command, door,
   state, progress forms, a missing value, unknown options and positionals); beats that create the
@@ -865,25 +906,21 @@ prints only the error line:
   and the state), `TypeError [ERR_INVALID_ARG_TYPE]: The "to" argument must be of type
   string. Received ...` (a failed result whose `record` is not a string), `Error: post needs from
   and subject` (an empty lane, from a brief named `.md`) and the filesystem errors of the
-  workers directory and the mailbox; `start --detach` adds the errors of reading or removing the
-  lock (`Error: EISDIR: illegal operation on a directory, read` for a directory lock), creating
+  workers directory and the mailbox; `start --detach` adds the error of probing the lock (a
+  directory lock: the JS's `Error: EISDIR: illegal operation on a directory, read`, `orch`'s
+  ownlock error, PE-29), creating
   `logs/` and creating the log (`Error: EEXIST: file already exists, open '<log>'`). A result whose
   `final_message` is truthy but neither a string nor an array, or whose `errors` is truthy but not
-  an array, is C2. From the bridge's start on,
-  every crash removes the lock first, as the JS `finally` does.
-- `orch flip` prints these C1 lines: the bare `--cwd` TypeError above (before any command, the
-  usage error included); `Error: EEXIST: file already exists, mkdir '<root>/.orchestrator'`
-  (`pause` or `gate` where `.orchestrator` is a file; any other mkdir errno likewise);
-  `Error: EISDIR: illegal operation on a directory, open '<root>/.orchestrator/flip.json'` (the
-  write of `pause`, `gate` or `gate --clear`, as other open errors; JS only: orch prints
-  `rename '<file>.tmp-<random>' -> '<file>'`, PE-21); and, for `gate` (not
-  `--clear`) over a `flip.json` holding a number, a non-empty string or `true`, strict mode's
-  `TypeError: Cannot create property 'awaiting_human' on <number|string|boolean> '<value>'`
-  (the number as JS prints it, `1e+21`; the string raw and whole), after the mkdir and before
-  any write. `run` adds `Error: EISDIR: illegal operation on a directory, read` (the exclude is a
-  directory) before any write, then the mkdir of
-  `.orchestrator/briefs` and the opens of the brief and of `flip.json` (JS only: orch fails at
-  the rename of `<file>.tmp-<random>`, PE-21), each after the writes before it.
+  an array, is C2. Once the lane is claimed,
+  every crash releases the lock first (PE-28); the JS `finally` removes it from the bridge's
+  start on.
+- `orch flip` prints these C1 lines: the bare `--cwd` TypeError above (before any command,
+  the usage error included); `Error: EEXIST: file already exists, mkdir '<root>/.orchestrator'`
+  when `.orchestrator` is a file; an exclude directory's EISDIR read; and the mkdir/rename
+  failures of the continue brief (PE-21). An unreadable or invalid `flip.json` now fails
+  closed with `Error: flip state unreadable: <path>: <code>` before other run writes (PE-32).
+  Gate assignment to a valid primitive now succeeds (PE-34); bare value options are usage
+  errors rather than JS values (PE-35).
 - `orch supervisor` prints these C1 lines: the bare `--cwd` TypeError above (before any command,
   the usage error included); `Error: EEXIST: file already exists, mkdir '<root>/.orchestrator'`
   (`stop` where `.orchestrator` is a file) and `Error: EISDIR: illegal operation on a directory,
@@ -899,8 +936,8 @@ prints only the error line:
   already there), with a primitive `TypeError: Cannot create property 'storage_error'|'status'
   on <number|string|boolean> '<value>'`, its lock left (asserted for `null` and `5`); a lock
   that is a directory gives `Error: EISDIR: illegal operation on a directory, open
-  '<root>/.orchestrator/supervisor.lock'` in the JS, where orch, taking the lock over as stale,
-  gives the rename error of `<lock>.tmp-<random>` (PE-21); `start` gives the open error of its
+  '<root>/.orchestrator/supervisor.lock'` in the JS, where orch's `serve` and `start` fail with
+  `lock "supervisor.lock" is not a regular file` (PE-30); `start` gives the open error of its
   log, in orch also ELOOP for a symlinked log (PE-21).
 - C1 also covers Node's own coded and type errors with fixed text, such as
   `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received
@@ -1014,6 +1051,7 @@ The other documented differences, each asserted by its own parity case:
   run record, the incident, the JSON and exit 1. The JS dies at once and leaves the CLI running.
   In the JS the CLI stays in the bridge's process group, so a signal to the whole group reaches it
   there; in orch the CLI has a group of its own (PE-22) and is reached through the forward.
+  PE-65 amends "as received" for opencode-exec, which forwards a SIGTERM as SIGINT.
   Extended to `orch worker start`: a worker interrupted while its bridge runs (`worker stop`,
   Ctrl-C, SIGTERM) records what the Go bridge reports after forwarding the signal: status
   `failed`, `exit_code: 1`, the bridge's `claude exited null: ...` (codex: `codex exited null:
@@ -1081,8 +1119,8 @@ The other documented differences, each asserted by its own parity case:
   (flip target never started), a worker's `resume_after` (redispatch) and
   `last_progress_at`/`updated_at`/`started_at`, and an event's `created_at`.
 - PE-16: hand-edited supervisor inputs of shapes the JS mutates invisibly. (1) A JSON array as
-  `supervisor-state.json`, its `lanes`, a worker lane file or `conductor.json` that the
-  supervisor rewrites: `orch` reads it as `{}` and writes the object (the JS sets named
+  `supervisor-state.json` or its `lanes` that the supervisor rewrites: `orch` reads it as `{}`
+  and writes the object (the JS sets named
   properties on the array, which `JSON.stringify` drops, and keeps rewriting the array). (2)
   `supervisor-acks.json` holding `null` during a tick: `orch` reads no acks (the JS throws a
   TypeError at the first ack lookup, so the lane's event pipeline stalls with `storage_error`);
@@ -1093,10 +1131,10 @@ The other documented differences, each asserted by its own parity case:
   state `events` that is a string, array, number or boolean: `orch` reads it as `{}` (the JS
   also accepts index keys, `length` and the primitive's prototype methods as event ids). Both
   runtimes write objects, so only hand edits reach these. Asserted: (2) for `ack` and (4) by
-  parity cases; (1) for `lanes` and a worker file, (2) during a tick and (3) by
+  parity cases; (1) for `lanes`, (2) during a tick and (3) by
   `internal/supervisor` unit tests; (1) for the state file and (2) during a tick also by the
-  `serve` parity cases `PE-16-array-state` and `PE-16-null-acks`, and (1) for `conductor.json`
-  by the flip evaluation's unit tests (S8b). (5) A worker lane file named
+  `serve` parity cases `PE-16-array-state` and `PE-16-null-acks`. PE-36 supersedes the old
+  array-conductor rewrite: no worker-owned lane file is written. (5) A worker lane file named
   `__proto__.json`: like the JS, `orch` writes no `lanes.__proto__` entry (the assignment is the
   prototype setter), but a later tick of the same JS process reads the previous entry back
   through the prototype as the lane's state, where `orch` reads none. Assumption (Q-S8-2).
@@ -1190,14 +1228,14 @@ The other documented differences, each asserted by its own parity case:
   directory likewise names `<file>.tmp-<random>` where the JS names `<file>.tmp`. The suffix adds
   up to 15 bytes to the name, so a name near the file system's limit can fail with ENAMETOOLONG
   in orch where the JS succeeds. `flip.json` and the continue and kickoff briefs are replaced the
-  same way, so a supervisor never reads a half-written gate: a `flip.json` or brief that is a
-  directory fails at the rename (`EISDIR ..., rename '<tmp>' -> '<file>'`), where the JS fails at
-  `open` for a brief and, for `flip.json` (which it also replaces through a rename), at the
-  rename of `flip.json.tmp`, which it leaves. The supervisor log is opened 0600 without following
+  same way, so a supervisor never reads a half-written gate. A brief that is a directory fails
+  at the rename (`EISDIR ..., rename '<tmp>' -> '<file>'`), where the JS fails at `open`.
+  A directory `flip.json` now refuses at its read before any replacement (PE-32); the frozen JS
+  reaches the failed rename of `flip.json.tmp`, which it leaves. The supervisor log is opened 0600 without following
   a symlink: a symlinked log fails `start` with ELOOP, after `start` has already removed
   `supervisor.stop`. An existing log keeps its mode (one created by the JS or an older orch stays
-  as it was; only the 0700 `logs/` protects it). The supervisor lock is created 0600 and a stale
-  one is replaced atomically through a private temp. The temp is not fsynced: the replacement is
+  as it was; only the 0700 `logs/` protects it). The supervisor lock is created 0600; a lock file
+  no process holds is claimed in place and keeps its mode (PE-30). The temp is not fsynced: the replacement is
   atomic for concurrent readers, not durable across a power loss. Asserted by the `worker` parity
   case `start/state/PE-21-json-is-a-directory`, the `supervisor` case `ack/PE-21-acks-directory`
   and the `flip` cases `pause/PE-21-flip-is-directory`, `gate/clear-PE-21-directory`,
@@ -1226,16 +1264,20 @@ The other documented differences, each asserted by its own parity case:
   stops the child too, where the JS orphans it. No current caller needs the terminal; kickoff's
   interactive conductor and its inherited self-exec keep orch's group. Asserted by
   `internal/procs`, `internal/usage` and `internal/bridge` unit tests.
-- PE-23: `orch worker stop` signals only when `<lane>.lock` exists and holds the state's `pid`
-  (a live worker holds its lock for its whole run). A finished state, a crashed worker whose lock
-  is gone, or a state whose pid is now another process prints
-  `{"lane":…,"stopped":false,"reason":"no live worker"}`. The JS signals any live pid in the
-  state. Extends PE-14. The lock is read as `Number(text.trim())`, as `start --detach` reads it;
-  an unreadable lock holds no pid. Residual: a worker killed with SIGKILL (or a host crash) leaves
-  its lock and its `running` state, which still match, so after pid reuse `stop` can still signal
-  an unrelated process group; and the check is advisory, not atomic with the signal. Full
-  identity (an OS lock held for the worker's lifetime) is post-S12 P1. Asserted by
-  `internal/worker` unit tests and the `worker` parity cases `stop/PE-23/no-lock` and `stop/PE-23/lock-of-another-pid`.
+- PE-23: `orch worker stop` signals only the runner that holds the lane: the kernel must report
+  a record lock on `<lane>.lock` (`F_GETLK`) whose holder is the state's `pid` (PE-14 still
+  applies to that pid). A running worker holds the lock for its whole run, and the kernel drops
+  it when the runner exits, SIGKILL and host crashes included, so a finished state, a killed
+  runner whose lock file and `running` state remain, a lock file naming the pid as text only, or
+  a lock held by another process prints `{"lane":…,"stopped":false,"reason":"no live worker"}`,
+  and a reused pid is never signalled. A lock that cannot be probed holds no pid. The JS signals
+  any live pid in the state. Extends PE-14. Residual: the microseconds between the probe and the
+  `kill`, in which the runner can exit and its pid be reused (pidfd is Linux-only; macOS has no
+  equivalent). The runner owns the lane, not its bridge's process group (contract C6): a runner
+  killed with SIGKILL frees the lane even if its bridge's group lives on, and `stop` then leaves
+  that group alone. Asserted by `internal/worker` unit tests (a helper process holding the lock:
+  its group is interrupted; killed holder, text-only lock and another holder: nothing is
+  signalled) and the `worker` parity cases `stop/PE-23/*`.
 - PE-24: when a run fails, `orch worker start` replaces token-shaped text
   (`\b(?:sk|rt|at|eyJ)[A-Za-z0-9._-]{20,}`, the incident log's `<token>` rule) with `<token>` in
   every string of the state's `errors`, at any depth (inside nested arrays and objects), and in
@@ -1266,39 +1308,347 @@ The other documented differences, each asserted by its own parity case:
   output; do not regenerate it from later JS. Hand-written unit tests and raw fixtures cover
   weekly-only, five-hour-only and swapped windows, routing, prompt, doctor, flip, budget reset
   and snapshot behavior. The parity reference and generated caches are unchanged.
+- PE-28: `orch worker start` (foreground) claims its lane with a kernel record lock on
+  `<lane>.lock` (`internal/ownlock`), held by the runner process for its whole run, and writes
+  its pid into the file as metadata only. A lane is locked only while a runner holds that lock: a
+  lock file left by a runner that died (SIGKILL or a host crash included) is reclaimed by the
+  next start, where the JS refuses any existing file until a person deletes it. Any other failure
+  to claim is still the lane-locked refusal, exit 3, as in the JS. The lock is released on every
+  path once claimed, before the final line; a failed release is reported on stderr as
+  `orch worker: releasing the lane lock: <error>` and does not change the exit code (the kernel
+  lock goes with the process anyway, and a left file is reclaimed). The refusal's hint is
+  `inspect worker status; the lane frees itself when its runner exits`; the JS's says to remove
+  the lock once the process is gone, and a lock file is never to be removed by hand (contract
+  C8): deleting a held one would let a second runner claim the lane. Two runners started on one
+  lane at once: exactly one runs, the other exits 3. Asserted by `internal/worker` helper-process
+  tests and the `worker` parity cases `start/locked/*` (hint rewritten for the comparison) and
+  `start/PE-28/stale-lock-is-reclaimed`.
+- PE-29: `orch worker start --detach` only probes the lane's lock (`F_GETLK`) and never touches
+  it: a lock a runner holds is the synchronous lane-locked refusal (exit 3, same JSON); a lock
+  file no process holds is left for the runner's own claim, where the JS unlinks it after reading
+  a dead pid, so two JS launchers could remove each other's fresh lock and leave two runners on
+  the lane. The probe is advisory (contract C9) and the runner's claim decides: when two
+  launchers both find the lane free, both print their launch and exit 0, and the runner that
+  loses writes the lane-locked refusal into its log and exits 3. The losing launch's `run_id` is
+  still sound for a caller waiting for the lane to be served, since the winning runner started
+  after the loser's probe. A lock path that is not a regular file fails the launch with the
+  probe's error (exit 1), where the JS fails reading it (EISDIR). Asserted by `internal/worker`
+  unit tests (a SIGKILLed holder's lane is reclaimed by a detached runner) and the `worker`
+  parity cases `detach/locked/*`.
+- PE-30: `orch supervisor` owns its project with a kernel record lock on `supervisor.lock`
+  (`internal/ownlock`), held by `serve` for its life and released when it stops; the pid in the
+  file is metadata only. Of any number of concurrent serves exactly one claims the project and
+  the others print `a supervisor already owns this project` (exit 1); the JS claims with an
+  exclusive create, else reads the pid and replaces a dead one's file by rename, so two
+  reclaimers could both win (sol-5 R2). Every reader asks the kernel (`F_GETLK`), never the file
+  or the liveness of the pid it names: `start` reports the kernel's holder as `already running`;
+  the tick's lane phase `stale_lock` needs a runner to hold `<lane>.lock`; the flip evaluation's
+  pending or never-started relaunch needs no runner to hold `workers/conductor.lock`; and
+  `remote apply`'s resume waits for a process to hold `supervisor.lock`. So a lock file no process
+  holds (a serve or runner killed with SIGKILL, or pid text a pre-S13 process left) is free: serve
+  and start claim it in place (it keeps its mode), a finished lane with such a lock file is
+  `finished`, not `stale_lock`, and it no longer blocks a conductor relaunch, where the JS treats
+  the file's presence (or, for the supervisor lock, a live pid in it) as held. A lock that cannot
+  be probed (not a regular file) is the error: `serve` and `start` exit 1 with `lock
+  "supervisor.lock" is not a regular file`, a tick records it as its `storage_error`, and `remote
+  apply` rejects the resume. `orch worker status`'s `lock_present` keeps its file-exists meaning
+  (contract C5). Asserted by `internal/supervisor` tests (helper-process serves: exactly one of
+  four concurrent claimers serves; a helper-held lock refuses serve and is reported by start;
+  pid-text lock files are claimed; a stale `conductor.lock` relaunches), `internal/remote/apply`
+  and `internal/cli` tests, and the `supervisor` parity cases `serve/PE-30-unheld-live-pid-lock`,
+  `serve/PE-30-unheld-lane-lock` and `start/PE-30-unheld-live-pid-lock` (the JS output pinned).
 
-Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
-events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure
-incident. Those `orch worker` mirrors: the usage line lists `codex|claude` only; `--effort` is passed to opencode-exec,
-where it becomes the prompt; a stale `last_state_write_error` stays after a later successful
-write; a stale foreground lock is never reclaimed (only `--detach` reclaims it); `start
---detach` reclaims a stale lock by reading it and then unlinking it, so a lock that another
-launcher's runner claims in between is removed too, leaving two runners on one lane;
-and the worker posts only `blocked` and `deferred` messages, never the `release` its header
+- PE-58: every child orch starts in a directory (`--cwd`, a lane's or supervisor's project
+  root, or a bridge's `cwd`) gets one `PWD` set to that directory, replacing any inherited or
+  explicit `PWD`. Relative directories resolve against the physical cwd; other environment
+  entries, including claude's removal of `CLAUDECODE`, are preserved. The JS left the parent's
+  `PWD`, so a supervisor started from another checkout made a `$PWD`-trusting CLI (OpenCode)
+  attach to that checkout. Asserted by `TestWithPWD`, `TestStartSetsPWDToDir`,
+  `TestDetachedSetsPWDToDir`, ci's `TestRunSetsPWDToDir`, and
+  `TestRunClaudeChildPWDIsTheProject`; the process tests observe non-shell children.
+
+- PE-32: flip state reads distinguish absence (ENOENT), a present JSON record (including
+  null and primitives), and `*flipcmd.StateError` (filesystem code or `INVALID_JSON`).
+  `decide` fails closed with `{"action":"gate","reason":"flip state unreadable: <code>; fix or remove .orchestrator/flip.json"}`,
+  exit 0 without routing. Gate, clear, pause, run, reply gate clearing and remote apply refuse
+  unreadable state and leave its bytes unchanged; the supervisor logs once and does not relaunch.
+  All writers use `Project.Update` on the separate, persistent `flip.json.lock` and atomically
+  replace the data with `WritePrivateFile`. Callback errors write nothing; `ErrNoUpdate` skips
+  a write successfully without masking lock-release errors. Callbacks neither
+  nest an Update nor launch children. Reply question matching and clearing happen in the same
+  transaction. An unreadable gate makes terminal reply exit 1 even if its note/ack was already
+  posted; a remote reply remains retryable and is finished without duplicating its note after
+  repair. Remote resume validates the gate under a transaction, starts/waits for the supervisor
+  outside it, then transactionally rechecks and clears that gate; a changed gate supersedes the
+  resume and a failed supervisor start leaves it set. Unit tests cover corrupt and mode-0000
+  state, exact decisions/exits, untouched bytes, serial gate/clear/pause helper processes and
+  `ownlock.Probe` at each launch boundary. Parity pins the frozen JS's fail-open behaviour and
+  masks only the writer's empty, unseeded transaction sidecar.
+- PE-33: `orch flip run --unless-gated` checks for `awaiting_human` inside its write transaction.
+  A gate returns `{"flipped":false,"reason":"awaiting human"}`, exit 1, without writing state,
+  a continue brief, the git exclude or a handoff, and without launching. All three supervisor
+  relaunch paths pass this flag, so a gate installed after the supervisor's snapshot survives.
+  Explicit human and kickoff runs keep clearing gates. A lane-locked launch adds its pending
+  record in a second Update against current state, preserving a gate installed during launch.
+  The fake launcher probes the sidecar without opening it and proves the lock is released.
+  The frozen JS ignores the flag and clears the gate; the parity case pins that old result.
+- PE-34: `gate` treats valid non-object JSON as an empty object rather than throwing when
+  assigning `awaiting_human`. The internal gate operation defaults a non-string reason to
+  `human approval required` and posts the usual `awaiting human: approval` handoff. CLI bare
+  reasons are refused first by PE-35. Unit tests pin the fallback and notification; primitive
+  parity cases pin the JS TypeErrors and assert the Go gate and handoff.
+- PE-35: a trailing bare `--active`, `--from`, `--reason`, `--question`, `--resume`, `--to` or
+  `--brief` prints `--<option> requires a value` (one stderr line), exits 2 and writes nothing.
+  The frozen JS's boolean-valued records, omitted bare-reason handoff and `--resume true`
+  launch remain pinned in the affected parity cases; they no longer reach the CLI's writers.
+- PE-36 (S13e, sol-5 R5): the supervisor never writes `workers/<lane>.json` or
+  `conductor.json`. Relaunch bookkeeping lives in `supervisor-state.json` as
+  `redispatch: {<run key>: {attempts, last_attempt_at, confirmed_run_id}}`, using the lane's
+  `run_id || "<pid>:<lane>"` as text; a pending launch records under the conductor slot key
+  (S13o v3 retired `pending:<at>` keys, PE-60). Entries with no current worker run or conductor
+  slot key are pruned after the lane loop, a leftover `pending:` key included. Legacy truthy `redispatched_at`
+  remains a read-only marker that the lane's restart or redispatch is done: it gates deferred-lane
+  redispatch and the conductor restart conditions (failed, deferred, interrupted, finished,
+  exited without a final status; PE-60) only, never a decided `flip`/`handback` or a paused-project relaunch (S13r). Fake launchers publish replacement final state before
+  returning; tests assert byte-identical lane files, including on the conductor path.
+- PE-37 (S13e, sol-5 R7, L24): an attempted launch records its outcome after the child returns
+  and before diagnostics. Success needs exit 0 and the last stdout JSON object to contain a
+  string `run_id` and numeric `runner_pid`; a conductor/pending answer additionally needs
+  `flipped: true` and those fields at the answer's top level (PE-63); its 400-unit `launcher`
+  quote is display text and is not parsed (S13r). Success confirms once.
+  An unconfirmed key retries after `min(60 s × 2^(attempts-1), 30 min)`; a worker-lane key
+  stops after five failures (conductor and pending keys then retry slowly, PE-60) with one
+  `blocked` note: `human` for conductor/pending keys, `coordinator` for other
+  lanes, with 500 UTF-16 units of the last output and a manual retry command. The decided
+  conductor path also retains its project-wide 600 s cooldown; never-started launches retain
+  their separate 120 s backoff. `flipped: false` with `pending: true` or `reason: "awaiting human"`
+  is not an attempt and stamps neither attempts nor `last_relaunch_at`. Fake clocks verify
+  60/120/240/480 s waits, recovery, confirmation, the stop, recipients and pruning. Parity
+  asserts affected launch records before comparing against the frozen JS's old behavior.
+  When the conductor value is absent, null or primitive, its slot key is `conductor:none`.
+  Pruning always retains the current conductor slot key, using the same read as flip
+  evaluation; an array is read as an empty object and keeps the normal object derivation.
+  The synthetic key is pruned on the next tick after a real conductor run is published.
+  S13p's kickoff gate refusal and S13q's launch-option carry-over remain open.
+- PE-38 (S13e, L21): a failed redispatch or blocked-note post adds one supervisor diagnostic
+  line and continues the tick; a failed diagnostic append is ignored because the attempt
+  is already in state. A normal relaunch-log error still fails that tick, with the in-memory
+  record persisted on the next successful state write. Unit tests cover both storage paths;
+  the frozen JS instead aborts on a redispatch post error.
+- PE-63 (S13r, E-L2): a `flip run` launch answer gains top-level `run_id` (string) and
+  `runner_pid` (number) after `launcher`, copied from the launcher's last stdout line when the
+  launcher exited 0 and that line is an object holding both; otherwise neither is added.
+  Pending, gated and failed answers are unchanged. The supervisor confirms a conductor or
+  pending launch from these fields alone, so a project root long enough to cut the 400-unit
+  `launcher` quote no longer counts a real launch as failed. The supervisor self-execs the same
+  binary, so it has no fallback to the nested quote. Parity: every successful `flip/run/launch`
+  case asserts the two fields on the orch side (matching the detach line in `launcher`), the
+  frozen JS answer without them as the old behaviour, then compares the rest; unit tests cover
+  a 600-character root.
+- PE-64 (S13r, E-N1): a failed deferred-lane redispatch attempt 1-4 posts the note subject
+  `<lane> re-dispatch failed (attempt <n> of 5)` with the same body (500 UTF-16 units of the
+  launcher's output); a confirmed redispatch keeps `<lane> re-dispatched after budget reset`, and
+  the fifth failure posts only the PE-37 `blocked` note. The frozen JS posted the success subject
+  whatever the launcher returned. No parity case launches a failing redispatch (the
+  `redispatch/deferred-due` case confirms and keeps the success subject); unit tests pin the
+  subjects.
+- PE-62 (S13q, L19): `orch worker start` records `launch_options` after `model` in the lane
+  state: each of `effort`, `timeout-min`, `agent`, `sandbox`, `permission-mode`,
+  `allowed-tools` and `max-turns` that was given (truthy), as its JS value, in that order; then,
+  for a `--root` lane whose child cwd is not its project root, `root` and `cwd` (both absolute).
+  `force`, `run-id`, `log-path` and `detach` belong to one run and are never recorded. A
+  budget-deferred lane's redispatch appends `--<key> <value>` for each entry, in key order, after
+  the brief, harness, lane, breadth, `--cwd <root>`, `--detach`, model and session it passed before,
+  so a `--root` lane is redispatched with `--root R --cwd C` (last wins). A worker state without an
+  object `launch_options` (written by an older `orch`) is redispatched as before. The frozen JS
+  dropped every other option. Parity: every worker start, detach and supervisor launch case that
+  writes a state pins its exact `launch_options` on the orch side (the frozen JS states have none)
+  before comparing the rest; `supervisor/serve/launch/redispatch/PE-62-replays-launch-options`
+  pins the replayed options in orch's claude argv and replacement state, and the PE-42 `--root`
+  cases pin `root`/`cwd`.
+- PE-49 (S13k, L15): `orch supervisor` with a command other than `start`, `serve`, `status`,
+  `stop` and `ack` prints `commands: start | serve | status | stop | ack --event ID` on stderr
+  and exits 2, as with no command; the frozen JS prints nothing and exits 0. Parity
+  `supervisor/usage/PE-49-unknown-command` pins the JS and asserts orch; a unit test covers it.
+- PE-50 (S13k, L17): the tick reads `supervisor.json` once; a value that is not an object or
+  array (`null`, a number, a string, a boolean) reads as `{}` (no wake channels, redispatch on,
+  home `opencode`) and the state records `config_error: "supervisor.json is not an object; read
+  as {}"`, removed by the first tick that reads an object or array. The frozen JS throws at the
+  first read of a `null` config (the deferred lane's `auto_redispatch_deferred`, an event's
+  wake or the flip evaluation's `home`), so the tick records only that `storage_error`. Parity
+  `supervisor/serve/hand-edited/PE-50-null-config-deferred-lane` pins the JS storage error and
+  asserts orch's note; unit tests cover `null`, `5`, `"x"` and `true`.
+- PE-51 (S13k, L18): a worker file holding a truthy primitive (`5`, `"x"`, `true`) skips its
+  lane only: its `state.lanes` entry becomes `{error: "worker file is not an object; lane
+  skipped", checked_at}` and the other lanes tick. The frozen JS throws `Cannot create property
+  'lane' on ...` and aborts every tick. Falsy and unparsable files are still skipped without an
+  entry change, and arrays read as `{}` (PE-16). Parity
+  `supervisor/serve/hand-edited/PE-51-primitive-worker-file`; a unit test.
+- PE-52 (S13k, L22, L23): each tick removes the `state.lanes` entries whose `workers/<lane>.json`
+  no longer exists (a lane with a falsy or unparsable file keeps its entry), and drops `null`
+  entries from `state.events` while pruning. The frozen JS keeps vanished lanes forever and
+  throws `Cannot read properties of null (reading 'created_at')` on a `null` event, recording
+  nothing but that `storage_error` until the entry is removed by hand. Parity
+  `supervisor/serve/hand-edited/PE-52-null-event` and `PE-52-vanished-lane`; the
+  `realistic-state-falsy-workers` case gives its seeded lanes falsy worker files so both runtimes
+  keep them; unit tests.
+- PE-59 (S13o, ee50690d D1b): a `state.lanes` entry whose phase is not `running` has
+  `next_check: null` and `next_check_at: null`, and an event emitted for it does not set them:
+  an ended lane has no check ahead, where the frozen JS showed a time that never comes. A
+  running lane is unchanged, including its mirrored freeze while a delivered reminder is
+  unacknowledged. Parity (`withPE59`, by side, on every serve outcome): for each lane entry the
+  run wrote (`checked_at` at or after the serve started) whose phase is not `running`, orch must
+  hold literal `null` in both fields or the case fails, and only the JS's epoch/ISO pair there is
+  rewritten to null; running and seeded entries and any other JS value are compared as written.
+  `TestPE59EndedLaneCheck` proves a numeric orch entry fails; unit tests pin the nulls across ticks.
+- PE-60 (S13o, ee50690d D1a/D1c, owner rules `5b18cc1c` and `779604e2`): an idle conductor is
+  restarted unless a gate (`awaiting_human`, unreadable flip state) or a pause (`decide` answering
+  `pause`) holds it. Beyond the JS's `failed`/`deferred`/`interrupted`/early `finished`, a lane
+  that `finished` after a bare `handoff` (reason suffix `(previous conductor handed off without
+  flip run, pause or gate)`) and a lane still saying `running`/`starting` whose runner is dead and
+  whose kernel lock is free (`(previous conductor exited without a final status)`) restart through
+  the same `decide` path; the frozen JS never restarts either. The first attempt of each restarted
+  run key posts one `note` to `human`, `<door> conductor relaunched by the supervisor: <cause>`,
+  naming the previous run, the outcome and `orch flip gate` (record `relaunch_noted`). After
+  five failures a conductor slot key (pending launches included) retries every 30 min indefinitely; its `blocked` note
+  repeats as `conductor relaunch still failing after <n> attempts` at most every 6 h
+  (`blocked_noted_at`, stamped even when the post fails). Worker lanes keep the PE-37 stop. A
+  conductor launch confirmed by its launcher whose runner never published a lane (the slot still
+  shows the confirmed key, idle and unlocked, 600 s after the attempt) loses its confirmation and
+  counts as a failed attempt (D1d). Conductor launches have one owner, the flip evaluation: the
+  lane loop never re-dispatches the `conductor` lane, so a deferred conductor resumes through
+  `flip run` (its gate, pause and launch-time gate recheck; the saved, continue or kickoff brief
+  and `--resume <session>` on the same door) instead of `worker start` with the lane's own brief,
+  which the frozen JS uses. Retries belong to the conductor slot key, pending launches included,
+  because `flip run` replaces `flip.json` (dropping `paused` and `pending_launch`) before it
+  launches. A slot record with attempts and no confirmation is itself a restart cause,
+  `(previous supervisor launch did not start)`, so the slot's door is retried after the writer
+  cleared what triggered it; without such a record an empty slot launches nothing. Parity:
+  `flip/handed-off` runs in the cooldown, where neither side launches;
+  `launch/conductor/finished-early-resume` asserts and removes orch's note before comparing; the
+  pending cases assert the slot key. Unit tests in `relaunch_test.go` and
+  `relaunch_lifecycle_test.go` (full `Tick` with the real `flipcmd.Project.Run` writer and a fake
+  launcher) cover the schedules on a fake clock.
+- PE-61 (S13p, plan 1.7 D2): kickoff's preflight stops when its `flip gate --clear --no-relaunch`
+  is refused. It carries on when the clear exits 0, or exits 2 (not a project) while the root
+  still has no `.orchestrator/` directory, as in a first kickoff. Any other answer (exit 1, as
+  for an unreadable `flip.json` since PE-32, another code, or no status) prints
+  `kickoff: the human gate could not be cleared: <first non-empty line of the clear's stderr,
+  else stdout>; nothing was launched` on stderr and exits 1 before `supervisor start`, the
+  exclude, the brief, the both-red pause or any launch, for usable-vendor and both-red runs
+  alike; dry runs never clear. The frozen JS discards the clear's result and goes on. Kickoff
+  still discards `policy unattended`'s result, as the JS does. Parity: `kickoff/PE-61/*` asserts
+  orch alone (exit 1, the line, project files as seeded) and pins the JS's old behaviour: a
+  corrupt `flip.json` with a usable door is rewritten to `{}` and the preflight runs on; a
+  `flip.json` directory with both vendors red ends at `the pause was not recorded` with the
+  brief saved (formerly `both-red/pause-fails`).
+- PE-39: `orch supervisor ack` requires a truthy own key in the state's `events`.
+  Inherited Object.prototype names (`constructor`, `toString`, `__proto__`, ...) now
+  print `unknown event id` and exit 1 without changing receipts; the frozen JS accepts
+  them. Explicit own event keys still work, including the existing safe `__proto__`
+  assignment semantics: it adds no ack key unless that key already exists in the acks
+  object. The entire acks read-modify-write uses `ownlock.Transaction` on the persistent
+  `supervisor-acks.json.lock`, never on the data file. Concurrent goroutines and processes
+  retain all receipts; the tick still reads the atomically replaced data file without a
+  lock. Asserted by `TestAck`, `TestAckConcurrentGoroutines` (16 writers),
+  `TestAckConcurrentProcesses` (two helpers, FIFO data-read barrier and kernel holder
+  observation), and parity `ack/PE-39-own-events-only`.
+
+- PE-40 (S13g, sol-5 R14): PATH search attempts execution of each candidate, rather than
+  selecting the first file with execute permission. A script whose `#!` interpreter is missing
+  no longer hides a later working executable. `Start`, `Detached` and `RunSync` continue on
+  ENOENT, ENOTDIR and EACCES; if none starts, EACCES wins when encountered, otherwise ENOENT.
+  Errors other than ENOENT, ENOTDIR and EACCES stop the search (for example ELOOP), unlike
+  the old Go pre-check which skipped stat failures such as a symlink loop; ENOEXEC already
+  stopped after the old pre-check passed. A child that starts is never retried, even when it
+  exits nonzero. Names containing `/` remain single candidates with their original
+  error spelling. This corrects Go's search to match Node/libuv, not a latent JS defect or a
+  divergence from the frozen JS oracle. Asserted by `internal/procs`'s `TestPATH*` tests,
+  including missing-interpreter fallback at all three entry points, error precedence,
+  non-retry after exit 7, intact pipes and before/after fd counts on darwin and Linux.
+
+- PE-41 (S13h, incident 9a191c0fe00d): all project-root selection uses
+  `paths.ProjectRoot`: resolve absolutely and clean lexically, then truncate at the first
+  exact `.orchestrator` component. Running from `<project>/.orchestrator/briefs` therefore
+  reads/writes `<project>/.orchestrator`, not nested state. Explicit `--cwd`, `--root`,
+  mailbox's `ORCHESTRATOR_PROJECT`, session hook cwd, incident request project and routing's
+  project policy use the same rule. No symlink resolution, other ancestor search, migration
+  or deletion is performed; ordinary prompt/schema/manifest input and output file paths
+  retain their cwd-relative semantics. Bridge children receive the resolved project cwd,
+  with the existing child `PWD` rule unchanged. Every affected parity group (usage, mailbox,
+  manifest, incident, policy, bridges, worker, flip, supervisor, watch, kickoff, session)
+  pins the frozen JS's nested-state behaviour and asserts Go's corrected result, including
+  ignoring a stale nested flip gate. The latent nesting defect is no longer mirrored.
+
+- PE-42 (S13i, 8cecd17d): `claude-exec`, `codex-exec` and `opencode-exec` accept
+  `--artifact-root DIR` and `ORCH_ARTIFACT_ROOT` (flag wins; default is cwd), normalized by
+  `paths.ProjectRoot`. The child cwd and result's `cwd` stay unchanged. Run records go to
+  that root's `.orchestrator/runs` and include `artifact_root` only when different from cwd;
+  refusal, usage-limit, failure and tool-host incidents identify the artifact project. Incidents
+  remain in the user-wide incident log, and the detached post-run usage refresh remains
+  user-wide, not a second project write. Plugin delegation forwards the session root for a
+  different child cwd. `worker start|status|stop --root DIR` explicitly selects the owning
+  project for lane state, locks, logs and run records. With `--root`, the child's `--cwd`
+  defaults to the project root; otherwise it resolves independently, and differing roots
+  generate the bridge's `--artifact-root`. Detached runners receive absolute `--root` and
+  `--cwd` selectors while their process runs in the owning project. Without `--root` (or
+  with `--root ""`), legacy project selection, bridge argv and `.orchestrator` normalization
+  are unchanged; a bare `--root` is the same error as bare `--cwd`. Plugin `worker_start`
+  supplies `--root <session project>` for a different child cwd; `worker_status` still inspects
+  its cwd project. `--artifact-root`, `ORCH_ARTIFACT_ROOT`, `--root` and `--cwd` resolve against
+  the invoking process's directory; pass absolute paths. Frozen JS ignores the new bridge
+  environment variable and has no worker `--root`; bridges/worker parity pins these differences.
+- PE-43 (S13i, 31e490b1): `manifest verify` exits 1 on a missing manifest with
+  `manifest not found: <abs>; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)`.
+  The plugin preserves this diagnostic and accepts absolute manifest paths; verify source files
+  from the checkout the manifest describes (`--root` in the CLI, `cwd` in the plugin).
+  Manifest input paths retain their process-cwd-relative semantics; `--root` selects source
+  files, not the manifest's directory. Malformed JSON, permissions, directories and absent
+  arguments keep their distinct errors. Frozen JS reports a generic ENOENT instead.
+- PE-44 (S13j, P6 soak 593b0b34/2370ffed, L1): bridge error events reach `errors`. codex-exec
+  collects a top-level `{"type":"error","message":...}` (the message, else the event as JSON)
+  and logs `[codex] error: <message>`; it does not change `ok`, as codex also reports stream
+  retries this way. opencode-exec collects `{"type":"error",...}` as `error.data.message ||
+  error.message || JSON.stringify(error || event)` and logs `[opencode] error: <message>`; the
+  shape is opencode 2.0.32's `run --format json` failure report (`{type, timestamp, sessionID,
+  error: {type: "unknown", message}}`, read from the installed bundle; `data.message` covers a
+  session error object). A non-zero exit then adds the stderr tail only when no error event
+  arrived. A ChatGPT usage limit is filed kind `limit` with its text, not `crash` with
+  `opencode bridge failed: `. The JS ignored both events. Parity: `bridges/codex/PE-44/*` and
+  `bridges/opencode/PE-44/PE-47/*` pin the JS and rewrite orch's differing text; the top-level
+  error left `codex/events/odd-shapes`.
+- PE-45 (S13j, Q-S13-5): a failed run that the bridge itself stopped at its `--timeout-min` cap
+  is filed kind `timeout` with summary `<harness> bridge timed out after <n> min` (`n` is
+  `Number(--timeout-min || default)`), not kind `crash`; the result, run record and the
+  incident's detail are unchanged. A run that ends at the same time for another reason is still
+  filed as the cap. Parity: the `PE-9/PE-45/timeout-*` cases of all three bridges.
+- PE-46 (S13j, L2/L3/L6): `opencode-exec --help` prints its help and exits 0 without running
+  anything; `--effort X` is read as a value and ignored, because `opencode run` has no effort
+  option (its `--variant` is model-specific), and `orch worker` passes `--effort` to every
+  harness. The JS ignored `--help` and ran opencode with `X` as the prompt. Parity:
+  `bridges/opencode/PE-46/*` and `worker/start/opencode/PE-46/effort-is-not-the-prompt`; the
+  worker's PE-13 unread-prompt case keeps the JS pinned with a 100 KiB brief, under Linux's
+  128 KiB limit on one argument, because orch's opencode-exec now reads the prompt.
+- PE-47 (S13j, L4): opencode-exec's failure incident records `context.model` from `--model`
+  (or `null` without it); its result still has no `model` key. The JS always recorded `null`.
+- PE-48 (S13j, L5): `orch worker`'s usage line names `--harness codex|claude|opencode`; the JS
+  listed `codex|claude` though it accepts opencode. Parity: the worker `usage/*` cases and
+  `detach/detach-as-a-value` rewrite this text only.
+- PE-65 (S13j amended, plan go-s13s 3.4, D3): opencode-exec stops opencode with SIGINT: at the
+  `--timeout-min` cap, after a crash in its line handler, and in place of a SIGTERM it forwards
+  (SIGINT stays SIGINT). Evidence: a SIGTERM left the session running in `opencode serve
+  --service` for 8 and 13 minutes while the supervisor had already relaunched a second conductor;
+  SIGINT (`orch worker stop`) interrupted it at once, 3 times out of 3. claude-exec and
+  codex-exec keep SIGTERM. Not visible in parity (the fake dies of either);
+  `TestBridgeStopSignals` traps INT and TERM separately.
+
+Latent JS defects `orch worker` mirrors on purpose: a stale `last_state_write_error` stays after a later successful
+write; and the worker posts only `blocked` and `deferred` messages, never the `release` its header
 comment mentions (the agent posts its own). These are to be fixed in Go (S13 plan)
 (Q-S6-6).
 
-Those `orch flip` mirrors: the script's header comment lists only decide, run and status;
-`gate` dies on a `flip.json` holding a number, string or `true` where `pause` and `run` tolerate
-it; a bare `--reason` on `gate` posts no human message (the gate is then invisible in the
-mailbox, Q-S7-5); a bare `--active`, `--from`, `--reason`, `--question` or `--resume` writes
-`true` into `flip.json` and the mailbox, and `run` passes `--resume true` to the conductor
-(Q-S7-4). These are to be fixed in Go (S13 plan). (`run` and kickoff dying of ENOTDIR in
-a git worktree or submodule, Q-S7-2, is fixed: Sol R13.)
-
-Those `orch supervisor` mirrors (S8a part): any command other than `start`, `serve`, `status`,
-`stop` and `ack` prints nothing and exits 0; `ack` accepts Object.prototype names
-(`constructor`, `toString`, `__proto__`, ...) as event ids that exist in every state; and the
-tick (run by `serve`) keeps the JS order and partial writes: a `null`
-`supervisor.json` throws at its first config read only; a primitive worker file aborts every
-tick; a redispatch drops every option but brief, harness, lane, breadth, model and session,
-writes the old worker state after the launch (over the new runner's first state) and aborts the
-tick when its note cannot be posted; a lane entry of a vanished worker is never removed; a
-`null` entry in the state's `events` makes every tick throw `Cannot read properties of null
-(reading 'created_at')` while pruning, so the supervisor records nothing but that
-`storage_error` until the entry is removed by hand. The flip evaluation (S8b) relaunches a
-`pending_launch` at every evaluation (once a minute) without a cooldown while `flip run` fails
-before clearing it. These are to be fixed in Go (S13 plan, Q-S8-3).
+Those `orch supervisor` mirrors (S8a part): the tick (run by `serve`) keeps the JS order and
+partial writes. This is to be fixed in Go (S13 plan, Q-S8-3).
 
 Those `orch doctor` mirrors: the JS row texts (`claude login` has no detail, `codex login` prints
 the whole trimmed output, the anthropic row is OK either way); a registry read failure worded as
@@ -1319,11 +1669,12 @@ Those `orch kickoff` mirrors (plan go-s9 3.4, incidents recorded, to be fixed in
 with `TypeError: Cannot read properties of undefined (reading 'overall')` after the preflight (with
 `--dry-run`, which skips the preflight, before any write). The formerly mirrored both-red
 supervisor-start defect is fixed: kickoff preflights and records a pause naming its saved brief,
-or exits 1 if either step fails. One divergence is not mirrored: when `orch`
+or exits 1 if either step fails. The ignored gate clear is fixed too (PE-61). One divergence is not mirrored: when `orch`
 cannot find its own executable (`os.Executable()` fails), each self-exec has no status and no
-output, so orch prints an empty `supervisor: ` line (and, headless, an empty answer and exit 1)
-where the JS, whose `spawnSync` result would then hold `null` output, dies of a `TypeError` on
-`.trim()`.
+output, so the gate clear counts as refused (PE-61): orch prints `kickoff: the human gate could
+not be cleared: <the os.Executable error>; nothing was launched` and exits 1 before any
+supervisor line, exclude, brief, pause or launch, where the JS, whose `spawnSync` result would
+then hold `null` output, dies of a `TypeError` on `.trim()`.
 
 `ORCH_JS=/path/to/orchestrator ./parity/run.sh` compares against another JS tree, and
 `ORCH_JS_REF=<commit-ish> ./parity/run.sh` against `orchestrator/` at another commit.

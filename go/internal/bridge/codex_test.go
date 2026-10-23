@@ -166,8 +166,13 @@ func TestCodexEvents(t *testing.T) {
 		args                                      []string
 	}{
 		{name: "unparsable lines, primitives and other types are skipped",
-			input:    "not json\n5\n\"s\"\n[1]\ntrue\n{}\n" + `{"type":"turn.started"}` + "\n" + `{"type":"error","message":"top-level errors are ignored"}` + "\n" + `{"type":"item.completed","item":5}` + "\n" + `{"type":"item.completed"}` + "\n" + item(`"type":"todo_list"`),
+			input:    "not json\n5\n\"s\"\n[1]\ntrue\n{}\n" + `{"type":"turn.started"}` + "\n" + `{"type":"item.completed","item":5}` + "\n" + `{"type":"item.completed"}` + "\n" + item(`"type":"todo_list"`),
 			wantJSON: head + empty},
+		// PE-44: the JS ignored top-level error events.
+		{name: "top-level errors push their message, else the event, and leave ok alone",
+			input:    `{"type":"turn.completed","usage":null}` + "\n" + `{"type":"error","message":"You've hit your usage limit."}` + "\n" + `{"type":"error"}` + "\n",
+			wantLog:  "[codex] error: You've hit your usage limit.\n[codex] error: {\"type\":\"error\"}\n",
+			wantJSON: `{"ok":true,"harness":"codex","thread_id":null,"model":"gpt-6.1-sol","effort":"high","sandbox":"workspace-write","cwd":"/w","started_at":"t","final_message":"","usage":null,"files_changed":[],"commands":[],"errors":["You've hit your usage limit.","{\"type\":\"error\"}"]}`},
 		{name: "null event", input: `{"type":"thread.started","thread_id":"t1"}` + "\nnull\n" + item(`"type":"error","message":"late"`),
 			wantLog: "[codex] thread t1\n", wantCrash: "TypeError: Cannot read properties of null (reading 'type')"},
 		{name: "thread.started replaces a resume id", args: []string{"--resume", "r"}, input: `{"type":"thread.started","thread_id":"t1"}` + "\n",
@@ -246,7 +251,7 @@ func closeCodex(t *testing.T, input string, exitCode any, stderr string) *codexR
 	t.Helper()
 	events, _ := replayCodex(t, input)
 	events.handleClose(exitCode, []byte(stderr), 1500*time.Millisecond)
-	events.result.flagToolHostOutage()
+	events.result.flagToolHostOutage(events.result.cwd)
 	return events.result
 }
 

@@ -302,8 +302,8 @@ func TestClaudeEventsAfterCrashAreDropped(t *testing.T) {
 	if log != "" {
 		t.Errorf("log after crash: %q", log)
 	}
-	if events.logIfRunning("timeout; killing") {
-		t.Error("timeout logged after the crash")
+	if events.stopAtTimeout("timeout; killing") || events.stoppedAtTimeout() {
+		t.Error("timeout logged or marked after the crash")
 	}
 }
 

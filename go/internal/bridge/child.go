@@ -41,6 +41,8 @@ type jsThread struct {
 	crash   error
 	crashed chan struct{} // closed when crash is set
 	closed  bool          // the child has closed; the timeout no longer fires
+	// timedOut is set once the bridge's own --timeout-min cap has stopped the child (PE-45).
+	timedOut bool
 }
 
 func newJSThread(log *logger, handler eventHandler) *jsThread {
@@ -60,19 +62,28 @@ func (t *jsThread) handleLine(line string) {
 	}
 }
 
-// logIfRunning reports whether the child is still running in the JS's view (it has not closed
-// and the JS has not crashed; the JS clears its timer on close) and, if so, writes line as a
-// progress line; an empty line writes nothing.
-func (t *jsThread) logIfRunning(line string) bool {
+// stopAtTimeout is the timeout firing: it reports whether the child is still running in the
+// JS's view (it has not closed and the JS has not crashed; the JS clears its timer on close)
+// and, if so, marks the run timed out and writes line as a progress line; an empty line writes
+// nothing.
+func (t *jsThread) stopAtTimeout(line string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed || t.crash != nil {
 		return false
 	}
+	t.timedOut = true
 	if line != "" {
 		t.log.printf("%s", line)
 	}
 	return true
+}
+
+// stoppedAtTimeout reports whether the bridge's own cap stopped the child.
+func (t *jsThread) stoppedAtTimeout() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.timedOut
 }
 
 // close is the child's "close" event. It returns the crash the JS died of earlier, or the
@@ -103,17 +114,29 @@ type childRun struct {
 	dir   string
 	env   []string  // nil: the environment is inherited whole
 	stdin io.Reader // nil: /dev/null
-	// timeout is the setTimeout delay after which the child is sent SIGTERM, once; timeoutLog
-	// is the progress line logged first ("" logs nothing).
+	// timeout is the setTimeout delay after which the child is sent stopSignal, once;
+	// timeoutLog is the progress line logged first ("" logs nothing).
 	timeout    time.Duration
 	timeoutLog string
+	// stopSignal is how orch stops the child: at the timeout, after a crash, and in place of a
+	// SIGTERM it forwards. The zero value is SIGTERM; opencode is stopped with SIGINT, because
+	// SIGTERM leaves its service session running (PE-65).
+	stopSignal syscall.Signal
 	started    time.Time // the JS `started`, from which duration_ms is measured
 }
 
-// run runs the child to completion: it forwards SIGTERM and SIGINT to the child (PE-11), sends
-// SIGTERM once the timeout passes, and on exit runs the close handler. An error is a crash: an
-// argv element Node's spawn rejects, a spawn failure, or a TypeError the JS would have died of
-// in its line handler (the child is then sent SIGTERM).
+// stopWith is the signal that stops the child.
+func (c childRun) stopWith() syscall.Signal {
+	if c.stopSignal == 0 {
+		return syscall.SIGTERM
+	}
+	return c.stopSignal
+}
+
+// run runs the child to completion: it forwards SIGTERM (as stopSignal) and SIGINT to the child
+// (PE-11, PE-65), sends stopSignal once the timeout passes, and on exit runs the close handler.
+// An error is a crash: an argv element Node's spawn rejects, a spawn failure, or a TypeError the
+// JS would have died of in its line handler (the child is then sent stopSignal).
 //
 // The child runs in a process group of its own, so each of those signals, the SIGKILL after
 // them and the final kill once the child has exited reach the tools it started (PE-22). The JS
@@ -143,10 +166,10 @@ func (c childRun) run(thread *jsThread) error {
 		return &jsError{class: "Error", message: err.Error()}
 	}
 	closed := make(chan struct{})
-	go forwardSignals(child, signals, thread.crashed, closed)
+	go forwardSignals(child, c.stopWith(), signals, thread.crashed, closed)
 	timer := time.AfterFunc(c.timeout, func() {
-		if thread.logIfRunning(c.timeoutLog) {
-			child.Signal(syscall.SIGTERM)
+		if thread.stopAtTimeout(c.timeoutLog) {
+			child.Signal(c.stopWith())
 		}
 	})
 	code, waitErr := child.Wait()
@@ -159,15 +182,18 @@ func (c childRun) run(thread *jsThread) error {
 	return thread.close(code, waitErr, stderr.Bytes(), time.Since(c.started))
 }
 
-// forwardSignals relays the signals orch receives to the child, and stops the child once the
-// JS would have crashed, until the child has closed.
-func forwardSignals(child *procs.Child, signals <-chan os.Signal, crashed <-chan struct{}, closed <-chan struct{}) {
+// forwardSignals relays the signals orch receives to the child, a SIGTERM as stop, and stops the
+// child with stop once the JS would have crashed, until the child has closed.
+func forwardSignals(child *procs.Child, stop syscall.Signal, signals <-chan os.Signal, crashed <-chan struct{}, closed <-chan struct{}) {
 	for {
 		select {
 		case sig := <-signals:
+			if sig == syscall.SIGTERM {
+				sig = stop
+			}
 			child.Signal(sig.(syscall.Signal))
 		case <-crashed:
-			child.Signal(syscall.SIGTERM)
+			child.Signal(stop)
 			crashed = nil
 		case <-closed:
 			return

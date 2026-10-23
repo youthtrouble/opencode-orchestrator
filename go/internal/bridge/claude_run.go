@@ -20,8 +20,8 @@ import (
 // RunClaude is `orch claude-exec [args]`: it runs `claude -p` on the prompt and prints one JSON
 // result, exactly as bin/claude-exec.mjs does, step for step, and returns the exit code: 0 ok,
 // 1 failed or crashed, 2 no prompt, 75 budget red (refused, or the run hit a usage limit).
-// The differences are the documented exceptions PE-8 to PE-12 and the crash output (only the
-// error line of an exception the JS leaves uncaught).
+// The differences are the documented exceptions PE-8 to PE-12 and PE-45 and the crash output
+// (only the error line of an exception the JS leaves uncaught).
 func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	parsed, positional := cliargs.ParseArgs(args, claudeValueKeys, claudeFlagKeys)
 	opts := options(parsed)
@@ -34,12 +34,16 @@ func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err.Error())
 		return exitPrompt
 	}
-	cwd, err := resolvePath(opts.Or("cwd", "."))
+	cwd, err := resolveProjectRoot(opts.Or("cwd", "."))
 	if err != nil {
 		return crash(stderr, err)
 	}
 	model := opts.Or("model", defaultClaudeModel)
-	timeout := timeoutDelay(opts.JS("timeout-min"), 60)
+	root, err := artifactRoot(opts, cwd)
+	if err != nil {
+		return crash(stderr, err)
+	}
+	timeout := timeoutDelay(opts.JS("timeout-min"), defaultClaudeTimeoutMins)
 	log := &logger{w: stderr, prefix: "[claude] ", quiet: parsed.IsFlag("quiet")}
 
 	cfg, err := usageConfig()
@@ -51,7 +55,7 @@ func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return crash(stderr, err)
 	}
 	if !decision.Allowed {
-		return refuse(stdout, stderr, &decision, cwd, "claude-exec")
+		return refuse(stdout, stderr, &decision, root, "claude-exec")
 	}
 
 	argv, err := claudeArgv(opts, model, prompt)
@@ -61,11 +65,12 @@ func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	started := time.Now()
 	log.printf("%s", startLine(opts, model, cwd))
 	result := newClaudeResult(opts, model, cwd, jsjson.ISOString(started))
-	run := &claudeRun{events: newClaudeEvents(log, result), cwd: cwd, prompt: prompt, started: started}
+	run := &claudeRun{events: newClaudeEvents(log, result), cwd: cwd, artifactRoot: root, prompt: prompt, started: started, timeoutMinutes: timeoutMinutes(opts.JS("timeout-min"), defaultClaudeTimeoutMins)}
 	if err := run.execute(argv, timeout); err != nil {
 		return crash(stderr, err)
 	}
-	if run.hitUsageLimit() {
+	// A run the cap stopped is a timeout even after a limit message (PE-45).
+	if run.hitUsageLimit() && !run.events.stoppedAtTimeout() {
 		return run.finishOnUsageLimit(cfg, stdout, stderr)
 	}
 	return run.finish(stdout, stderr)
@@ -73,10 +78,13 @@ func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 
 // claudeRun is one claude child and what is known about it.
 type claudeRun struct {
-	events  *claudeEvents
-	cwd     string
-	prompt  string
-	started time.Time
+	events       *claudeEvents
+	cwd          string
+	artifactRoot string
+	prompt       string
+	started      time.Time
+	// timeoutMinutes is the --timeout-min cap the run is stopped at.
+	timeoutMinutes float64
 }
 
 // execute runs claude to completion (l.53-78), with CLAUDECODE removed from its environment
@@ -116,14 +124,17 @@ func (r *claudeRun) finishOnUsageLimit(cfg usage.Config, stdout, stderr io.Write
 	context := jsjson.NewObject()
 	context.Set("model", jsjson.Path(result, "model"))
 	context.Set("resets_at", or(jsjson.Path(result, "resets_at"), nil))
-	recordIncident(incident.Draft{Component: "bridge", Kind: "limit", Summary: "claude run ended on a session-limit message", Context: context, Project: r.cwd})
+	recordIncident(incident.Draft{Component: "bridge", Kind: "limit", Summary: "claude run ended on a session-limit message", Context: context, Project: text(or(r.artifactRoot, r.cwd))})
 	return printResult(stdout, stderr, result, exitBudgetRed)
 }
 
 // finish is l.86-91: the run record, the post-run usage refresh, which orch does not wait for
 // (PE-12), the "done" line, an incident for a failed run, then the result.
 func (r *claudeRun) finish(stdout, stderr io.Writer) int {
-	return finishedRun{log: r.events.log, cwd: r.cwd, prompt: r.prompt, afterRecord: startUsageRefresh, doneLine: claudeDoneLine}.report(stdout, stderr, r.events.result)
+	return finishedRun{
+		log: r.events.log, cwd: r.cwd, artifactRoot: r.artifactRoot, prompt: r.prompt, afterRecord: startUsageRefresh, doneLine: claudeDoneLine,
+		timedOut: r.events.stoppedAtTimeout(), timeoutMinutes: r.timeoutMinutes,
+	}.report(stdout, stderr, r.events.result)
 }
 
 // claudeDoneLine is the "done" line (l.88).

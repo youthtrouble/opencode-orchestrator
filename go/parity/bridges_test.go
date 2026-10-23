@@ -20,6 +20,48 @@ const claudeFixtures = "../testdata/claude/stream-json"
 // testBridges compares each `orch <bridge>-exec` with bin/<bridge>-exec.mjs, with the scripted
 // fake standing in for the CLI (see parity/fakes).
 func (h *harness) testBridges(t *testing.T) {
+	h.testNestedProjectRoot(t, "bridges")
+	t.Run("PE-42-artifact-root", func(t *testing.T) {
+		for _, b := range []bridge{claudeBridge, codexBridge, opencodeBridge} {
+			t.Run(b.name, func(t *testing.T) {
+				// The frozen JS ignores this environment variable and writes in child.
+				inv := h.bridgeInvocation(t, b, bridgeCase{args: []string{"--cwd", "child", "--prompt", "bounded", "--force"}, script: map[string]string{"exit": "0\n", "jsonl": ""}})
+				inv.seed = seeds(inv.seed, seedProjectDir("child"))
+				inv.env = append(inv.env, "ORCH_ARTIFACT_ROOT=$PROJECT/.orchestrator/reports")
+				for _, runtime := range []string{"js", "orch"} {
+					sb := h.newSandbox(t)
+					inv.seed(t, sb)
+					argv := inv.orch
+					if runtime == "js" {
+						argv = inv.js
+					}
+					o := h.run(t, sb, argv, inv.stdin, inv.env)
+					// Without completion events claude/codex report failure even at exit 0;
+					// all three still write a record, which is the behaviour under test.
+					wantCode := 1
+					if b.name == "opencode" {
+						wantCode = 0
+					}
+					if o.exitCode != wantCode {
+						t.Fatalf("%s exit %d: %s", runtime, o.exitCode, o.stderr)
+					}
+					root := sb.project
+					if runtime == "js" {
+						root = filepath.Join(root, "child")
+					}
+					files, err := filepath.Glob(filepath.Join(root, ".orchestrator", "runs", "*.json"))
+					if err != nil || len(files) != 1 {
+						t.Fatalf("%s records %v, %v", runtime, files, err)
+					}
+					if runtime == "orch" {
+						if _, err := os.Stat(filepath.Join(sb.project, "child", ".orchestrator")); !os.IsNotExist(err) {
+							t.Fatalf("child artifacts: %v", err)
+						}
+					}
+				}
+			})
+		}
+	})
 	t.Run("claude", h.testClaudeExec)
 	t.Run("codex", h.testCodexExec)
 	t.Run("opencode", h.testOpencodeExec)
@@ -88,6 +130,49 @@ type bridgeCase struct {
 	dropFakeLogs bool
 	// help marks the --help case, whose JS header is compared as orch help (PE-19).
 	help bool
+	// exception asserts a documented difference (invocation.exception).
+	exception func(t *testing.T, js, orch *outcome)
+}
+
+// rewriteException is a parity exception that changes text only: pairs are (orch text, JS
+// text) in order. Each orch text must occur in orch's outcome (stdout, stderr or a file), where
+// it is replaced by the JS text; the comparison that follows proves the JS outcome holds the
+// JS text there and that nothing else differs.
+func rewriteException(pe string, pairs ...string) func(t *testing.T, js, orch *outcome) {
+	return func(t *testing.T, js, orch *outcome) {
+		t.Helper()
+		for i := 0; i+1 < len(pairs); i += 2 {
+			newText, oldText := pairs[i], pairs[i+1]
+			found := strings.Contains(orch.stdout, newText) || strings.Contains(orch.stderr, newText)
+			orch.stdout = strings.ReplaceAll(orch.stdout, newText, oldText)
+			orch.stderr = strings.ReplaceAll(orch.stderr, newText, oldText)
+			for name, content := range orch.files {
+				found = found || strings.Contains(content, newText)
+				orch.files[name] = strings.ReplaceAll(content, newText, oldText)
+			}
+			if !found {
+				t.Errorf("%s not observed: orch lacks %q", pe, newText)
+			}
+		}
+		// A rewritten kind or summary changes the incident's fingerprint: take the JS's.
+		const incidents = "state/incidents.jsonl"
+		jsFPs := incidentFingerprint.FindAllString(js.files[incidents], -1)
+		if content, ok := orch.files[incidents]; ok && len(jsFPs) == len(incidentFingerprint.FindAllString(content, -1)) {
+			i := 0
+			orch.files[incidents] = incidentFingerprint.ReplaceAllStringFunc(content, func(string) string { i++; return jsFPs[i-1] })
+		}
+	}
+}
+
+// incidentFingerprint is an incident's fp, which hashes its kind and summary.
+var incidentFingerprint = regexp.MustCompile(`"fp":"[0-9a-f]{12}"`)
+
+// pe45Timeout is PE-45 for a run the bridge stopped at its --timeout-min cap of minutes: orch
+// files kind timeout with its own summary where the JS filed a crash summarizing errs.
+func pe45Timeout(harness, minutes, errs string) func(t *testing.T, js, orch *outcome) {
+	return rewriteException("PE-45",
+		`"kind":"timeout","summary":"`+harness+` bridge timed out after `+minutes+` min"`,
+		`"kind":"crash","summary":"`+harness+` bridge failed: `+errs+`"`)
 }
 
 // Fresh values, rewritten only in their exact place and format.
@@ -180,6 +265,7 @@ func (h *harness) bridgeInvocation(t *testing.T, b bridge, c bridgeCase) invocat
 		projectPaths:    true,
 		normalizeWrites: b.normalizeRunFileNames(c.dropFakeLogs),
 		jsHelp:          c.help,
+		exception:       c.exception,
 	}
 }
 
@@ -347,8 +433,10 @@ func (h *harness) testClaudeExec(t *testing.T) {
 		{name: "end/killed-by-signal", args: ok, fixture: "ok", script: map[string]string{"signal": "TERM\n"}},
 		{name: "end/stderr-tail", args: ok, script: map[string]string{"stderr": "\u00a0first\nsecond\r\nthird\n\nfifth \n\t\n", "exit": "2\n"}},
 		{name: "end/no-output", args: ok, script: map[string]string{"exit": "0\n"}},
-		{name: "PE-9/timeout-0", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
-		{name: "PE-9/timeout-negative-warns-in-node", args: []string{"--timeout-min", "-1", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
+		{name: "PE-9/PE-45/timeout-0", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings,
+			exception: pe45Timeout("claude", "0", "claude exited null: ")},
+		{name: "PE-9/PE-45/timeout-negative-warns-in-node", args: []string{"--timeout-min", "-1", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings,
+			exception: pe45Timeout("claude", "-1", "claude exited null: ")},
 		{name: "end/limit-in-errors-is-a-limit-incident", args: ok, script: map[string]string{"jsonl": `{"type":"result","is_error":true,"subtype":"rate_limited"}` + "\n", "exit": "1\n"}},
 
 		// A trailing value key without a value is the JS value true.

@@ -12,12 +12,15 @@ import (
 )
 
 var (
-	claudeValueKeys = []string{"model", "effort", "permission-mode", "allowed-tools", "disallowed-tools", "max-turns", "max-budget-usd", "cwd", "resume", "agent", "append-system-prompt", "json-schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
+	claudeValueKeys = []string{"model", "effort", "permission-mode", "allowed-tools", "disallowed-tools", "max-turns", "max-budget-usd", "cwd", "artifact-root", "resume", "agent", "append-system-prompt", "json-schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
 	claudeFlagKeys  = []string{"force", "quiet", "help"}
 )
 
-// defaultClaudeModel is the model when --model is not given.
-const defaultClaudeModel = "claude-opus-5-5"
+// Defaults of claude-exec.mjs: the model when --model is not given, and the --timeout-min cap.
+const (
+	defaultClaudeModel       = "claude-opus-5-5"
+	defaultClaudeTimeoutMins = 60
+)
 
 // claudeArgv is the argv claude-exec.mjs passes to claude (l.38-49). Node's spawn coerces the
 // value true to "true". --json-schema passes the schema file's contents; --add-dir an absolute

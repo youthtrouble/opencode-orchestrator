@@ -10,11 +10,22 @@
 #                  after about 10 s, so a failed test leaves no process behind)
 #   FAKE_HOLD      set: wait about 10 s with no trap set, so a SIGINT or SIGTERM that reaches
 #                  it at any point from its exec on kills it
+#   FAKE_GATE      set: print "gate" on stderr, hold the FIFO $FAKE_LOG/go open, write
+#                  "started" to the FIFO $FAKE_LOG/started, then wait for a line on go (the
+#                  tests' pipe handshake); no trap, so the SIGTERM its runner forwards ends it
+#                  wherever it blocks
 #   FAKE_STDERR    printed on stderr, then FAKE_STDOUT on stdout
 #   FAKE_EXIT      exit code (default 0)
 log=$FAKE_LOG
 for arg in "$@"; do printf '%s\n' "$arg" >> "$log/argv"; done
 if [ -z "$FAKE_NO_STDIN" ]; then cat > "$log/stdin"; fi
+if [ -n "$FAKE_GATE" ]; then
+  echo gate >&2
+  exec 3<> "$log/go"
+  echo started > "$log/started"
+  read -r _ <&3
+  exec 3<&-
+fi
 if [ -n "$FAKE_WAIT" ]; then
   trap 'echo "bridge TERM" >> "$log/signals"' TERM
   trap 'echo "bridge INT" >> "$log/signals"' INT

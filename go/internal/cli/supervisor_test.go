@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestSupervisorDispatch(t *testing.T) {
 		stdout, stderr string
 	}{
 		{"no command is the usage line", nil, false, 2, "", "commands: start | serve | status | stop | ack --event ID\n"},
-		{"an unknown command prints nothing", []string{"foo"}, false, 0, "", ""},
+		{"PE-49: an unknown command is the usage line", []string{"foo"}, false, 2, "", "commands: start | serve | status | stop | ack --event ID\n"},
 		{"status of a fresh project", []string{"status"}, true, 0, "{\n  \"status\": \"not_started\"\n}\n", ""},
 		{"ack without an event", []string{"ack"}, true, 1, "", "unknown event id\n"},
 		{"status outside a project", []string{"status"}, false, 2, "", notAProject},
@@ -69,19 +70,12 @@ func TestSupervisorStopAndAckCrashLines(t *testing.T) {
 	}
 }
 
-// A lock held by a live process (this test's) makes serve refuse and start report it; neither
-// launches or ticks anything.
+// A lock held by a live process (a helper holding its kernel lock, CA2) makes serve refuse and
+// start report the holder; neither launches or ticks anything.
 func TestSupervisorServeAndStartOverALiveLock(t *testing.T) {
 	root := t.TempDir()
-	dir := filepath.Join(root, ".orchestrator")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	pid := strconv.Itoa(os.Getpid())
-	lock := filepath.Join(dir, "supervisor.lock")
-	if err := os.WriteFile(lock, []byte(pid+"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	lock := filepath.Join(root, ".orchestrator", "supervisor.lock")
+	pid := strconv.Itoa(holdLock(t, lock))
 	code, stdout, stderr := run(t, Supervisor, []string{"serve", "--cwd", root}, "")
 	if code != 1 || stdout != "" || stderr != "a supervisor already owns this project\n" {
 		t.Errorf("serve: code %d, stdout %q, stderr %q", code, stdout, stderr)
@@ -90,7 +84,7 @@ func TestSupervisorServeAndStartOverALiveLock(t *testing.T) {
 	if want := `{"started":false,"reason":"already running","pid":` + pid + "}\n"; code != 0 || stdout != want {
 		t.Errorf("start: code %d, stdout %q, want %q", code, stdout, want)
 	}
-	if data, _ := os.ReadFile(lock); string(data) != pid+"\n" {
+	if data, _ := os.ReadFile(lock); string(data) != pid {
 		t.Errorf("lock rewritten: %q", data)
 	}
 }
@@ -115,5 +109,15 @@ func TestSupervisorServeStopsBeforeTheFirstTick(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".orchestrator", "supervisor.lock")); !os.IsNotExist(err) {
 		t.Errorf("lock left: %v", err)
+	}
+}
+
+// serve's dependencies are all wired: a nil one panics only in the tick that first needs it.
+func TestSupervisorDepsAreAllWired(t *testing.T) {
+	deps := reflect.ValueOf(supervisorDeps(t.TempDir(), "/bin/orch"))
+	for i := range deps.NumField() {
+		if field := deps.Field(i); field.Kind() == reflect.Func && field.IsNil() {
+			t.Errorf("supervisor.Deps.%s is nil", deps.Type().Field(i).Name)
+		}
 	}
 }

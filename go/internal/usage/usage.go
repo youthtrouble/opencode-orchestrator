@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/policy"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/registry"
@@ -324,7 +323,7 @@ func creditsPolicy(cfg Config, reg *jsjson.Object) (routing.CreditsPolicy, error
 	if root == "" {
 		root = "."
 	}
-	root, err := nodefs.Resolve(root)
+	root, err := paths.ProjectRoot(root)
 	if err != nil {
 		return routing.CreditsPolicy{}, err
 	}

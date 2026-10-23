@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/proctest"
 )
 
 // opts builds the parsed options of a command line: "--key value" pairs, a "--key" followed
@@ -60,7 +62,7 @@ func newFakeRun(t *testing.T, env map[string]string) *fakeRun {
 	f := &fakeRun{log: t.TempDir(), notified: make(chan chan<- os.Signal, 1)}
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("FAKE_LOG", f.log)
-	for _, key := range []string{"FAKE_NO_STDIN", "FAKE_WAIT", "FAKE_HOLD", "FAKE_STDERR", "FAKE_STDOUT", "FAKE_EXIT"} {
+	for _, key := range []string{"FAKE_NO_STDIN", "FAKE_WAIT", "FAKE_HOLD", "FAKE_GATE", "FAKE_STDERR", "FAKE_STDOUT", "FAKE_EXIT"} {
 		t.Setenv(key, env[key])
 	}
 	return f
@@ -146,6 +148,40 @@ func TestBridgeArgsPassTheOptionsAsTheJSDoes(t *testing.T) {
 	}
 }
 
+func TestBridgeArgsKeepLaneProjectSeparateFromChildCWD(t *testing.T) {
+	p := testProject(t, "brief")
+	child := filepath.Join(p.Root, "child")
+	l, err := p.PrepareStart(opts("--brief", "b.md", "--harness", "codex", "--root", p.Root, "--cwd", child))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"codex-exec", "--cwd", child, "--timeout-min", "120", "--artifact-root", p.Root, "--sandbox", "workspace-write"}
+	if got := l.bridgeArgs(); !slices.Equal(got, want) {
+		t.Fatalf("bridge args %q; want %q", got, want)
+	}
+	if l.project.Root != p.Root || l.brief != filepath.Join(p.Root, "b.md") {
+		t.Fatal("child cwd changed the lane or brief project")
+	}
+}
+
+func TestPrepareStartDefaultsChildCWDToProjectRoot(t *testing.T) {
+	p := testProject(t, "brief")
+	for _, args := range [][]string{
+		{"--cwd", filepath.Join(p.Root, ".orchestrator", "briefs")},
+		{"--root", p.Root},
+		{"--root", p.Root, "--cwd", ""},
+		{"--root", "", "--cwd", filepath.Join(p.Root, ".orchestrator")},
+	} {
+		l, err := p.PrepareStart(opts(append([]string{"--brief", "b.md", "--harness", "codex"}, args...)...))
+		if err != nil || l.cwd != p.Root {
+			t.Fatalf("%q: launch %v, error %v", args, l, err)
+		}
+		if slices.Contains(l.bridgeArgs(), "--artifact-root") {
+			t.Fatalf("%q: unexpected artifact flag: %q", args, l.bridgeArgs())
+		}
+	}
+}
+
 func TestPrepareStartValidatesInTheJSOrder(t *testing.T) {
 	p := testProject(t, "brief")
 	writeFile(t, filepath.Join(p.Root, "b.txt"), "x")
@@ -216,10 +252,11 @@ func TestForegroundFinishedRun(t *testing.T) {
   "started_at": "2026-10-19T12:00:01.000Z",
   "log_path": null,
   "model": null,
-  "updated_at": "2026-10-19T12:00:07.000Z",
+  "launch_options": {},
+  "updated_at": <time>,
   "state_storage": "available",
   "worker_pid": <pid>,
-  "last_progress_at": "2026-10-19T12:00:05.000Z",
+  "last_progress_at": <time>,
   "last_tool": "Read",
   "exit_code": 0,
   "result_summary": "done",
@@ -231,8 +268,16 @@ func TestForegroundFinishedRun(t *testing.T) {
   "permission_denials": 2
 }
 `
-	if got := stateFile(t, p, "b"); got != want {
+	// How many reads the bridge's stderr arrives in is the pipe's choice, and each read is a
+	// progress publish that takes a clock tick (TestRelayTicksOncePerChunk), so the two
+	// times are checked for their order rather than their tick.
+	state := stateFile(t, p, "b")
+	if got := chunkTimes.ReplaceAllString(state, `"$1": <time>`); got != want {
 		t.Errorf("state file\n%s\nwant\n%s", got, want)
+	}
+	started, progress, updated := stateTime(t, state, "started_at"), stateTime(t, state, "last_progress_at"), stateTime(t, state, "updated_at")
+	if !started.Before(progress) || !progress.Before(updated) {
+		t.Errorf("started_at %v, last_progress_at %v, updated_at %v: want them in that order", started, progress, updated)
 	}
 	if got, want := f.logged(t, "argv"), "claude-exec\n--cwd\n"+p.Root+"\n--timeout-min\n120\n--permission-mode\nauto\n"; got != want {
 		t.Errorf("bridge argv %q, want %q", got, want)
@@ -269,6 +314,7 @@ func TestForegroundStateKeyOrderPerBranch(t *testing.T) {
   "started_at": "2026-10-19T12:00:01.000Z",
   "log_path": null,
   "model": null,
+  "launch_options": {},
   "updated_at": "2026-10-19T12:00:04.000Z",
   "state_storage": "available",
   "worker_pid": <pid>,
@@ -366,6 +412,53 @@ func TestRelayAppliesTheJSRulesPerChunk(t *testing.T) {
 			}
 			if got, _ := r.state.Fields.Get("last_tool"); got != tc.wantTool {
 				t.Errorf("last_tool = %v, want %v", got, tc.wantTool)
+			}
+		})
+	}
+}
+
+// chunkTimes are the state times that depend on how many reads the bridge's stderr took.
+var chunkTimes = regexp.MustCompile(`"(updated_at|last_progress_at)": "[^"]*"`)
+
+// stateTime parses the ISO time key holds in a state file as stateFile reads it.
+func stateTime(t *testing.T, state, key string) time.Time {
+	t.Helper()
+	value, _ := jsjson.Path(parse(t, strings.Replace(state, `"worker_pid": <pid>`, `"worker_pid": 0`, 1)), key).(string)
+	at, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		t.Fatalf("%s %q: %v", key, value, err)
+	}
+	return at
+}
+
+// The same stderr relayed as one chunk or as two: the output, session and tool agree, and
+// each chunk takes one more clock tick and one more publish.
+func TestRelayTicksOncePerChunk(t *testing.T) {
+	const session = "[claude] session 0123abcd-0000-4000-8000-0123456789ab model=m\n"
+	const tool = "[claude] tool: Read x\n"
+	for _, tc := range []struct {
+		name                  string
+		chunks                []string
+		wantProgress, wantUpd string
+	}{
+		// session publish, progress publish
+		{"one chunk", []string{session + tool}, "2026-10-19T12:00:01.000Z", "2026-10-19T12:00:02.000Z"},
+		// session publish, progress publish, then a second progress publish
+		{"two chunks", []string{session, tool}, "2026-10-19T12:00:02.000Z", "2026-10-19T12:00:03.000Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, out, _ := relayRun(t)
+			relayChunks(r, tc.chunks...)
+			if out.String() != session+tool {
+				t.Errorf("relayed %q", out.String())
+			}
+			for key, want := range map[string]any{
+				"session_id": "0123abcd-0000-4000-8000-0123456789ab", "last_tool": "Read",
+				"last_progress_at": tc.wantProgress, "updated_at": tc.wantUpd,
+			} {
+				if got, _ := r.state.Fields.Get(key); got != want {
+					t.Errorf("%s = %v, want %v", key, got, want)
+				}
 			}
 		})
 	}
@@ -789,13 +882,13 @@ func TestUnreadableBriefClaimsNothing(t *testing.T) {
 	})
 	t.Run("a locked lane", func(t *testing.T) {
 		p := directoryBrief(t)
-		writeFile(t, p.LockPath("d"), "1")
+		holder := strconv.Itoa(holdLock(t, p.LockPath("d"), false).pid())
 		f := newFakeRun(t, nil)
 		code, err := startForeground(t, p, f, "--brief", "d.md", "--harness", "claude")
 		if code != 1 || err == nil || err.Error() != eisdir || f.stderr.String() != "" {
 			t.Errorf("Foreground = %d, %v, stderr %q; want EISDIR before the lane-locked refusal", code, err, f.stderr.String())
 		}
-		if got := readText(t, p.LockPath("d")); got != "1" {
+		if got := readText(t, p.LockPath("d")); got != holder {
 			t.Errorf("the lock was changed to %q", got)
 		}
 	})
@@ -815,29 +908,126 @@ func TestUnreadPromptIsNotAnError(t *testing.T) {
 	requireNoLock(t, p, "b")
 }
 
+// PE-28: a lane is locked while a runner holds its kernel lock, here a helper process; the
+// hint no longer tells anyone to remove the lock.
 func TestLockedLaneIsRefused(t *testing.T) {
 	p := testProject(t, "brief")
-	writeFile(t, p.LockPath("b"), "1")
+	holder := strconv.Itoa(holdLock(t, p.LockPath("b"), false).pid())
 	writeFile(t, p.StatePath("b"), `{"pid":"x","status":"running","extra":1}`)
 	f := newFakeRun(t, nil)
 	code, err := startForeground(t, p, f, "--brief", "b.md", "--harness", "claude")
 	if err != nil || code != ExitLaneLocked {
 		t.Fatalf("Foreground = %d, %v", code, err)
 	}
-	want := `{"error":"lane locked","lane":"b","previous":{"status":"running","pid":"x","alive":false},"hint":"inspect worker state; remove the lock only after confirming the process is gone"}` + "\n"
+	want := `{"error":"lane locked","lane":"b","previous":{"status":"running","pid":"x","alive":false},"hint":"inspect worker status; the lane frees itself when its runner exits"}` + "\n"
 	if f.stderr.String() != want || f.stdout.String() != "" {
 		t.Errorf("stderr %q, stdout %q", f.stderr.String(), f.stdout.String())
 	}
-	if got := readText(t, p.LockPath("b")); got != "1" {
+	if got := readText(t, p.LockPath("b")); got != holder {
 		t.Errorf("the lock was changed to %q", got)
 	}
+}
+
+// L8, PE-28: the lock file a runner killed with SIGKILL leaves is held by no one, so the next
+// foreground start reclaims it, runs, and removes it.
+func TestForegroundReclaimsAKilledRunnersLock(t *testing.T) {
+	for _, stale := range []string{"killed holder", "1", "abc", ""} {
+		t.Run(stale, func(t *testing.T) {
+			p := testProject(t, "brief")
+			if stale == "killed holder" {
+				holdLock(t, p.LockPath("b"), false).killHard(t)
+			} else {
+				writeFile(t, p.LockPath("b"), stale)
+			}
+			f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+			code, err := startForeground(t, p, f, "--brief", "b.md", "--harness", "claude")
+			if err != nil || code != 0 {
+				t.Fatalf("Foreground = %d, %v; stderr %q", code, err, f.stderr.String())
+			}
+			if got := stateFile(t, p, "b"); !strings.Contains(got, `"status": "finished"`) {
+				t.Errorf("state:\n%s", got)
+			}
+			requireNoLock(t, p, "b")
+		})
+	}
+}
+
+// R2: two runners started on one lane at once, each a helper process: exactly one claims the
+// lane and runs its bridge, the other refuses with exit 3. The winner's bridge waits on a FIFO
+// until the loser has exited, so the two claims overlap whatever the scheduling.
+func TestOneRunnerPerLane(t *testing.T) {
+	p := testProject(t, "brief")
+	f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+	gatedBridge(t, f)
+	env := []string{"WORKER_BRIDGE=" + bridgeScript(t)}
+	args := []string{"worker", "start", "--brief", "b.md", "--harness", "claude", "--cwd", p.Root}
+	runners := []*helper{startHelper(t, "run", false, env, args...), startHelper(t, "run", false, env, args...)}
+	var loser, winner *helper
+	select {
+	case <-runners[0].done:
+		loser, winner = runners[0], runners[1]
+	case <-runners[1].done:
+		loser, winner = runners[1], runners[0]
+	case <-time.After(10 * time.Second):
+		t.Fatal("neither runner refused the lane")
+	}
+	if status := loser.waitExit(t); status.ExitStatus() != ExitLaneLocked || !strings.Contains(loser.stderr.String(), `"error":"lane locked"`) {
+		t.Fatalf("loser %d ended with %v, stderr %q; want the lane-locked refusal", loser.pid(), status, loser.stderr.String())
+	}
+	awaitBridgeStart(t, f)
+	if got := stateFile(t, p, "b"); !strings.Contains(got, `"pid": `+strconv.Itoa(winner.pid())+`,`) || !strings.Contains(got, `"status": "running"`) {
+		t.Errorf("state while the winner runs:\n%s", got)
+	}
+	openGate(t, f)
+	if status := winner.waitExit(t); status.ExitStatus() != 0 {
+		t.Fatalf("winner %d ended with %v; stderr %q", winner.pid(), status, winner.stderr.String())
+	}
+	if got := readText(t, filepath.Join(f.log, "argv")); strings.Count(got, "claude-exec\n") != 1 {
+		t.Errorf("bridges started:\n%s", got)
+	}
+	requireNoLock(t, p, "b")
+}
+
+// A gated run whose test fails before the started handshake leaves no fake bridge behind: the
+// subtest ends with its bridge blocked on the started FIFO, which has no reader, and its
+// cleanup stops the runner, which forwards SIGTERM to the bridge's group and reaps it.
+func TestGatedRunCleanupEndsABlockedBridge(t *testing.T) {
+	p := testProject(t, "brief")
+	f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+	var runner *helper
+	t.Run("fails before the handshake", func(t *testing.T) {
+		gatedBridge(t, f)
+		runner = startHelper(t, "run", false, []string{"WORKER_BRIDGE=" + bridgeScript(t)},
+			"worker", "start", "--brief", "b.md", "--harness", "claude", "--cwd", p.Root)
+		runner.expectLine(t, "gate") // relayed from the bridge, which then opens the FIFOs
+	})
+	select {
+	case <-runner.done:
+	default:
+		t.Fatal("the runner outlived its test's cleanup")
+	}
+	if status := runner.cmd.ProcessState.Sys().(syscall.WaitStatus); status.Signaled() || status.ExitStatus() != 1 {
+		t.Errorf("runner ended with %v, want exit 1 after handling SIGTERM; stderr %q", status, runner.stderr.String())
+	}
+	state := readText(t, p.StatePath("b"))
+	bridge, ok := jsjson.Path(parse(t, state), "worker_pid").(float64)
+	if !ok {
+		t.Fatalf("state names no bridge:\n%s", state)
+	}
+	if gone, err := proctest.Gone(int(bridge)); err != nil || !gone {
+		t.Errorf("bridge %v is still running (%v)", bridge, err)
+	}
+	if !strings.Contains(state, `"status": "failed"`) || !strings.Contains(state, `"exit_code": null`) {
+		t.Errorf("state, want a bridge ended by the signal:\n%s", state)
+	}
+	requireNoLock(t, p, "b")
 }
 
 // PE-21: a run makes workers/ owner-only before it claims the lock, not only when it publishes
 // the state. A held lane stops the run between the two, so Publish cannot have done it.
 func TestForegroundMakesWorkersOwnerOnlyBeforeTheLock(t *testing.T) {
 	p := testProject(t, "brief")
-	writeFile(t, p.LockPath("b"), "1")
+	holdLock(t, p.LockPath("b"), false)
 	if err := os.Chmod(p.WorkersDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -882,5 +1072,56 @@ func TestRunIsSafeUnderConcurrentEvents(t *testing.T) {
 	}
 	if got := stateFile(t, p, "b"); !strings.Contains(got, `"status": "interrupted"`) {
 		t.Errorf("state:\n%s", got)
+	}
+}
+
+// launchOptionsJSON is the launch_options a foreground start records in its state file.
+func launchOptionsJSON(t *testing.T, p Project, lane string) string {
+	t.Helper()
+	state, err := jsjson.Unmarshal([]byte(readText(t, p.StatePath(lane))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := jsjson.Marshal(jsjson.Path(state, "launch_options"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(options)
+}
+
+func TestStateRecordsReplayedLaunchOptionsOnly(t *testing.T) {
+	p := testProject(t, "brief")
+	f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+	code, err := startForeground(t, p, f, "--brief", "b.md", "--harness", "claude", "--effort", "high", "--timeout-min", "30",
+		"--agent", "conductor", "--permission-mode", "auto", "--force", "--run-id", "r", "--log-path", "/l", "--max-turns", "")
+	if err != nil || code != 0 {
+		t.Fatalf("Foreground = %d, %v", code, err)
+	}
+	if got, want := launchOptionsJSON(t, p, "b"), `{"effort":"high","timeout-min":"30","agent":"conductor","permission-mode":"auto"}`; got != want {
+		t.Errorf("launch_options %s, want %s", got, want)
+	}
+}
+
+func TestStateRecordsRootAndCwdOnlyForAChildCwd(t *testing.T) {
+	p := testProject(t, "brief")
+	child := filepath.Join(p.Root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--root", p.Root, "--cwd", child}, `{"sandbox":"read-only","root":"` + p.Root + `","cwd":"` + child + `"}`},
+		{[]string{"--root", p.Root}, `{"sandbox":"read-only"}`},
+		{[]string{"--cwd", p.Root}, `{"sandbox":"read-only"}`},
+	} {
+		f := newFakeRun(t, map[string]string{"FAKE_STDOUT": okResult})
+		if code, err := startForeground(t, p, f, append([]string{"--brief", "b.md", "--harness", "codex", "--sandbox", "read-only"}, tc.args...)...); err != nil || code != 0 {
+			t.Fatalf("%q: Foreground = %d, %v", tc.args, code, err)
+		}
+		if got := launchOptionsJSON(t, p, "b"); got != tc.want {
+			t.Errorf("%q: launch_options %s, want %s", tc.args, got, tc.want)
+		}
 	}
 }

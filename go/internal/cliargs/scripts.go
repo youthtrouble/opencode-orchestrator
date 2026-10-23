@@ -2,8 +2,9 @@ package cliargs
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 )
 
 // MailboxArgs is what the argv loop of bin/mailbox.mjs produces.
@@ -30,14 +31,13 @@ func ParseMailbox(argv []string) MailboxArgs {
 	return args
 }
 
-// ProjectRoot mirrors `path.resolve(opts.root || process.env.ORCHESTRATOR_PROJECT || process.cwd())`.
+// ProjectRoot selects --root, ORCHESTRATOR_PROJECT, then cwd, and resolves the project (PE-41).
 func (a MailboxArgs) ProjectRoot(getenv func(string) string) (string, error) {
 	root := a.Values["root"]
 	if root == "" {
 		root = getenv("ORCHESTRATOR_PROJECT")
 	}
-	// filepath.Abs("") is the working directory, which is the last fallback.
-	return filepath.Abs(root)
+	return paths.ProjectRoot(root)
 }
 
 // IncidentArgs is what the argv loop of bin/incident.mjs produces.

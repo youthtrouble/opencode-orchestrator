@@ -164,6 +164,12 @@ type invocation struct {
 	// jsHelp marks a case whose JS stdout is a bridge's --help header, compared as orch help
 	// (PE-19, jsHelpAsOrch).
 	jsHelp bool
+	// launchOptions, when set, is the case's PE-62 launch_options (compact JSON) that comparePair
+	// asserts on orch's worker states before comparing the rest (withPE62).
+	launchOptions string
+	// exception, when set, asserts a documented difference and takes it out of orch's outcome
+	// before comparePair compares the rest (see rewriteException).
+	exception func(t *testing.T, js, orch *outcome)
 }
 
 // crashClass names how a case that ends in an uncaught JS exception is compared (plan
@@ -203,6 +209,12 @@ func (h *harness) comparePair(t *testing.T, inv invocation) {
 			t.Error(err)
 		}
 		js.stderr, orch.stderr = "", ""
+	}
+	if inv.launchOptions != "" {
+		withPE62(t, &js, &orch, inv.launchOptions)
+	}
+	if inv.exception != nil {
+		inv.exception(t, &js, &orch)
 	}
 	compareOutcomes(t, js, orch)
 }

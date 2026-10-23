@@ -135,6 +135,10 @@ Replying to the question a gate is waiting on clears it too. Details are in
 `orch` is the orchestrator's command-line tool, installed to `~/.local/bin` (put that directory on
 your `PATH`). Run these from inside your project.
 
+Running from `.orchestrator/` or any directory below it targets the project above the first
+exact `.orchestrator` path component, including with `--cwd`, `--root` or mailbox's
+`ORCHESTRATOR_PROJECT`. Other subdirectories are not searched upward for a project.
+
 | You want to | Command |
 |---|---|
 | Start a run (picks the door by budget) | `orch kickoff --brief .orchestrator/briefs/<name>.md [--headless] [--unattended]` |
@@ -197,8 +201,12 @@ budgets: if its own vendor is red it flips to the other door; the away door hand
 relaunches it at the first reset.
 
 **Background runs.** A headless conductor runs as the worker lane `conductor`. Each lane has a
-two-hour limit by default; when one ends early or fails, the supervisor relaunches the conductor,
-which resumes from `STATE.md`. Background processes are kept awake with `caffeinate` (macOS) or
+two-hour limit by default; when one ends for any reason (early, failed, after a bare handoff, or
+killed before it recorded a final status), the supervisor relaunches the conductor, which resumes
+from `STATE.md`, and tells you once in the mailbox. Only a gate or a budget pause stops this. A lane has one runner at a time: the runner holds a kernel lock on
+`.orchestrator/workers/<lane>.lock` while it runs, and `orch worker stop` signals only that holder.
+A lock file left by a runner that crashed is reclaimed by the next start; never delete one by
+hand. Background processes are kept awake with `caffeinate` (macOS) or
 `systemd-inhibit` (Linux); a closed laptop lid still sleeps unless you run in clamshell mode with
 power and an external display.
 
@@ -256,6 +264,27 @@ pause is not recorded, it exits 1 instead, since nothing would relaunch.
 
 ### 3. While it runs
 
+**Delegating into nested repositories.** The plugin delegate tool keeps run artifacts in the
+session project even when its `cwd` selects a child repository. For direct bridge calls, use
+`orch codex-exec --cwd /parent/child --artifact-root /parent` (also supported by `claude-exec`
+and `opencode-exec`), or set `ORCH_ARTIFACT_ROOT=/parent`; the flag wins. The child still runs
+in its selected cwd, while run records go to `/parent/.orchestrator/runs`. Artifact roots
+inside `.orchestrator/` resolve to the owning project, just like other project roots.
+For workers, `orch worker start --root /parent --cwd /parent/child --brief
+.orchestrator/briefs/b.md --harness codex [--detach]` keeps lane state, locks, logs and run
+records in the parent while the child runs in the nested repository. `worker status|stop
+--root /parent` inspects that project's lanes. Without `--root`, `--cwd` still selects the
+owning project as before; the plugin's `worker_start` supplies the session root when needed.
+`--artifact-root`, `ORCH_ARTIFACT_ROOT`, `--root` and `--cwd` resolve against the invoking
+process's directory; pass absolute paths.
+
+**Reviewing across worktrees.** Manifests live in the checkout that created them, not necessarily
+the checkout being reviewed. Pass an absolute manifest path and select the described source
+checkout with `--root`: `orch manifest verify /main/.orchestrator/manifests/task.json --root
+/worktree`. The plugin's `manifest_verify` likewise accepts an absolute manifest path and a
+`cwd` for the source checkout. A missing manifest reports its absolute path and this remedy;
+malformed or unreadable manifests remain errors, not source mismatches.
+
 **Answering questions.** A background conductor asks through the mailbox (see
 [the mailbox](#how-do-i) above). Run these in the project directory:
 
@@ -275,6 +304,32 @@ Answer its question with `orch mailbox reply <id> "..."`, or do the thing it ask
 within a minute (it must be running: `orch supervisor status`); a flip queued before the gate is kept
 and starts instead. `orch flip run --to <door>` and
 `orch kickoff` also clear the gate and start a conductor at once.
+
+Automatic supervisor restarts use `orch flip run --to <door> --unless-gated`: if a human gate is
+set when the command checks it, it exits 1 with `{"flipped":false,"reason":"awaiting human"}`,
+leaves flip state unchanged and launches no worker. An explicit `flip run` without that flag
+and a real kickoff still intentionally clear a readable gate.
+
+**Corrupt or unreadable flip.json.** `orch flip decide --active <door>` answers `gate` with
+`flip state unreadable: <code>; fix or remove .orchestrator/flip.json` (exit 0), and the supervisor
+logs the problem once and does not relaunch. `flip gate`, `gate --clear`, `pause` and `run`
+refuse with exit 1 and leave the file unchanged. `mailbox reply` also exits 1 when it cannot
+check the gate, but its reply note and acknowledgement may already have been recorded; inspect
+the mailbox before sending the same answer again.
+
+Repair the JSON or restore read access to `.orchestrator/flip.json`, or remove that data file.
+Removing it also drops any gate it held: if that gate must remain, stop supervision before
+removal and re-gate with `orch flip gate --active <door> --reason "..."` (and `--question <id>`
+if needed) before restarting supervision.
+Do not remove `flip.json.lock`. Kickoff is not a repair command: when its gate clear is refused
+(unreadable flip state, or the clear crashed), it prints
+`kickoff: the human gate could not be cleared: <reason>; nothing was launched` and exits 1
+before it starts the supervisor, writes a brief, pauses or launches anything. Repair the state,
+then run kickoff again.
+
+**Flip option values.** A trailing bare `--active`, `--from`, `--reason`, `--question`, `--resume`,
+`--to` or `--brief` is a one-line usage error (exit 2, no writes or mailbox post). Supply the
+value, for example `orch flip gate --reason "paused by me"`.
 
 **Restarting or moving the conductor.** `orch flip run --to claude` (or `--to opencode`) writes a
 continue brief and starts that door's conductor in the background. If a conductor is still running,
@@ -312,6 +367,7 @@ gate and keeps working with you.
 | `policy.json` | This project's autonomy overrides (`orch policy set release=auto`) |
 | `supervisor.json` | Optional wake channels for the supervisor |
 | `sessions/` | One heartbeat per conductor door (`orch session show`): what it is doing and when it last moved. Claude conductors write it through hooks, opencode conductors through the plugin |
+| `activity/opencode/` | One small file per running opencode plugin instance (`<pid>-<hex>.json`): when any session of this project, subagents included, last showed activity, and how many tool calls other than `subagent` are in flight. It holds timestamps and counts only, never prompts, paths, tool inputs or session ids, and the plugin removes its own file when it unloads |
 
 `.orchestrator/` is private: kickoff keeps it out of Git through the repository's `info/exclude`.
 Run records, lane and supervisor state, `flip.json`, generated briefs and new
@@ -347,7 +403,11 @@ in live testing (probably upstream), so use `ORCH_BIN`. Details and accepted por
 
 - `orch doctor` checks binaries, logins, usage feeds, routing, config, plugin, agents and tests.
 - `orch incident report` groups orchestrator defects (misroutes, bridge crashes, flips, your
-  corrections) recorded locally and redacted. Nothing is uploaded.
+  corrections) recorded locally and redacted. Nothing is uploaded. A bridge run that hit a
+  provider usage limit is kind `limit` with the provider's text; one the bridge stopped at its
+  `--timeout-min` cap is kind `timeout` (`<harness> bridge timed out after <n> min`), not a crash.
+  The opencode bridge stops opencode with SIGINT (cap or a forwarded SIGTERM), because SIGTERM
+  leaves its service session running.
 - `/audit-orchestrator` in opencode re-verifies model ids, limits and CLI flags against official
   sources, updates `models.json` and reruns the tests. `/retro` reviews recent runs.
 - Update: see [Updating](#updating).
@@ -356,6 +416,9 @@ in live testing (probably upstream), so use `ORCH_BIN`. Details and accepted por
   `orch supervisor stop`, ...) outside the project. `cd` into it, or pass `--cwd <project dir>`
   (`--root` for `orch mailbox`). Likewise `no message with id <id> in <dir>/.orchestrator/mailbox`
   usually means the id belongs to another project.
+- *A lane or OpenCode session opened in another project.* A supervisor started by an orch
+  older than 0.6.0 passes its own `PWD` to children: restart it from the project directory
+  (`orch supervisor stop` then `orch supervisor start`, there or with `--cwd <project dir>`).
 
 ## Updating
 

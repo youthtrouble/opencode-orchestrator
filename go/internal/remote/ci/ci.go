@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/snapshot"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 )
@@ -163,9 +164,13 @@ const githubHost = "GH_HOST=github.com"
 // run runs name with args in dir and returns its stdout. The command gets its own process
 // group, and a timeout kills the whole group, so a child it started cannot outlive it.
 func run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	env, err := procs.WithPWD(append(os.Environ(), githubHost), dir)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), githubHost) // git ignores GH_HOST
+	cmd.Env = env // git ignores GH_HOST
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	// A child that left the group may still hold the pipes open; stop waiting for it soon after.

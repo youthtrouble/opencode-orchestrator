@@ -88,13 +88,11 @@ func incidentRecord(log *incident.Log, parsed cliargs.IncidentArgs, stdio Stdio)
 // recordDraft records a validated draft, its project defaulting to the working directory, and
 // prints {recorded: fp, at}.
 func recordDraft(log *incident.Log, draft incident.Draft, stdio Stdio) int {
-	if draft.Project == "" {
-		cwd, err := nodefs.Resolve(".")
-		if err != nil {
-			return crash(stdio, err)
-		}
-		draft.Project = cwd
+	root, err := paths.ProjectRoot(draft.Project)
+	if err != nil {
+		return crash(stdio, err)
 	}
+	draft.Project = root
 	entry, err := log.Record(draft)
 	if err != nil {
 		return crash(stdio, err)

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
@@ -40,6 +41,7 @@ func (h *harness) runDaemon(t *testing.T, sb sandbox, argv []string, stdin []byt
 // runDaemonWithin is runDaemon with the serve given exitWait to stop.
 func (h *harness) runDaemonWithin(t *testing.T, sb sandbox, argv []string, stdin []byte, env []string, exitWait time.Duration) outcome {
 	t.Helper()
+	since := time.Now()
 	cmd := h.command(sb, argv, stdin, env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -50,11 +52,11 @@ func (h *harness) runDaemonWithin(t *testing.T, sb sandbox, argv []string, stdin
 	go func() { exited <- cmd.Wait() }()
 	dir := filepath.Join(sb.project, ".orchestrator")
 	if runErr, done := waitForLock(filepath.Join(dir, "supervisor.lock"), cmd.Process.Pid, exited); done {
-		return outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+		return h.withPE59(t, argv, since, outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)})
 	}
 	select {
 	case runErr := <-exited: // it died while ticking (a crash, or PE-17's JS)
-		return outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+		return h.withPE59(t, argv, since, outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)})
 	case <-time.After(serveTickTime):
 	}
 	if err := os.WriteFile(filepath.Join(dir, "supervisor.stop"), nil, 0o644); err != nil {
@@ -62,13 +64,57 @@ func (h *harness) runDaemonWithin(t *testing.T, sb sandbox, argv []string, stdin
 	}
 	select {
 	case runErr := <-exited:
-		return outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)}
+		return h.withPE59(t, argv, since, outcome{exitCode: exitCode(t, argv[0], runErr), stdout: stdout.String(), stderr: stderr.String(), files: sb.files(t)})
 	case <-time.After(exitWait):
 		_ = cmd.Process.Kill()
 		<-exited
 		t.Fatalf("%s did not stop within %s; killed %d", argv[0], exitWait, cmd.Process.Pid)
 		return outcome{}
 	}
+}
+
+// withPE59 applies PE-59 by side to the lane entries a serve started at since wrote (checked
+// that second or later; seeded entries stay as written): orch must write literal null for both
+// next check fields of every lane that is not running, and the frozen JS's epoch/ISO pair
+// there is rewritten to null. Running entries and any other JS value are left as written.
+func (h *harness) withPE59(t *testing.T, argv []string, since time.Time, o outcome) outcome {
+	t.Helper()
+	const path = "project/supervisor-state.json"
+	text, ok := o.files[path]
+	if !ok {
+		return o
+	}
+	if argv[0] != h.node {
+		if kept := endedLanesWithNextCheck(text, since); len(kept) > 0 {
+			t.Errorf("PE-59: orch kept a next check for lanes that are not running: %q", kept)
+		}
+		return o
+	}
+	o.files[path] = laneNextCheck.ReplaceAllStringFunc(text, func(entry string) string {
+		parts := laneNextCheck.FindStringSubmatch(entry)
+		if parts[2] == "running" || !checkedSince(parts[3], since) || !jsNextCheck.MatchString(parts[4]) || !jsNextCheckAt.MatchString(parts[6]) {
+			return entry
+		}
+		return parts[1] + "null" + parts[5] + "null"
+	})
+	return o
+}
+
+// endedLanesWithNextCheck lists the lane entries of a state text, checked at or after since,
+// whose phase is not running and whose next_check or next_check_at is not literal null.
+func endedLanesWithNextCheck(state string, since time.Time) []string {
+	var kept []string
+	for _, parts := range laneNextCheck.FindAllStringSubmatch(state, -1) {
+		if parts[2] != "running" && checkedSince(parts[3], since) && (parts[4] != "null" || parts[6] != "null") {
+			kept = append(kept, parts[0])
+		}
+	}
+	return kept
+}
+
+// checkedSince reports whether a lane entry's checked_at (whole seconds) is not before since.
+func checkedSince(checkedAt string, since time.Time) bool {
+	return checkedAt >= since.UTC().Truncate(time.Second).Format("2006-01-02T15:04:05.000Z")
 }
 
 // waitForLock polls until the lock holds pid or the process exits (done, with its error).
@@ -107,6 +153,10 @@ var (
 	superLogLine = regexp.MustCompile(`(?m)^(` + isoMillis.String() + `) `)
 	// superMailboxID is the id of the wake message an event records.
 	superMailboxID = regexp.MustCompile(`("mailbox_id": ")` + freshUUID.String() + `(")`)
+	// laneNextCheck is a state.lanes entry's phase and its next check pair, as written (PE-59).
+	laneNextCheck = regexp.MustCompile(`("phase": "([a-z_]+)",\n[^\n]*\n[^\n]*\n\s*"checked_at": "([^"\n]*)",\n\s*"next_check": )([^,\n]+)(,\n\s*"next_check_at": )([^\n]+)`)
+	// jsNextCheck is the pair the frozen JS writes: epoch seconds and their ISO time.
+	jsNextCheck, jsNextCheckAt = regexp.MustCompile(`^\d+$`), regexp.MustCompile(`^"` + isoMillis.String() + `"$`)
 	// incidentFresh is the at, version and project of an incident line written in the run.
 	incidentFresh = regexp.MustCompile(`("at":")(` + isoMillis.String() + `)(".*"version":")[^"]*(")`)
 )
@@ -211,7 +261,9 @@ func (h *harness) serveInvocation(c serveCase) invocation {
 		errorLine:    c.errorLine,
 		projectPaths: true,
 		normalize:    normalizeServe(time.Now()),
-		daemon:       true,
+		// A lock a helper holds names the helper's pid, which differs per sandbox.
+		normalizeWrites: func(o outcome, _ map[string]string) outcome { return withLockHolderPids(o) },
+		daemon:          true,
 	}
 }
 
@@ -288,7 +340,9 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 	caches := newFlipCaches(t)
 	cases := []serveCase{
 		{name: "no-workers"},
-		{name: "no-workers-realistic-state", seed: seedSupervisorState(realisticSupervisorState)},
+		// The seeded lanes keep falsy worker files, which both runtimes skip: a lane whose file
+		// is gone loses its entry in orch (PE-52, hand-edited/PE-52-vanished-lane).
+		{name: "realistic-state-falsy-workers", seed: seeds(seedSupervisorState(realisticSupervisorState), seedWorkerState("a", `0`), seedWorkerState("1", `0`))},
 		{name: "stale-lock", seed: seedProjectFile(".orchestrator/supervisor.lock", "999999999\n")},
 		{name: "stopped-state-restart", seed: seedSupervisorState(`{"status":"stopped","stopped_at":"2026-10-18T09:00:00.123Z","storage_error":"EACCES","storage_failures":4}`)},
 		{name: "lane/finished-command-0", seed: seeds(finishedLane("a"), command(0))},
@@ -297,9 +351,8 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "lane/interrupted", seed: seeds(seedWorkerState("c", `{"status": "interrupted", "run_id": "rc", "breadth": "deep"}`), command(0))},
 		{name: "lane/deferred-not-yet", seed: seeds(seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`), command(0))},
 		{name: "lane/unknown-status", seed: seeds(seedWorkerState("e", `{"status": "weird", "run_id": "re"}`), command(0))},
-		{name: "lane/stale-lock", seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedWorkerLock("f"), command(0))},
+		{name: "lane/stale-lock", seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedHeldLock(workerLockPath("f")), command(0))},
 		{name: "lane/process-exited", seed: seeds(seedWorkerState("g", `{"status": "running", "run_id": "rg", "pid": 999999999}`), command(0))},
-		{name: "lane/primitive-file", seed: seeds(seedWorkerState("h", `5`), command(0))},
 		{name: "lane/primitive-lanes", seed: seeds(finishedLane("a"), seedSupervisorState(`{"lanes": 5}`), command(0))},
 		{name: "event/acked", seed: seeds(finishedLane("a"), command(0), seedAcks(`{"run-a:finished": {"by": "x", "at": "2026-01-01T00:00:00.000Z"}}`))},
 		{name: "event/retry-past", seed: seeds(finishedLane("a"), command(0), seedSupervisorState(`{"events": {"run-a:finished": {"status": "delivery_failed", "reason": "finished", "lane": "a", "created_at": "2026-10-19T10:00:00.000Z", "retry_after": 1}}}`))},
@@ -328,7 +381,7 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		flipEvalCase("awaiting-human", seeds(seedFlip(`{"to": "claude", "at": "2026-10-19T10:00:00.000Z", "awaiting_human": {"reason": "push to main"}}`), seedProjectDir(".orchestrator/logs"))),
 		flipEvalCase("awaiting-human-already-logged", seeds(seedFlip(`{"awaiting_human": {"reason": "push"}}`), seedSupervisorState(`{"awaiting_human_logged": true}`))),
 		flipEvalCase("live-conductor", seeds(seedConductor(`{"status": "running", "harness": "claude", "pid": `+ownPid+`, "started_at": "2026-10-19T10:00:00.000Z"}`), seedFlip(`{"to": "opencode", "paused": true}`))),
-		flipEvalCase("conductor-lock-held", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "redispatched_at": "2026-10-19T10:00:00.000Z"}`), seedWorkerLock("conductor"), seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode"}}`), inCooldown, caches.green)),
+		flipEvalCase("conductor-lock-held", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "redispatched_at": "2026-10-19T10:00:00.000Z"}`), seedHeldLock(workerLockPath("conductor")), seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode"}}`), inCooldown, caches.green)),
 		// decide reads a green cache and stays, so only the cooldown keeps the finished-early
 		// lane from a relaunch (without a cache decide pauses and the cooldown is never reached).
 		flipEvalCase("finished-early-in-cooldown", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), inCooldown, caches.green)),
@@ -340,9 +393,10 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		flipEvalCase("paused-both-red", seeds(seedFlip(`{"paused": true}`), caches.bothRed)),
 		// decide flips the idle project to claude; the cooldown holds the launch back.
 		flipEvalCase("decide-flip-in-cooldown", seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T10:00:00.000Z"}`), inCooldown, caches.openaiRed)),
-		// The finished conductor handed off (a handoff message since it started): decide stays
-		// and nothing needs a restart, so no relaunch even out of the cooldown.
-		flipEvalCase("handed-off", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), handoffSince("2026-10-19T10:00:00.000Z"), caches.green)),
+		// The finished conductor handed off (a handoff message since it started). PE-60: orch
+		// restarts it out of the cooldown, the frozen JS never does; in the cooldown neither
+		// launches. The restart is covered by TestRelaunchAfterABareHandoff.
+		flipEvalCase("handed-off", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), handoffSince("2026-10-19T10:00:00.000Z"), inCooldown, caches.green)),
 		// A handoff before the lane started does not count: the lane finished early, in cooldown.
 		flipEvalCase("handoff-before-start", seeds(seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z"}`), handoffSince("2026-10-19T09:00:00.000Z"), inCooldown, caches.green)),
 		// The flip names a door flip run refuses: the never-started launch fails (exit 2, logged)
@@ -357,7 +411,6 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "running/not-quiet-check-due", seed: seeds(runningLane("standard", progressAgo(5)), command(0), seedSupervisorState(`{"lanes": {"a": {"run": "run-a", "next_check": 1}}}`))},
 		{name: "running/not-quiet-check-not-due", seed: seeds(runningLane("standard", progressAgo(5)), command(0))},
 		{name: "running/quiet-already-delivered", seed: seeds(runningLane("broad", progressAgo(60)), command(0), seedSupervisorState(`{"events": {"run-a:check:1": {"status": "queued", "reason": "check", "lane": "a", "created_at": "2999-01-01T00:00:00.000Z"}}}`))},
-		{name: "config/null-deferred-lane", seed: seeds(seedSupervisorConfig(`null`), seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`))},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -369,6 +422,10 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 			js, orch := h.runPair(t, h.serveInvocation(c))
 			requireFlipEvaluated(t, "js", js)
 			requireFlipEvaluated(t, "orch", orch)
+			if c.name == "flip/pending-launch-to-gemini" {
+				// PE-60: a pending launch records under the conductor slot key (no lane here).
+				assertRedispatchRecord(t, &orch, "conductor:none", false)
+			}
 			compareOutcomes(t, js, orch)
 		})
 	}
@@ -387,7 +444,15 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 	})
 	t.Run("live-lock", func(t *testing.T) {
 		t.Parallel()
-		h.comparePair(t, h.serveInvocation(serveCase{seed: seedProjectFile(".orchestrator/supervisor.lock", strconv.Itoa(os.Getpid()))}))
+		h.comparePair(t, h.serveInvocation(serveCase{seed: seedHeldLock(".orchestrator/supervisor.lock")}))
+	})
+	t.Run("PE-30-unheld-live-pid-lock", func(t *testing.T) {
+		t.Parallel()
+		h.testServePE30UnheldSupervisorLock(t)
+	})
+	t.Run("PE-30-unheld-lane-lock", func(t *testing.T) {
+		t.Parallel()
+		h.testServePE30UnheldLaneLock(t)
 	})
 	t.Run("channel/delivered", func(t *testing.T) {
 		t.Parallel()
@@ -397,6 +462,10 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		t.Parallel()
 		h.testServeNullAcks(t)
 	})
+	t.Run("hand-edited", func(t *testing.T) {
+		t.Parallel()
+		h.testServeHandEditedState(t)
+	})
 	t.Run("PE-17-no-opencode", func(t *testing.T) {
 		t.Parallel()
 		h.testServeNoOpencode(t)
@@ -405,6 +474,36 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		t.Parallel()
 		h.testServeArrayState(t)
 	})
+}
+
+// testServePE30UnheldSupervisorLock asserts PE-30 for serve: a supervisor.lock naming a live
+// pid (this test's) that no process holds is refused by the JS (pinned) and claimed by orch,
+// which ticks and stops.
+func (h *harness) testServePE30UnheldSupervisorLock(t *testing.T) {
+	js, orch := h.runPair(t, h.serveInvocation(serveCase{seed: seedProjectFile(".orchestrator/supervisor.lock", ownPid)}))
+	// The lock's pid is normalised to <pid>; its presence shows the JS left the seeded lock.
+	if _, locked := js.files["project/supervisor.lock"]; js.exitCode != 1 || js.stderr != "a supervisor already owns this project\n" || !locked {
+		t.Errorf("js: exit %d, stderr %q, lock left %v; want the pinned refusal", js.exitCode, js.stderr, locked)
+	}
+	_, locked := orch.files["project/supervisor.lock"]
+	if orch.exitCode != 0 || orch.stderr != "" || locked || !strings.Contains(orch.files["project/supervisor-state.json"], `"status": "stopped"`) {
+		t.Errorf("orch: exit %d, stderr %q, lock left %v, state %q; want a claimed, ticked and stopped serve", orch.exitCode, orch.stderr, locked, orch.files["project/supervisor-state.json"])
+	}
+}
+
+// testServePE30UnheldLaneLock asserts PE-30 for a lane: a finished lane whose lock file no
+// runner holds (pid text only, a runner killed with SIGKILL) is stale_lock in the JS (pinned)
+// and finished in orch.
+func (h *harness) testServePE30UnheldLaneLock(t *testing.T) {
+	const state = "project/supervisor-state.json"
+	c := serveCase{seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedWorkerLock("f"), seedWake("["+commandChannel(0)+"]"))}
+	js, orch := h.runPair(t, h.serveInvocation(c))
+	if !strings.Contains(js.files[state], `"phase": "stale_lock"`) {
+		t.Errorf("js state %q, want the pinned stale_lock phase", js.files[state])
+	}
+	if !strings.Contains(orch.files[state], `"phase": "finished"`) || strings.Contains(orch.files[state], "stale_lock") {
+		t.Errorf("orch state %q, want the finished phase", orch.files[state])
+	}
 }
 
 // requireFlipEvaluated fails the case unless the run's tick reached the flip evaluation and
@@ -440,7 +539,7 @@ func (h *harness) testSupervisorStart(t *testing.T) {
 		{"fresh", nil},
 		{"stop-file-removed", seedProjectFile(".orchestrator/supervisor.stop", "")},
 		{"stale-lock", seedProjectFile(".orchestrator/supervisor.lock", "999999999")},
-		{"already-running", seedProjectFile(".orchestrator/supervisor.lock", strconv.Itoa(os.Getpid())+"\n")},
+		{"already-running", seedHeldLock(".orchestrator/supervisor.lock")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -455,6 +554,26 @@ func (h *harness) testSupervisorStart(t *testing.T) {
 		t.Parallel()
 		h.testStartKeepAwake(t)
 	})
+	t.Run("PE-30-unheld-live-pid-lock", func(t *testing.T) {
+		t.Parallel()
+		h.testStartPE30UnheldLock(t)
+	})
+}
+
+// testStartPE30UnheldLock asserts PE-30 for start: a supervisor.lock naming a live pid (this
+// test's) that no process holds is "already running" in the JS (pinned) and a gone supervisor
+// in orch, which launches a serve (stopped by runStart).
+func (h *harness) testStartPE30UnheldLock(t *testing.T) {
+	s := seedProjectFile(".orchestrator/supervisor.lock", ownPid+"\n")
+	args := []string{"start", "--cwd", "."}
+	js := h.runStart(t, s, append([]string{h.node, filepath.Join(h.orchJS, "bin", "supervisor.mjs")}, args...))
+	orch := h.runStart(t, s, append([]string{h.orchBin, "supervisor"}, args...))
+	if want := `{"started":false,"reason":"already running","pid":` + ownPid + "}\n"; js.stdout != want {
+		t.Errorf("js stdout %q, want the pinned %q", js.stdout, want)
+	}
+	if !strings.HasPrefix(orch.stdout, `{"started":true,"supervisor_pid":<pid>,`) {
+		t.Errorf("orch stdout %q, want a launched serve", orch.stdout)
+	}
 }
 
 // testStartKeepAwake: with the fake which finding the wrapper, each runtime launches its own
@@ -518,8 +637,10 @@ func (h *harness) runStart(t *testing.T, s seed, argv []string) outcome {
 		h.stopLaunched(t, sb, launched.Pid)
 		o.stdout = strings.Replace(o.stdout, `"supervisor_pid":`+strconv.Itoa(launched.Pid), `"supervisor_pid":<pid>`, 1)
 	}
+	o.stdout = withSupervisorHolder(o.stdout)
 	o.files = sb.files(t)
-	return o.withProjectPlaceholder(t, sb).normalized(normalizeServe(since))
+	o = h.withPE59(t, argv, since, o)
+	return withLockHolderPids(o.withProjectPlaceholder(t, sb)).normalized(normalizeServe(since))
 }
 
 // stopLaunched waits for the launched serve to hold its lock and tick, writes the stop file
@@ -563,6 +684,42 @@ func (h *harness) testServeNullAcks(t *testing.T) {
 	}
 	if js.exitCode != 0 || orch.exitCode != 0 {
 		t.Errorf("exit js %d, orch %d", js.exitCode, orch.exitCode)
+	}
+}
+
+// testServeHandEditedState asserts PE-50..52: a tick over hand-edited or vanished state throws
+// in the JS, which records only that storage_error (or keeps a stale lane entry), pinned
+// here; orch completes the tick as described.
+func (h *harness) testServeHandEditedState(t *testing.T) {
+	const state = "project/supervisor-state.json"
+	for _, c := range []struct {
+		name      string
+		seed      seed
+		jsPinned  string // in the JS state
+		orchWants string // in orch's state
+		orchLacks string // never in orch's state
+	}{
+		{"PE-50-null-config-deferred-lane", seeds(seedSupervisorConfig(`null`), seedProjectDir(".orchestrator/logs"), seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`)),
+			`"storage_error": "TypeError: Cannot read properties of null (reading 'auto_redispatch_deferred')"`, `"config_error": "supervisor.json is not an object; read as {}"`, "storage_error"},
+		{"PE-51-primitive-worker-file", seeds(seedWorkerState("h", `5`), finishedLane("a"), seedWake("["+commandChannel(0)+"]")),
+			`"storage_error": "TypeError: Cannot create property 'lane' on number '5'"`, `"error": "worker file is not an object; lane skipped"`, "storage_error"},
+		{"PE-52-null-event", seedSupervisorState(`{"events": {"x": null}}`),
+			`"storage_error": "TypeError: Cannot read properties of null (reading 'created_at')"`, `"events": {}`, "storage_error"},
+		{"PE-52-vanished-lane", seedSupervisorState(`{"lanes": {"gone": {"run": "r"}}}`),
+			`"gone": {`, `"lanes": {}`, `"gone"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			js, orch := h.runPair(t, h.serveInvocation(serveCase{seed: c.seed}))
+			if !strings.Contains(js.files[state], c.jsPinned) {
+				t.Errorf("js state %s, want the pinned %s", js.files[state], c.jsPinned)
+			}
+			if !strings.Contains(orch.files[state], c.orchWants) || strings.Contains(orch.files[state], c.orchLacks) {
+				t.Errorf("orch state %s, want %s and no %s", orch.files[state], c.orchWants, c.orchLacks)
+			}
+			if js.exitCode != 0 || orch.exitCode != 0 {
+				t.Errorf("exit js %d, orch %d", js.exitCode, orch.exitCode)
+			}
+		})
 	}
 }
 
@@ -623,20 +780,25 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 	claudeConductor := func(s seed) func(*testing.T) invocation {
 		return conductorOn(claudeBridge, bridgeCase{fixture: "ok"}, s)
 	}
-	redispatch := func(t *testing.T) invocation {
-		inv := h.workerStartInvocation(t, workerStartCase{run: bridgeCase{fixture: "ok"}})
-		inv.seed = seeds(inv.seed, seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2020-01-01T00:00:00.000Z", "brief": "b.md", "harness": "claude"}`))
-		return inv
+	redispatchWith := func(extra string) func(*testing.T) invocation {
+		return func(t *testing.T) invocation {
+			inv := h.workerStartInvocation(t, workerStartCase{run: bridgeCase{fixture: "ok"}})
+			inv.seed = seeds(inv.seed, seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2020-01-01T00:00:00.000Z", "brief": "b.md", "harness": "claude"`+extra+`}`))
+			return inv
+		}
 	}
+	redispatch := redispatchWith("")
 	cases := []struct {
 		name, lane string
 		inv        func(*testing.T) invocation
 		want       []string // in the supervisor log, the mailbox or the fake claude's argv
+		// launchOptions is the PE-62 launch_options of the launched lane's state.
+		launchOptions string
 	}{
 		// decide stays and the project is paused: its own door is relaunched.
-		{"conductor/paused-relaunch", "conductor", conductor(seeds(seedFlip(`{"paused": true}`), caches.green)), []string{"relaunch opencode->opencode (stay, was paused)"}},
+		{"conductor/paused-relaunch", "conductor", conductor(seeds(seedFlip(`{"paused": true}`), caches.green)), []string{"relaunch opencode->opencode (stay, was paused)"}, `{"agent":"conductor"}`},
 		// A hand-off recorded while the previous conductor held the lane: the target starts.
-		{"conductor/pending-launch", "conductor", conductor(seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode", "from": "claude", "reason": "handback: R"}}`)), []string{"pending launch claude->opencode"}},
+		{"conductor/pending-launch", "conductor", conductor(seedFlip(`{"to": "opencode", "pending_launch": {"to": "opencode", "from": "claude", "reason": "handback: R"}}`)), []string{"pending launch claude->opencode"}, `{"agent":"conductor"}`},
 		// A human gate cleared after the conductor stopped at it (its lane finished with the
 		// gate's hand-off, so no restart is due): the pending launch `gate --clear` queued
 		// relaunches the gated door.
@@ -644,27 +806,29 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 			seedConductor(`{"status": "finished", "harness": "opencode", "pid": 0, "started_at": "2026-10-19T09:00:00.000Z"}`),
 			seedMailbox(lines(`{"id":"gggggggg-0000-0000-0000-000000000001","at":"2026-10-19T09:30:00.000Z","from":"conductor-opencode","to":"human","kind":"handoff","subject":"awaiting human: push","body":"","refs":[],"thread":null,"acked_by":[]}`), ""),
 			seedFlip(`{"to": "opencode", "at": "2026-10-19T08:00:00.000Z", "pending_launch": {"to": "opencode", "from": "opencode", "reason": "human gate cleared", "resume": null, "at": "2026-10-19T10:00:00.000Z"}}`), caches.green)),
-			[]string{"pending launch opencode->opencode"}},
-		// Timing assumption: the serve's write of its stale in-memory lane lands before the
-		// runner's first state write, because the runner boots far slower, so the runner's own
-		// final state replaces the redispatched_at the serve wrote. Under heavy load the order
-		// can flip, in both runtimes alike.
+			[]string{"pending launch opencode->opencode"}, `{"agent":"conductor"}`},
+		// PE-36: orch never writes the stale lane snapshot. The frozen JS still does;
+		// these cases settle the runner before comparing its final state.
 		// decide flips the idle opencode project (flipped there long ago) to claude, openai
 		// being red: claude is launched.
-		{"conductor/decide-flip-to-claude", "conductor", claudeConductor(seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T09:00:00.000Z"}`), caches.openaiRed)), []string{"relaunch opencode->claude (flip)"}},
+		{"conductor/decide-flip-to-claude", "conductor", claudeConductor(seeds(seedFlip(`{"to": "opencode", "at": "2026-10-19T09:00:00.000Z"}`), caches.openaiRed)), []string{"relaunch opencode->claude (flip)"}, `{"agent":"conductor","permission-mode":"auto"}`},
 		// The claude conductor finished without a hand-off; decide stays on claude, so the lane
 		// is restarted on its own door with --resume of its session.
 		{"conductor/finished-early-resume", "conductor", claudeConductor(seeds(
 			seedConductor(`{"status": "finished", "harness": "claude", "pid": 0, "started_at": "2026-10-19T10:00:00.000Z", "session_id": "00000000-0000-4000-8000-0000000000aa"}`),
 			seedFlip(`{"to": "claude", "at": "2026-10-19T09:00:00.000Z"}`), caches.green)),
-			[]string{"relaunch claude->claude (stay)", "--resume\n00000000-0000-4000-8000-0000000000aa\n"}},
+			[]string{"relaunch claude->claude (stay)", "--resume\n00000000-0000-4000-8000-0000000000aa\n"}, `{"agent":"conductor","permission-mode":"auto"}`},
 		// The flip to claude was recorded after the opencode conductor started, and that lane
 		// finished: the target never started, so it is launched.
 		{"conductor/never-started", "conductor", claudeConductor(seeds(
 			seedConductor(`{"status": "finished", "harness": "opencode", "pid": 0, "started_at": "2026-10-19T09:00:00.000Z"}`),
 			seedFlip(`{"to": "claude", "at": "2026-10-19T10:00:00.000Z"}`))),
-			[]string{"flip target never started: launching claude"}},
-		{"redispatch/deferred-due", "d", redispatch, []string{"d re-dispatched after budget reset"}},
+			[]string{"flip target never started: launching claude"}, `{"agent":"conductor","permission-mode":"auto"}`},
+		{"redispatch/deferred-due", "d", redispatch, []string{"d re-dispatched after budget reset"}, `{}`},
+		// PE-62: orch replays the recorded options, so the bridge gets them and the replacement
+		// records them again (in its own fixed key order); the frozen JS drops them.
+		{"redispatch/PE-62-replays-launch-options", "d", redispatchWith(`, "launch_options": {"max-turns": "3", "allowed-tools": "Read"}`),
+			[]string{"d re-dispatched after budget reset"}, `{"allowed-tools":"Read","max-turns":"3"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -700,9 +864,45 @@ func (h *harness) testServeLaunches(t *testing.T, caches flipCaches) {
 				t.Errorf("the serves quote launch answers of different lengths: js %v, orch %v", jsQuoted, orchQuoted)
 			}
 			js, orch = js.normalized(cutLogPaths), orch.normalized(cutLogPaths)
+			if c.name != "conductor/never-started" {
+				key := "conductor:none"
+				switch c.name {
+				case "conductor/pending-launch":
+					key = "conductor:none" // PE-60: pending launches record under the slot key
+				case "conductor/gate-cleared":
+					key = "0:conductor" // PE-60: the slot key of the finished lane
+				case "conductor/finished-early-resume":
+					key = "0:conductor"
+				case "redispatch/deferred-due", "redispatch/PE-62-replays-launch-options":
+					key = "rd"
+				}
+				assertRedispatchRecord(t, &orch, key, true)
+			}
+			if c.name == "conductor/finished-early-resume" {
+				removeRelaunchNote(t, &orch, "claude conductor relaunched by the supervisor: exited without handoff")
+			}
+			withPE62(t, &js, &orch, c.launchOptions)
+			if c.name == "redispatch/PE-62-replays-launch-options" {
+				removeReplayedClaudeOptions(t, &js, &orch)
+			}
 			compareOutcomes(t, js, orch)
 		})
 	}
+}
+
+// replayedClaudeOptions is what the replayed allowed-tools and max-turns add to the fake
+// claude's argv, before the prompt separator.
+const replayedClaudeOptions = "--allowedTools\nRead\n--max-turns\n3\n--\n"
+
+// removeReplayedClaudeOptions asserts PE-62 on the redispatched bridge: orch's claude gets the
+// replayed options and the frozen JS's does not; it then removes them from orch's argv log.
+func removeReplayedClaudeOptions(t *testing.T, js, orch *outcome) {
+	t.Helper()
+	const argv = "fakelog/claude-argv.txt"
+	if strings.Contains(js.files[argv], "--max-turns") || !strings.Contains(orch.files[argv], replayedClaudeOptions) {
+		t.Errorf("PE-62: claude argv js %q, orch %q; want the replayed options in orch's only", js.files[argv], orch.files[argv])
+	}
+	orch.files[argv] = strings.Replace(orch.files[argv], replayedClaudeOptions, "--\n", 1)
 }
 
 // quotedAnswerLengths lists, in UTF-16 units, how much of each launch answer the supervisor log
@@ -739,10 +939,12 @@ func (h *harness) runServeLaunch(t *testing.T, inv invocation, argv []string, la
 	inv.seed(t, sb)
 	before := map[string]string{}
 	collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
+	since := time.Now()
 	o := h.runDaemon(t, sb, argv, nil, inv.env)
 	l := launchedRunner(t, argv[0], sb, lane)
 	settle(t, l.RunnerPid)
 	o.files = sb.files(t)
+	o = h.withPE59(t, argv, since, o)
 	requireLaunchRecorded(t, argv[0], l, o.files, true)
 	quoted := quotedAnswerLengths(o.files["project/logs/supervisor.log"])
 	collectExtraFiles(t, sb, inv, o.files)
@@ -790,8 +992,10 @@ func (h *harness) testServeClaudeResume(t *testing.T) {
 		inv.seed(t, sb)
 		before := map[string]string{}
 		collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
+		since := time.Now()
 		o := h.runDaemon(t, sb, argv, nil, inv.env)
 		o.files = quietFilesWithRunRecord(t, argv[0], sb)
+		o = h.withPE59(t, argv, since, o)
 		reapClaudeExec(t, argv[0], sb)
 		withWakePromptDigest(t, argv[0], o.files)
 		o = o.withProjectPlaceholder(t, sb)
@@ -996,4 +1200,108 @@ func (h *harness) testServePausedUncachedDecide(t *testing.T) {
 	requireFlipEvaluated(t, "js", js)
 	requireFlipEvaluated(t, "orch", orch)
 	compareOutcomes(t, js, orch)
+}
+
+// removeRelaunchNote asserts the one informational note orch posts to the human for a
+// conductor restart (PE-60; the frozen JS posts none) and removes it for the comparison.
+func removeRelaunchNote(t *testing.T, o *outcome, subject string) {
+	t.Helper()
+	const path = "project/mailbox/messages.jsonl"
+	var kept []string
+	notes := 0
+	for _, line := range strings.SplitAfter(o.files[path], "\n") {
+		if strings.Contains(line, `"from":"supervisor","to":"human","kind":"note","subject":"`+subject+`"`) {
+			notes++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if notes != 1 {
+		t.Fatalf("%d relaunch notes %q in %s", notes, subject, o.files[path])
+	}
+	o.files[path] = strings.Join(kept, "")
+}
+
+// PE-36/37: only launch cases add supervisor-owned records. Assert their contents
+// before removing that one field for comparison with the frozen JS's old writes.
+func assertRedispatchRecord(t *testing.T, o *outcome, key string, confirmed bool) {
+	t.Helper()
+	const path = "project/supervisor-state.json"
+	text := o.files[path]
+	// Other fields already contain the harness's unquoted numeric placeholders.
+	// Parse only this scoped, still-valid JSON field and leave every other byte alone.
+	pattern := regexp.MustCompile(`(?ms)^  "redispatch": (\{.*?^  \})(,?)\n`)
+	match := pattern.FindStringSubmatchIndex(text)
+	if match == nil {
+		t.Fatalf("no redispatch field: %s", text)
+	}
+	parsed, err := jsjson.Unmarshal([]byte(text[match[2]:match[3]]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, ok := parsed.(*jsjson.Object)
+	if !ok || records.Len() != 1 {
+		t.Fatalf("redispatch records: %s", text)
+	}
+	record := jsjson.Path(records, key)
+	if jsjson.Path(record, "attempts") != float64(1) {
+		t.Fatalf("record %q: %s", key, o.files[path])
+	}
+	at, ok := jsjson.Path(record, "last_attempt_at").(string)
+	if !ok {
+		t.Fatalf("attempt date: %v", record)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
+		t.Fatalf("attempt date %q: %v", at, err)
+	}
+	if confirmed {
+		if jsjson.Path(record, "confirmed_run_id") != "<run-id>" {
+			t.Fatalf("unconfirmed launch: %s", o.files[path])
+		}
+	} else if jsjson.Path(record, "confirmed_run_id") != nil {
+		t.Fatalf("failed launch confirmed: %s", o.files[path])
+	}
+	prefix, suffix := text[:match[0]], text[match[1]:]
+	if text[match[4]:match[5]] == "" {
+		prefix = strings.TrimSuffix(prefix, ",\n") + "\n"
+	}
+	o.files[path] = prefix + suffix
+}
+
+// TestPE59EndedLaneCheck pins the orch-side PE-59 assertion: a non-running lane entry must hold
+// literal null for both fields, so an orch regression to a number cannot be normalized away.
+func TestPE59EndedLaneCheck(t *testing.T) {
+	since := time.Date(2026, 10, 19, 10, 0, 0, 500_000_000, time.UTC)
+	checkedAt := "2026-10-19T10:00:00.000Z" // the serve's tick second
+	entry := func(phase, nextCheck, nextCheckAt string) string {
+		return `{
+  "lanes": {
+    "a": {
+      "run": "r",
+      "phase": "` + phase + `",
+      "breadth": "standard",
+      "quiet": false,
+      "checked_at": "` + checkedAt + `",
+      "next_check": ` + nextCheck + `,
+      "next_check_at": ` + nextCheckAt + `
+    }
+  }
+}
+`
+	}
+	for _, c := range []struct {
+		name, state string
+		kept        bool
+	}{
+		{"ended, nulls", entry("finished", "null", "null"), false},
+		{"running, numbers", entry("running", "1792404300", `"2026-10-19T10:05:00.000Z"`), false},
+		{"ended, numbers (regression)", entry("finished", "1792404300", `"2026-10-19T10:05:00.000Z"`), true},
+		{"exited, number only", entry("process_exited", "1792404300", "null"), true},
+		{"ended, ISO only", entry("failed", "null", `"2026-10-19T10:05:00.000Z"`), true},
+		{"seeded before the serve", strings.Replace(entry("finished", "1792404300", `"2026-10-19T10:05:00.000Z"`), checkedAt, "2026-10-19T09:59:59.000Z", 1), false},
+	} {
+		if got := len(endedLanesWithNextCheck(c.state, since)) > 0; got != c.kept {
+			t.Errorf("%s: flagged %v, want %v", c.name, got, c.kept)
+		}
+	}
 }

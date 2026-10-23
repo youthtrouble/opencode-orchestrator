@@ -21,6 +21,118 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- plugin (S13s1): the orchestrator plugin keeps a per-instance activity ledger at
+  `.orchestrator/activity/opencode/<pid>-<hex>.json`: the last activity of any session in the
+  project (subagents included, from bus events, the context hook and the tool hooks) and the
+  number of non-`subagent` tool calls in flight. Writes are coalesced to one per 15 s, `alive_at`
+  is refreshed every 60 s, and a failed write is one incident per project per 10 min. It holds
+  timestamps and counts only; the watchdog that reads it lands in S13s2.
+- bridges (S13j, PE-44, PE-45): a provider error event reaches the run's `errors`, so a ChatGPT
+  usage limit in opencode (or a top-level codex `error`) is a `limit` incident with its text
+  instead of a `crash` with an empty error; a run the bridge stopped at its `--timeout-min` cap
+  is a `timeout` incident (`<harness> bridge timed out after <n> min`) instead of a `crash`.
+- opencode bridge (S13j, PE-46, PE-47): `orch opencode-exec --help` prints help; `--effort X`
+  is accepted and ignored instead of becoming the prompt; a failure incident records the
+  `--model` it ran. `orch worker`'s usage line names `opencode` (PE-48).
+- opencode bridge (S13j, PE-65, D3): opencode is stopped with SIGINT at the cap and when the
+  bridge itself receives SIGTERM, because SIGTERM left its service session running for minutes
+  beside a relaunched conductor. claude and codex keep SIGTERM.
+- worker/supervisor (S13q, PE-62): a worker records its replayable launch options
+  (`effort`, `timeout-min`, `agent`, `sandbox`, `permission-mode`, `allowed-tools`, `max-turns`,
+  and `root`/`cwd` for a `--root` lane) as `launch_options` in its state, and a budget-deferred
+  redispatch passes them again instead of dropping them (L19).
+- delegation (S13i, PE-42): bridges accept `--artifact-root DIR` or `ORCH_ARTIFACT_ROOT`
+  (flag wins) for project run records independently of the child cwd. `worker --root DIR`
+  explicitly owns lane state, locks, logs and records, independently of child `--cwd`, in both
+  foreground and detached runs; without `--root`, legacy behavior is unchanged. Plugin
+  delegation and worker start retain the session project; incidents name the artifact project.
+- review (S13i, PE-43): a missing manifest names its absolute path and explains checkout-local
+  storage: pass an absolute path or run from the checkout; `--root` selects the source tree.
+  Malformed and permission errors stay distinct.
+
+- project roots (S13h, PE-41): commands run from `.orchestrator/` or below it target the
+  project above the first exact `.orchestrator` component, including explicit cwd/root,
+  mailbox environment and session hook paths. This prevents nested state and stale nested
+  gates; no other ancestor search, migration or deletion is performed.
+
+- process execution (S13g, sol-5 R14, PE-40): try later PATH candidates when execution fails
+  with ENOENT, ENOTDIR or EACCES, including executable scripts with missing interpreters.
+  Preserve EACCES precedence, error spelling and pipe ownership; never retry a started child.
+- kickoff (S13p, plan 1.7 D2, PE-61): a real kickoff whose gate clear is refused (unreadable
+  `flip.json`, a crash) prints `kickoff: the human gate could not be cleared: <reason>; nothing
+  was launched` and exits 1 before it starts the supervisor, writes a brief, pauses or launches.
+  A first kickoff in a repository with no `.orchestrator/` is unchanged.
+- supervisor (S13e, sol-5 R5, PE-36): keep relaunch attempt records in
+  `supervisor-state.json`, prune obsolete run/pending keys, and never overwrite a worker-owned
+  lane file; legacy `redispatched_at` is read-only.
+- supervisor (S13e, sol-5 R7, L24, PE-37): confirm launches only from successful launcher JSON
+  with a run id and runner pid. For current worker/pending keys, retry failures with
+  60/120/240/480 s waits, stop after five
+  failures and post one `blocked` note with output and a manual retry command. Gates and
+  deferred pending answers do not count as attempts; existing conductor cooldowns remain.
+- supervisor (S13e, L21, PE-38): failed redispatch/blocked-note posts log one diagnostic and
+  continue; attempt records survive diagnostic errors for the next successful state write.
+- supervisor/flip (S13r, PE-63, PE-64): `flip run`'s launch answer carries top-level `run_id`
+  and `runner_pid`, which the supervisor now reads instead of the 400-unit `launcher` quote, so a
+  long project root no longer turns a real conductor launch into a failed attempt. A legacy
+  `redispatched_at` blocks only restarts and lane redispatch again, not a decided flip, hand-back
+  or paused relaunch. A failed lane redispatch posts `<lane> re-dispatch failed (attempt <n> of 5)`
+  instead of the success subject.
+
+- supervisor (S13o, owner defect `ee50690d`, owner rules `5b18cc1c` and `779604e2`, PE-59,
+  PE-60): an idle conductor is relaunched unless a gate or pause holds it, including one that
+  finished after a bare handoff or died before writing its final status; each restarted run posts
+  one informational note to the human. After five failures conductor and pending launches retry
+  every 30 minutes with the `blocked` note repeated at most every 6 hours (worker lanes still
+  stop); a confirmed launch whose runner never published a lane counts as failed after 600 s; and
+  ended lanes show a null `next_check`. Conductor launches have one owner (the flip evaluation, so
+  a deferred conductor respects gates and pauses), and retries, pending launches included, belong
+  to the conductor slot, so they survive `flip run` clearing the pause or pending launch.
+
+- supervisor (S13k, L15/L17/L18/L22/L23, PE-49..52): an unknown `orch supervisor` command is a
+  usage error (exit 2); a non-object `supervisor.json` reads as `{}` with a `config_error` note in
+  the state; a primitive worker file skips only its lane, noted in its lane entry; lane entries of
+  vanished workers are removed and `null` events dropped, so hand-edited state no longer stops
+  every tick.
+- flip (S13d, sol-5 R4, PE-32): serialize all flip state writers on the separate
+  `flip.json.lock`. Corrupt or unreadable state gates decisions, blocks supervisor relaunch,
+  and refuses writes with the file untouched; reply gate clearing reports failure and remote
+  answers remain retryable after repair. Remote resume starts its supervisor outside the
+  transaction and rechecks the gate before clearing it.
+- flip (S13d, PE-33): supervisor relaunches use `--unless-gated`, refusing a gate installed
+  since their snapshot. Explicit human/kickoff runs still clear gates; launchers run outside
+  the lock and a deferred launch preserves gates installed during launch.
+- flip (S13d, L12/L13, PE-34): gate valid primitive JSON as an empty object; the internal gate
+  operation uses a default reason and posts its handoff for a non-string reason.
+- flip (S13d, L14, PE-35): bare `--active`, `--from`, `--reason`, `--question`, `--resume`,
+  `--to` and `--brief` are one-line usage errors (exit 2) before any writes.
+
+- supervisor (S13f): serialize the complete ack read-modify-write on the separate
+  `supervisor-acks.json.lock`, retaining concurrent receipts across processes and goroutines
+  (sol-5 R12). Only truthy own event keys can be acknowledged; inherited `constructor`,
+  `toString` and other Object.prototype names are refused with exit 1 (L16, PE-39).
+- internal (S13a): add a POSIX record-lock ownership and transaction primitive with
+  inode-alias tracking and cross-process regression tests, including failed pending
+  reservations and release after a working-directory change. No callers migrate in this
+  slice; worker, supervisor, flip and ack concurrency fixes are still pending.
+- worker (S13b): a lane is owned by its runner through a kernel record lock held for the whole
+  run, so a lane has exactly one runner (sol-5 R2, worker side). A lock file left by a runner that
+  died is reclaimed by the next start, foreground included (L8, PE-28); `start --detach` only
+  probes the lock and never removes it (PE-29); `orch worker stop` signals only the kernel's
+  holder when it is the state's pid, so a killed runner's reused pid is never signalled (R3,
+  PE-23). The lane-locked hint no longer says to remove the lock: never delete a lock file by
+  hand.
+- supervisor (S13c): `orch supervisor serve` owns the project through a kernel record lock on
+  `supervisor.lock` held for its life, so of two serves started at once exactly one runs (sol-5
+  R2, supervisor side). Every lock reader asks the kernel, not the file or its pid text (PE-30):
+  `start` reports the kernel's holder; a lock file no process holds (a killed serve or runner)
+  is claimed by the next serve, is no lane `stale_lock`, and no longer blocks a conductor
+  relaunch; `remote apply`'s resume waits for a held supervisor lock.
+- children (owner follow-up b4ec00c4): every child orch starts in a directory (bridge CLIs,
+  worker runners, supervisor serves and relaunches, kickoff, remote CI `git`/`gh`) gets `PWD`
+  set to that directory instead of inheriting the parent's, so a supervisor started from another
+  checkout no longer makes OpenCode attach to it (PE-58). A supervisor started before this build
+  keeps its old environment: restart it from its project directory, or with `--cwd`.
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.

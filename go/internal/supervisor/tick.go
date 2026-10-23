@@ -10,6 +10,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervise"
 )
@@ -48,6 +49,8 @@ type Supervisor struct {
 	// deliver wakes the coordinator through one configured channel: deliverChannel, which
 	// tests of the tick replace.
 	deliver func(channel any, text string) *jsjson.Object
+	// lock is the project's lock while Serve holds it.
+	lock *ownlock.Lock
 }
 
 // New returns the supervisor of project with deps.
@@ -57,9 +60,15 @@ func New(project Project, deps Deps) *Supervisor {
 	return s
 }
 
+// The notes a tick records instead of throwing on hand-edited input (PE-50, PE-51).
+const (
+	configNotObject = "supervisor.json is not an object; read as {}"
+	workerNotObject = "worker file is not an object; lane skipped"
+)
+
 // tick is the values one tickAll call reads once.
 type tick struct {
-	config any
+	config any            // an object or an array (PE-16), never a primitive (PE-50)
 	acks   *jsjson.Object // nil when the file holds null or no object (PE-16)
 	now    int64          // epoch seconds
 	nowISO string         // iso(now)
@@ -74,16 +83,12 @@ type tick struct {
 // skipped and every earlier mutation and file write stays.
 func (s *Supervisor) Tick(state *jsjson.Object) error {
 	t := tick{
-		config: readJSON(s.ConfigPath, emptyObject),
+		config: s.readConfig(state),
 		now:    unixSeconds(s.Now()),
 	}
 	t.nowISO = jsjson.ISOString(time.Unix(t.now, 0))
 	t.acks, _ = readJSON(s.AcksPath, emptyObject).(*jsjson.Object)
-	events, err := pruneEvents(jsjson.Path(state, "events"), t.now)
-	if err != nil {
-		return err
-	}
-	t.events = events
+	t.events = pruneEvents(jsjson.Path(state, "events"), t.now)
 	state.Set("events", t.events)
 	t.lanes = asObject(orEmpty(jsjson.Path(state, "lanes")))
 	state.Set("lanes", t.lanes)
@@ -92,10 +97,14 @@ func (s *Supervisor) Tick(state *jsjson.Object) error {
 	if err != nil {
 		return err
 	}
+	pruneVanishedLanes(t.lanes, lanes)
 	for _, lane := range lanes {
 		if err := s.tickLane(state, &t, lane); err != nil {
 			return err
 		}
+	}
+	if err := s.pruneRedispatch(state); err != nil {
+		return err
 	}
 	if err := s.evaluateFlip(state, &t); err != nil {
 		return err
@@ -106,16 +115,48 @@ func (s *Supervisor) Tick(state *jsjson.Object) error {
 	return nil
 }
 
-// pruneEvents is `pruneEvents(state.events || {}, now)` over Object.entries of any value; the
-// JS reads `ev.created_at` of every entry, which throws for a null one.
-func pruneEvents(events any, now int64) (*jsjson.Object, error) {
+// readConfig is supervisor.json read once per tick. A value that is not an object (`null`, a
+// primitive) reads as {} and is noted in the state's config_error until it is fixed (PE-50;
+// the JS throws at whichever read of it comes first).
+func (s *Supervisor) readConfig(state *jsjson.Object) any {
+	config := readJSON(s.ConfigPath, emptyObject)
+	switch config.(type) {
+	case *jsjson.Object, []any:
+		state.Delete("config_error")
+		return config
+	}
+	state.Set("config_error", configNotObject)
+	return jsjson.NewObject()
+}
+
+// pruneEvents is `pruneEvents(state.events || {}, now)` over Object.entries of any value,
+// with null entries dropped (PE-52; the JS reads `ev.created_at` of a null one and throws).
+func pruneEvents(events any, now int64) *jsjson.Object {
 	entries := jsjson.Spread(orEmpty(events))
 	for _, id := range entries.Keys() {
 		if ev, _ := entries.Get(id); ev == nil {
-			return nil, jsjson.CannotReadOfNull("created_at")
+			entries.Delete(id)
 		}
 	}
-	return supervise.PruneEvents(entries, now), nil
+	return supervise.PruneEvents(entries, now)
+}
+
+// pruneVanishedLanes removes the state.lanes entries whose worker file is gone (PE-52; the JS
+// keeps them forever). A primitive lanes value is left for the lane loop to throw on.
+func pruneVanishedLanes(entries any, lanes []string) {
+	object, isObject := entries.(*jsjson.Object)
+	if !isObject {
+		return
+	}
+	present := make(map[string]bool, len(lanes))
+	for _, lane := range lanes {
+		present[lane] = true
+	}
+	for _, lane := range object.Keys() {
+		if !present[lane] {
+			object.Delete(lane)
+		}
+	}
 }
 
 // tickLane is one iteration of tickAll's lane loop.
@@ -127,22 +168,34 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	}
 	worker, isObject := file.(*jsjson.Object)
 	if !isObject {
-		return jsjson.CannotAssign(file, "lane")
+		return skipLane(t, lane)
 	}
 	worker.Set("lane", lane)
 
+	// PE-30: the lane's lock counts only while the kernel says a runner holds it; a lock file
+	// a killed runner left is no stale_lock.
+	lockHeld, _, err := ownlock.Probe(filepath.Join(s.workers.WorkersDir, lane+".lock"))
+	if err != nil {
+		return err
+	}
 	obs := supervise.Observe(worker, t.now, supervise.Liveness{
 		Alive:       s.Alive(jsjson.Path(worker, "pid")),
-		LockPresent: nodefs.Exists(filepath.Join(s.workers.WorkersDir, lane+".lock")),
+		LockPresent: lockHeld,
 	})
 	laneState := jsjson.Path(t.lanes, lane)
 	run := runValue(worker, obs)
 	sameRun := strictEquals(jsjson.Path(laneState, "run"), run)
 	nextCheck := jsjson.Path(laneState, "next_check")
 	ev := supervise.ChooseEvent(obs, supervise.State{Run: runIf(sameRun, obs), NextCheck: nextCheck, Events: t.events}, t.acks, t.now)
-	if !sameRun || !jsjson.Truthy(nextCheck) {
+	switch {
+	case obs.Phase != supervise.PhaseRunning:
+		// PE-59: only a running lane has checks ahead; an ended one would show a frozen time.
+		nextCheck = nil
+	case !sameRun || !jsjson.Truthy(nextCheck):
 		nextCheck = float64(t.now + obs.Interval)
 	}
+	// A running lane's next_check moves only when emit sends an event, so it stays frozen
+	// while a delivered reminder is unacknowledged (mirrored JS reminder behaviour).
 	entry, err := laneEntry(run, obs, t.nowISO, nextCheck)
 	if err != nil {
 		return err
@@ -153,17 +206,31 @@ func (s *Supervisor) tickLane(state *jsjson.Object, t *tick, lane string) error 
 	}
 	setProperty(lanes, lane, entry)
 
-	due, err := s.redispatchDue(obs, t.config, worker)
+	due, err := s.redispatchDue(obs, t.config, worker, state, t)
 	if err != nil {
 		return err
 	}
 	if due {
-		return s.redispatch(lane, worker, workerPath)
+		return s.redispatch(lane, worker, jsjson.TemplateString(run), state, t)
 	}
 	if ev == nil {
 		return nil
 	}
 	return s.emit(state, t, lane, obs, entry, ev)
+}
+
+// skipLane records in the lane's entry that its worker file holds a truthy primitive, and
+// leaves the other lanes to tick (PE-51; the JS throws assigning its lane and aborts the tick).
+func skipLane(t *tick, lane string) error {
+	lanes, isObject := t.lanes.(*jsjson.Object)
+	if !isObject {
+		return jsjson.CannotAssign(t.lanes, lane)
+	}
+	entry := jsjson.NewObject()
+	entry.Set("error", workerNotObject)
+	entry.Set("checked_at", t.nowISO)
+	setProperty(lanes, lane, entry)
+	return nil
 }
 
 // runValue is the JS obs.run as a value: `worker.run_id || `${worker.pid}:${worker.lane}“.
@@ -198,11 +265,15 @@ func strictEquals(a, b any) bool {
 }
 
 // laneEntry is the lane's new state.lanes entry. nextCheck is a JS value (a hand-edited
-// next_check is passed through), so its ISO form may throw.
+// next_check is passed through), so its ISO form may throw; nil (no check ahead) stays null.
 func laneEntry(run any, obs supervise.Observation, checkedAt string, nextCheck any) (*jsjson.Object, error) {
-	nextCheckAt, err := isoSeconds(nextCheck)
-	if err != nil {
-		return nil, err
+	var nextCheckAt any
+	if nextCheck != nil {
+		at, err := isoSeconds(nextCheck)
+		if err != nil {
+			return nil, err
+		}
+		nextCheckAt = at
 	}
 	entry := jsjson.NewObject()
 	entry.Set("run", run)
@@ -247,8 +318,10 @@ func (s *Supervisor) emit(state *jsjson.Object, t *tick, lane string, obs superv
 	outcome := deliveryOutcome(results, mailboxID)
 	event.Set("status", outcome)
 	event.Set("channels", results)
-	entry.Set("next_check", float64(t.now+obs.Interval))
-	entry.Set("next_check_at", jsjson.ISOString(time.Unix(t.now+obs.Interval, 0)))
+	if obs.Phase == supervise.PhaseRunning {
+		entry.Set("next_check", float64(t.now+obs.Interval))
+		entry.Set("next_check_at", jsjson.ISOString(time.Unix(t.now+obs.Interval, 0)))
+	}
 
 	resultsJSON, err := jsjson.Marshal(results)
 	if err != nil {
@@ -273,9 +346,6 @@ var errWakeNotArray = &jsjson.TypeError{Message: "(config.wake || []).map is not
 
 // wake is `(config.wake || []).map((ch) => ({type: ch.type, ...deliver(ch, text)}))`.
 func (s *Supervisor) wake(config any, text string) ([]any, error) {
-	if config == nil {
-		return nil, jsjson.CannotReadOfNull("wake")
-	}
 	wake := jsjson.Path(config, "wake")
 	if !jsjson.Truthy(wake) {
 		return []any{}, nil

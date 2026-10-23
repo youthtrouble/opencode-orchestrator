@@ -3,10 +3,13 @@ package supervisor
 import (
 	"bytes"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
 
 // serve runs Serve with an injected Sleep that records each wait and creates the stop file at
@@ -123,33 +126,47 @@ func TestServeStorageErrorLifecycle(t *testing.T) {
 	}
 }
 
+// heldHere reports whether this test process holds the lock at path, through ownlock's
+// registry: reading the file here would drop the kernel lock (CA2).
+func (f *fixture) heldHere(rel string) bool {
+	f.t.Helper()
+	held, pid, err := ownlock.Probe(f.path(rel))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return held && pid == os.Getpid()
+}
+
 func TestServeLockClaim(t *testing.T) {
-	t.Run("a live holder refuses, writing nothing", func(t *testing.T) {
+	t.Run("a held lock refuses, writing nothing", func(t *testing.T) {
 		f := newFixture(t)
-		f.write("supervisor.lock", " 77\n")
-		f.live[77] = true
+		holder := f.holdLock("supervisor.lock")
 		got := f.serve(0, nil)
 		if got.code != 1 || got.err != nil || got.stderr != "a supervisor already owns this project\n" {
 			t.Fatalf("serve = %d, %v, %q", got.code, got.err, got.stderr)
 		}
-		if f.read("supervisor.lock") != " 77\n" || f.exists("supervisor-state.json") {
+		if f.read("supervisor.lock") != strconv.Itoa(holder.pid()) || f.exists("supervisor-state.json") {
 			t.Error("a refused serve wrote")
 		}
 	})
-	t.Run("a stale holder is overwritten", func(t *testing.T) {
-		f := newFixture(t)
-		f.write("supervisor.lock", "77")
-		f.sup.Sleep = func(time.Duration) { t.Fatal("ticked") }
-		f.write("supervisor.stop", "")
-		lockDuringServe := ""
-		f.sup.Now = func() time.Time { lockDuringServe = f.read("supervisor.lock"); return f.now }
-		if code, err := f.sup.Serve(&bytes.Buffer{}); code != 0 || err != nil {
-			t.Fatalf("serve = %d, %v", code, err)
-		}
-		if lockDuringServe != "4242" {
-			t.Errorf("lock while serving %q, want this pid", lockDuringServe)
-		}
-	})
+	// PE-30: a lock file no process holds is claimed, whatever pid its text names; the JS
+	// refuses one naming a live pid.
+	for name, text := range map[string]string{"dead pid": "999999999", "live pid": strconv.Itoa(os.Getpid())} {
+		t.Run("a lock file with a "+name+" and no holder is claimed", func(t *testing.T) {
+			f := newFixture(t)
+			f.write("supervisor.lock", text)
+			f.sup.Sleep = func(time.Duration) { t.Fatal("ticked") }
+			f.write("supervisor.stop", "")
+			heldDuringServe := false
+			f.sup.Now = func() time.Time { heldDuringServe = f.heldHere("supervisor.lock"); return f.now }
+			if code, err := f.sup.Serve(&bytes.Buffer{}); code != 0 || err != nil {
+				t.Fatalf("serve = %d, %v", code, err)
+			}
+			if !heldDuringServe || f.exists("supervisor.lock") {
+				t.Errorf("held while serving %v, lock left %v; want held, then released", heldDuringServe, f.exists("supervisor.lock"))
+			}
+		})
+	}
 	t.Run("a directory lock is the error", func(t *testing.T) {
 		f := newFixture(t)
 		f.mkdir("supervisor.lock")
@@ -157,24 +174,67 @@ func TestServeLockClaim(t *testing.T) {
 		if got.code != 1 {
 			t.Errorf("code %d", got.code)
 		}
-		// PE-21: a stale lock is replaced through a private temp, so the rename fails.
-		wantRenameOntoDirError(t, got.err, f.path("supervisor.lock"))
+		wantError(t, got.err, `lock "supervisor.lock" is not a regular file`)
 	})
 }
 
-// The lock is owner-only under a permissive umask, whether created or taken over (PE-21).
+// Of several serves started at once, exactly one claims the project and the others refuse;
+// the pid in the lock is the claimer's. Each serve is its own process, as in production.
+func TestServeConcurrentClaimersExactlyOneServes(t *testing.T) {
+	root := t.TempDir()
+	lockPath := NewProject(root).LockPath
+	claimers := make([]*helper, 4)
+	for i := range claimers {
+		claimers[i] = startHelper(t, "serve", "SUPERVISOR_ROOT="+root)
+	}
+	var server *helper
+	for _, h := range claimers {
+		select {
+		case line := <-h.lines:
+			if line != "serving" || server != nil {
+				t.Fatalf("helper %d printed %q with server %v", h.pid(), line, server)
+			}
+			server = h
+		case <-h.done:
+			if code := h.exitCode(t); code != 1 || h.stderr.String() != alreadyServing+"\n" {
+				t.Fatalf("refused claimer %d: exit %d, stderr %q", h.pid(), code, h.stderr.String())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("helper %d neither served nor exited", h.pid())
+		}
+	}
+	if server == nil {
+		t.Fatal("no claimer served")
+	}
+	if data, err := os.ReadFile(lockPath); err != nil || string(data) != strconv.Itoa(server.pid()) {
+		t.Errorf("lock %q, %v; want the server's pid %d", data, err, server.pid())
+	}
+	_ = server.stdin.Close()
+	if code := server.exitCode(t); code != 0 {
+		t.Fatalf("server exit %d; stderr %s", code, server.stderr.String())
+	}
+	if _, err := os.Lstat(lockPath); !os.IsNotExist(err) {
+		t.Errorf("lock after stop: %v, want it removed", err)
+	}
+}
+
+// The lock is owner-only under a permissive umask when serve creates it (PE-21). A lock file
+// claimed in place keeps its mode (PE-30): the file is metadata, the kernel lock the ownership.
 func TestServeLockIsOwnerOnly(t *testing.T) {
 	old := syscall.Umask(0o022)
 	defer syscall.Umask(old)
-	for name, stale := range map[string]bool{"created": false, "taken over": true} {
+	for name, tc := range map[string]struct {
+		stale bool
+		want  os.FileMode
+	}{"created": {false, 0o600}, "claimed in place": {true, 0o644}} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
-			if stale {
+			if tc.stale {
 				f.write("supervisor.lock", "77") // 0644 under this umask
 			}
 			f.write("supervisor.stop", "")
 			// Serve removes the lock when it stops, so the mode is sampled inside the injected
-			// Now, which stopServing calls (for stopped_at) before it unlinks the lock.
+			// Now, which stopServing calls (for stopped_at) before it releases the lock.
 			mode := os.FileMode(0)
 			f.sup.Now = func() time.Time {
 				if info, err := os.Stat(f.path("supervisor.lock")); err == nil {
@@ -185,8 +245,8 @@ func TestServeLockIsOwnerOnly(t *testing.T) {
 			if code, err := f.sup.Serve(&bytes.Buffer{}); code != 0 || err != nil {
 				t.Fatalf("serve = %d, %v", code, err)
 			}
-			if mode != 0o600 {
-				t.Errorf("lock mode while serving %v, want 0600", mode)
+			if mode != tc.want {
+				t.Errorf("lock mode while serving %v, want %v", mode, tc.want)
 			}
 		})
 	}
@@ -217,7 +277,7 @@ func TestServeCrashesOnAStateThatIsNoObject(t *testing.T) {
 				t.Errorf("code %d, waits %v", got.code, got.sleeps)
 			}
 			wantError(t, got.err, tc.want)
-			if f.read("supervisor-state.json") != tc.state || f.read("supervisor.lock") != "4242" {
+			if f.read("supervisor-state.json") != tc.state || !f.heldHere("supervisor.lock") {
 				t.Error("a crashed serve must write nothing and keep its lock")
 			}
 		})

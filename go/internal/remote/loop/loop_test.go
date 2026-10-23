@@ -195,7 +195,8 @@ func writeFile(t *testing.T, path, content string) {
 
 // paused reports whether the project's flip.json holds a human gate.
 func paused(dir string) bool {
-	return jsjson.Truthy(jsjson.Path(flipcmd.NewProject(dir).ReadFlip(), "awaiting_human"))
+	record, err := flipcmd.NewProject(dir).Read()
+	return err != nil || jsjson.Truthy(jsjson.Path(record.Value, "awaiting_human"))
 }
 
 func pushedKeys(push timedPush) []string {

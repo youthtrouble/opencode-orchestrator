@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
@@ -94,6 +95,25 @@ func absOrDefault(value, fallback string) (string, error) {
 		return fallback, nil
 	}
 	return filepath.Abs(value)
+}
+
+// ProjectRoot resolves dir lexically, without following symlinks or searching ancestors.
+// Inside .orchestrator, the project is the parent of the first exact .orchestrator
+// component. An empty dir means the working directory, as with path.resolve().
+func ProjectRoot(dir string) (string, error) {
+	abs, err := nodefs.Resolve(dir)
+	if err != nil {
+		return "", err
+	}
+	volume := filepath.VolumeName(abs)
+	root := volume + string(filepath.Separator)
+	for _, component := range strings.Split(strings.TrimPrefix(abs[len(volume):], string(filepath.Separator)), string(filepath.Separator)) {
+		if component == ".orchestrator" {
+			return root, nil
+		}
+		root = filepath.Join(root, component)
+	}
+	return abs, nil
 }
 
 // ProjectDir is <project>/.orchestrator, the per-project state both runtimes share.

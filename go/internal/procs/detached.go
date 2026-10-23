@@ -48,26 +48,24 @@ func (d Detached) StartReaped() (int, error) {
 }
 
 func (d Detached) start() (*exec.Cmd, error) {
-	// Set explicitly: exec.Cmd rewrites PWD for a nil Env with a Dir, and Node does not.
-	env := os.Environ()
-	path, err := resolve(d.Name, d.Dir, env)
+	// An explicit Env stops exec.Cmd setting PWD; set it here, unlike Node (PE-58).
+	env, err := WithPWD(os.Environ(), d.Dir)
 	if err != nil {
 		return nil, err
 	}
-	cmd := &exec.Cmd{
-		Path:        path,
-		Args:        append([]string{d.Name}, d.Args...),
-		Dir:         d.Dir,
-		Env:         env,
-		SysProcAttr: &syscall.SysProcAttr{Setsid: true},
-	}
-	if d.Output != nil { // a nil *os.File in the io.Writer fields would not mean /dev/null
-		cmd.Stdout, cmd.Stderr = d.Output, d.Output
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, startError(d.Name, err)
-	}
-	return cmd, nil
+	return startResolved(d.Name, d.Dir, env, func(path string) *exec.Cmd {
+		cmd := &exec.Cmd{
+			Path:        path,
+			Args:        append([]string{d.Name}, d.Args...),
+			Dir:         d.Dir,
+			Env:         env,
+			SysProcAttr: &syscall.SysProcAttr{Setsid: true},
+		}
+		if d.Output != nil { // a nil *os.File in the io.Writer fields would not mean /dev/null
+			cmd.Stdout, cmd.Stderr = d.Output, d.Output
+		}
+		return cmd
+	})
 }
 
 // StartDetached starts the program at path with args as a Detached child with its output on

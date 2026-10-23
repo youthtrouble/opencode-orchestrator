@@ -6,9 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cliargs"
@@ -16,6 +14,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
 
 // UsageError is a start the JS refuses before claiming its lane: it prints Message on stderr
@@ -47,6 +46,7 @@ type Launch struct {
 	brief   string // absolute
 	lane    any    // the --lane value, or the brief's base name without ".md"
 	harness string
+	cwd     string // child cwd, independent of the project that owns the lane
 }
 
 // PrepareStart is the validation of `worker.mjs start` that follows the usage check
@@ -72,7 +72,15 @@ func (p Project) PrepareStart(opts cliargs.Opts) (*Launch, error) {
 	if err := CheckLane(lane); err != nil {
 		return nil, err
 	}
-	return &Launch{project: p, opts: opts, brief: brief, lane: lane, harness: harness}, nil
+	cwd := p.Root
+	if value, ok := opts.Value("cwd"); opts.Truthy("root") && ok && value != "" {
+		var err error
+		cwd, err = nodefs.Resolve(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Launch{project: p, opts: opts, brief: brief, lane: lane, harness: harness, cwd: cwd}, nil
 }
 
 // resolveAgainst is path.resolve(root, p) for an absolute root.
@@ -104,12 +112,17 @@ type Runtime struct {
 // exit code is 0 for a finished or deferred run, 1 otherwise, ExitLaneLocked when the lane is
 // held.
 //
+// The lane is claimed with ownlock.Acquire, a kernel record lock this runner process holds for
+// its whole run (C6: the runner owns the lane, not its bridge's process group). A lock file
+// left by a runner that died is held by no one and is reclaimed here (PE-28; the JS refuses any
+// existing file, so such a lane stays blocked until a person deletes it). The lock is released
+// on every path once claimed, before the final line, so the lane is free when the line is read;
+// the JS leaves it when the run dies between its claim and its try block.
+//
 // A returned error is the exception the JS dies of (exit 1, after the output so far). An
 // unreadable brief fails before the lock is claimed, so it leaves neither lock nor state, and
-// wins over a held lane. A failure creating the workers directory leaves nothing either; from
-// the lock's claim on, a failure before the bridge starts leaves the lock and the "starting"
-// state, as in the JS, and from the bridge's start on the lock is removed on every path, as the
-// JS `finally` does.
+// wins over a held lane. A failure creating the workers directory leaves nothing either; a
+// failure before the bridge starts leaves the "starting" state, as in the JS.
 func (l *Launch) Foreground(rt Runtime) (int, error) {
 	p := l.project
 	prompt, err := l.prompt()
@@ -119,45 +132,46 @@ func (l *Launch) Foreground(rt Runtime) (int, error) {
 	if err := nodefs.MkdirPrivate(p.WorkersDir); err != nil {
 		return 1, err
 	}
-	if err := l.lock(rt.Pid); err != nil {
+	lock, err := ownlock.Acquire(p.LockPath(l.lane), rt.Pid)
+	if err != nil {
+		// As the JS treats any failure of its exclusive create, any failure to claim is a
+		// held lane, so a launcher always sees exit 3 for a lane it cannot run.
 		return l.refuseLocked(rt.Stderr)
 	}
 	r := &run{launch: l, rt: rt, state: p.NewState(l.initialState(rt), rt.Now)}
-	r.state.Publish(jsjson.NewObject())
-	// Signals are captured from here on; runBridge starts handling them once the bridge exists.
-	signals := make(chan os.Signal, 2)
-	rt.Notify(signals)
-	code, err := l.unlockingAfter(func() (any, error) { return r.runBridge(prompt, signals) })
+	code, err := releasingAfter(lock, rt.Stderr, func() (any, error) {
+		r.state.Publish(jsjson.NewObject())
+		// Signals are captured from here on; runBridge starts handling them once the bridge
+		// exists.
+		signals := make(chan os.Signal, 2)
+		rt.Notify(signals)
+		return r.runBridge(prompt, signals)
+	})
 	if err != nil {
 		return 1, err
 	}
 	return r.report(code)
 }
 
-// lock creates the lane's lock holding pid, failing if it exists (writeFileSync with flag "wx"
-// and mode 0600). A failed write after the create leaves the file, as in the JS.
-func (l *Launch) lock(pid int) error {
-	f, err := os.OpenFile(l.project.LockPath(l.lane), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, writeErr := f.WriteString(strconv.Itoa(pid))
-	if closeErr := f.Close(); writeErr == nil {
-		writeErr = closeErr
-	}
-	return writeErr
-}
-
-// unlockingAfter runs the JS try block and then its finally: unlinkSync(lockPath), whose
-// failure is ignored. unlink(2) itself, as Node calls it: os.Remove would also remove an empty
-// directory.
-func (l *Launch) unlockingAfter(try func() (any, error)) (any, error) {
-	defer func() { _ = syscall.Unlink(l.project.LockPath(l.lane)) }()
-	return try()
+// releasingAfter runs the claimed part of a run and then releases the lane's lock, on every
+// path. A failed Release does not change how the run ended: the kernel lock goes with the
+// descriptor, or at the latest with the process, so the lane is never left owned; at worst the
+// lock file stays behind, which the next start reclaims. The failure is reported on stderr, not
+// ignored as the JS ignores a failed unlink.
+func releasingAfter(lock *ownlock.Lock, stderr io.Writer, claimed func() (any, error)) (any, error) {
+	defer func() {
+		if err := lock.Release(); err != nil {
+			fmt.Fprintf(stderr, "orch worker: releasing the lane lock: %v\n", err)
+		}
+	}()
+	return claimed()
 }
 
 // laneLockedHint is the advice the lane-locked refusal carries.
-const laneLockedHint = "inspect worker state; remove the lock only after confirming the process is gone"
+//
+// PE-28: the JS tells people to remove the lock once the process is gone; a lock is never
+// removed by hand (C8), since the next start reclaims a dead runner's lock itself.
+const laneLockedHint = "inspect worker status; the lane frees itself when its runner exits"
 
 // refuseLocked prints the lane-locked refusal of a foreground start: the previous state's
 // status, pid and whether that pid is alive, and the hint.
@@ -219,7 +233,29 @@ func (l *Launch) initialState(rt Runtime) *jsjson.Object {
 	state.Set("started_at", jsjson.ISOString(rt.Now()))
 	state.Set("log_path", o.Or("log-path", nil))
 	state.Set("model", o.Or("model", nil))
+	state.Set("launch_options", l.launchOptions())
 	return state
+}
+
+// replayedOptions are the bridge options a redispatch passes again (PE-62). force, run-id,
+// log-path and detach belong to one run and are never replayed.
+var replayedOptions = []string{"effort", "timeout-min", "agent", "sandbox", "permission-mode", "allowed-tools", "max-turns"}
+
+// launchOptions is what a redispatch must pass again to start this lane the same way: each
+// given replayedOptions value, then, for a lane whose child cwd is not its project root,
+// root and cwd (both absolute, in that order, so they win over the replayed --cwd <root>).
+func (l *Launch) launchOptions() *jsjson.Object {
+	options := jsjson.NewObject()
+	for _, key := range replayedOptions {
+		if l.opts.Truthy(key) {
+			options.Set(key, l.opts.JS(key))
+		}
+	}
+	if l.cwd != l.project.Root {
+		options.Set("root", l.project.Root)
+		options.Set("cwd", l.cwd)
+	}
+	return options
 }
 
 // briefPath is the brief relative to the project root, as the state and the preamble name it.
@@ -259,11 +295,18 @@ func (l *Launch) preamble() string {
 
 // bridgeArgs is the bridge command line after the executable (l.105-114): option values are
 // passed as their JS text (a bare key's true as "true"). --effort reaches opencode-exec too,
-// which has no such option, so its value becomes the prompt there, as in the JS.
+// which accepts and ignores it (PE-46; in the JS its value became the prompt).
 func (l *Launch) bridgeArgs() []string {
 	o := l.opts
 	text := func(key string) string { return jsjson.TemplateString(o.JS(key)) }
-	args := []string{l.harness + "-exec", "--cwd", l.project.Root, "--timeout-min", jsjson.TemplateString(o.Or("timeout-min", "120"))}
+	cwd := l.project.Root
+	if l.cwd != "" {
+		cwd = l.cwd
+	}
+	args := []string{l.harness + "-exec", "--cwd", cwd, "--timeout-min", jsjson.TemplateString(o.Or("timeout-min", "120"))}
+	if cwd != l.project.Root {
+		args = append(args, "--artifact-root", l.project.Root)
+	}
 	for _, key := range []string{"model", "effort", "resume"} {
 		if o.Truthy(key) {
 			args = append(args, "--"+key, text(key))

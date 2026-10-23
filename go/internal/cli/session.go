@@ -71,7 +71,7 @@ func sessionBeat(opts cliargs.Opts, stdio Stdio) error {
 	if err != nil {
 		return err
 	}
-	root, err := nodefs.Resolve(valueOrCwd(opts, ""))
+	root, err := paths.ProjectRoot(valueOrCwd(opts, ""))
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func sessionHookBeat(opts cliargs.Opts, stdio Stdio) error {
 	if strings.ContainsRune(dir, 0) {
 		return &session.Error{Message: "hook input cwd contains a NUL character"}
 	}
-	root, err := nodefs.Resolve(dir)
+	root, err := paths.ProjectRoot(dir)
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func sessionShow(rest []string, stdio Stdio) int {
 		fmt.Fprintf(stdio.Err, "session show: %s\n", err)
 		return 2
 	}
-	root, err := nodefs.Resolve(valueOrCwd(opts, ""))
+	root, err := paths.ProjectRoot(valueOrCwd(opts, ""))
 	if err != nil {
 		return crash(stdio, err)
 	}

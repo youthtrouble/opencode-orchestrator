@@ -175,7 +175,7 @@ func TestGateProblemsAreReportedAndTheReplyStands(t *testing.T) {
 			f.postQuestion(t)
 			f.writeFlip(t, c.flip)
 			result, err := Post(f.box, f.project, Request{ID: "id-1", Body: "yes"})
-			if err != nil || result.Gate != c.want || result.GateErr == nil {
+			if (err != nil) != (c.want == GateUnreadable) || result.Gate != c.want || result.GateErr == nil {
 				t.Errorf("result = %+v, err = %v", result, err)
 			}
 			if got := len(lines(t, filepath.Join(f.box.Dir, "messages.jsonl"))); got != 2 {
@@ -203,6 +203,43 @@ func TestFinishAcksOnlyWhenTheHumanHasNotAndClearsTheGate(t *testing.T) {
 			_, statErr := os.Stat(filepath.Join(f.box.Dir, "acks.jsonl"))
 			if wrote := statErr == nil; wrote == acked {
 				t.Errorf("ack written = %v with acked = %v", wrote, acked)
+			}
+		})
+	}
+}
+
+func TestReplyRefusesUnreadableFlipStateAndLeavesItsBytes(t *testing.T) {
+	for _, kind := range []string{"corrupt", "mode-0000"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newFixture(t)
+			f.postQuestion(t)
+			content := "{"
+			if kind == "mode-0000" {
+				content = `{"awaiting_human":{"question":"id-1","door":"claude"}}`
+			}
+			f.writeFlip(t, content)
+			if kind == "mode-0000" {
+				if err := os.Chmod(f.project.FlipPath, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(f.project.FlipPath, 0600) })
+				if _, err := os.ReadFile(f.project.FlipPath); err == nil {
+					t.Skip("process can read mode-0000 files")
+				}
+			}
+			result, err := Post(f.box, f.project, Request{ID: "id-1", Body: "yes"})
+			var stateErr *flipcmd.StateError
+			if !errors.As(err, &stateErr) || result.Gate != GateUnreadable {
+				t.Fatalf("reply = %+v, %v", result, err)
+			}
+			if kind == "mode-0000" {
+				if err := os.Chmod(f.project.FlipPath, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			data, err := os.ReadFile(f.project.FlipPath)
+			if err != nil || string(data) != content {
+				t.Fatalf("state changed %q, %v", data, err)
 			}
 		})
 	}

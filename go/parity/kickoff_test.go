@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,10 +17,29 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
-// supervisorHeldByThisTest locks the project's supervisor with this test process's pid, which
-// is only ever sent signal 0: `supervisor start` answers "already running" and starts nothing.
+// supervisorHeldByThisTest has a helper process hold the project's supervisor lock (CA2), whose
+// pid each runtime sees (the JS in the text, orch from the kernel) and only ever sends signal
+// 0: `supervisor start` answers "already running" and starts nothing.
 func supervisorHeldByThisTest() seed {
-	return seedProjectFile(".orchestrator/supervisor.lock", strconv.Itoa(os.Getpid())+"\n")
+	return seedHeldLock(".orchestrator/supervisor.lock")
+}
+
+// supervisorHolderLine is the "already running" answer naming a held supervisor lock's pid,
+// which differs per runtime's sandbox; withSupervisorHolder writes it as <holder>.
+const supervisorHolderLine = `supervisor: {"started":false,"reason":"already running","pid":<holder>}`
+
+var supervisorHolderPid = regexp.MustCompile(`("reason":"already running","pid":)(\d+)`)
+
+// withSupervisorHolder replaces the pid of an "already running" answer with <holder> when a
+// lock holder this test started has it.
+func withSupervisorHolder(s string) string {
+	return supervisorHolderPid.ReplaceAllStringFunc(s, func(m string) string {
+		parts := supervisorHolderPid.FindStringSubmatch(m)
+		if _, held := lockHolders.Load(parts[2]); held {
+			return parts[1] + "<holder>"
+		}
+		return m
+	})
 }
 
 // kickoffFeedsFail makes both feeds fail, so each runtime's refresh keeps the seeded cache's
@@ -51,6 +70,7 @@ type kickoffCase struct {
 // crashes before the launch. The supervisor lock is held by this test, so neither
 // `supervisor start` starts a serve. The launching cases follow (testKickoffLaunches).
 func (h *harness) testKickoff(t *testing.T) {
+	h.testNestedProjectRoot(t, "kickoff")
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	c := newFlipCaches(t)
 	brief := seedProjectFile("a.md", "# a\n")
@@ -60,7 +80,7 @@ func (h *harness) testKickoff(t *testing.T) {
 	preflightOnly := []string{"--brief", "a.md", "--door", "gemini"}
 	gate := seedFlip(`{"from":"opencode","to":"claude","at":"2026-01-01T00:00:00.000Z","awaiting_human":{"reason":"push?"}}`)
 	usageLine := cmdref.KickoffUsage()
-	supervisorLine := `supervisor: {"started":false,"reason":"already running","pid":` + strconv.Itoa(os.Getpid()) + `}`
+	supervisorLine := supervisorHolderLine
 	const dryRunSupervisorLine = "supervisor: not started (dry-run)"
 	door := func(door, vendor, home, mode string) string {
 		return "door: " + door + " (" + vendor + " green; home " + home + ") " + mode
@@ -123,20 +143,35 @@ func (h *harness) testKickoff(t *testing.T) {
 		})
 	}
 	// Exit 75 promises a relaunch at the reset, so a both-red kickoff whose supervisor did not
-	// start (its log directory is a file) or whose pause was not recorded (flip.json is a
-	// directory) fails with exit 1 instead (C3-F2). Each failing child's error is pinned: the
-	// supervisor's in the answer kickoff prints, the pause's on the inherited stderr.
+	// start (its log directory is a file) fails with exit 1 instead (C3-F2). The failing
+	// supervisor's error is pinned in the answer kickoff prints.
 	notDeferred := []notDeferredCase{
 		{name: "both-red/supervisor-fails", failed: "the supervisor did not start", seed: seedProjectFile(".orchestrator/logs", "not a directory\n"),
 			supervisorError: "Error: EEXIST: file already exists, mkdir '"},
-		{name: "both-red/pause-fails", failed: "the pause was not recorded", seed: seedProjectDir(".orchestrator/flip.json"), briefSaved: true,
-			pauseError: "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/flip.json.tmp"},
 	}
 	for _, nc := range notDeferred {
 		t.Run(nc.name, func(t *testing.T) {
 			t.Parallel()
 			inv := h.kickoffInvocation(kickoffCase{args: []string{"--brief", "a.md"}, seed: seeds(brief, c.bothRed, nc.seed)})
 			h.compareKickoffNotDeferred(t, inv, nc)
+		})
+	}
+	// PE-61: orch stops a kickoff whose gate clear refuses an unreadable flip.json; the JS
+	// ignores the clear. A usable-vendor kickoff (dying of the unknown door after the preflight)
+	// with a corrupt flip.json, and a both-red one with flip.json a directory (the JS fails
+	// later, at the pause, as C3-F2 pinned it).
+	for _, rc := range []refusedClearCase{
+		{name: "PE-61/corrupt-flip-json", args: preflightOnly, seed: seedFlip("{not json\n"), code: "INVALID_JSON", jsExit: 1,
+			jsStdout: supervisorLine, jsStderr: "TypeError: Cannot read properties of undefined (reading 'overall')",
+			jsFiles: map[string]string{"project/flip.json": "{}\n", "extra/.git/info/exclude": ".orchestrator/\n"}},
+		{name: "PE-61/both-red-flip-json-directory", args: []string{"--brief", "a.md"}, seed: seeds(c.bothRed, seedProjectDir(".orchestrator/flip.json")), code: "EISDIR", jsExit: 1,
+			jsStdout: supervisorLine, jsStderr: "Both vendors are red, but the pause was not recorded: nothing will relaunch at the reset. Fix it and run kickoff again.",
+			jsFiles: map[string]string{"project/briefs/conductor-kickoff.md": cmdref.KickoffPrompt("a.md", nil) + "\n"}},
+	} {
+		t.Run(rc.name, func(t *testing.T) {
+			t.Parallel()
+			rc.seed = seeds(brief, c.green, rc.seed)
+			h.testKickoffRefusedGateClear(t, rc)
 		})
 	}
 	// The guarantee is about the project: like every routing read, a dry run still refreshes the
@@ -162,6 +197,7 @@ func (h *harness) testKickoff(t *testing.T) {
 		h.testKickoffRegistryMissing(t, seeds(brief, c.green))
 	})
 	t.Run("launch", h.testKickoffLaunches)
+	t.Run("cleanup/unread-serve", h.testKickoffUnreadServeCleanup)
 }
 
 // compareKickoff checks that the JS run printed the expected line (or nothing, for "") and
@@ -186,6 +222,62 @@ func (h *harness) compareKickoff(t *testing.T, inv invocation, line string, file
 	compareOutcomes(t, js, orch)
 }
 
+// refusedClearCase is a kickoff whose `flip gate --clear` orch refuses with the StateError code
+// (PE-61). jsExit, jsStdout, jsStderr (a line of each) and jsFiles (exact contents) pin the
+// frozen JS's old behaviour, which goes on past the clear.
+type refusedClearCase struct {
+	name, code         string
+	args               []string
+	seed               seed
+	jsExit             int
+	jsStdout, jsStderr string
+	jsFiles            map[string]string
+}
+
+// testKickoffRefusedGateClear asserts PE-61: orch exits 1 naming the refused clear, prints no
+// supervisor line and leaves every project file as seeded (no supervisor state, exclude,
+// brief or pause; the empty flip.json.lock a transaction leaves is not a change). The JS side
+// is checked against the pinned old behaviour; the pair is not compared, as the runtimes
+// differ by design.
+func (h *harness) testKickoffRefusedGateClear(t *testing.T, rc refusedClearCase) {
+	t.Helper()
+	inv := h.kickoffInvocation(kickoffCase{args: rc.args, seed: rc.seed})
+	var runs int
+	var orchChanged []string
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		o = flipTransactionSidecar(o, before)
+		if runs++; runs == 2 { // runPair runs the JS, then orch
+			for key, content := range o.files {
+				if seeded, ok := before[key]; isProjectFile(key) && (!ok || seeded != content) {
+					orchChanged = append(orchChanged, key)
+				}
+			}
+			for key := range before {
+				if _, kept := o.files[key]; !kept {
+					orchChanged = append(orchChanged, key)
+				}
+			}
+		}
+		return withLockHolderPids(o)
+	}
+	js, orch := h.runPair(t, inv)
+	if js.exitCode != rc.jsExit || !strings.Contains("\n"+js.stdout, "\n"+rc.jsStdout+"\n") || !strings.Contains("\n"+js.stderr, "\n"+rc.jsStderr+"\n") {
+		t.Errorf("js: exit %d, stdout %q, stderr %q; want the pinned old behaviour: exit %d, the line %q and %q", js.exitCode, js.stdout, js.stderr, rc.jsExit, rc.jsStdout, rc.jsStderr)
+	}
+	for key, want := range rc.jsFiles {
+		if got := js.files[key]; got != want {
+			t.Errorf("js %s = %q, want the pinned %q", key, got, want)
+		}
+	}
+	want := "kickoff: the human gate could not be cleared: Error: flip state unreadable: $PROJECT/.orchestrator/flip.json: " + rc.code + "; nothing was launched\n"
+	if orch.exitCode != 1 || orch.stderr != want || strings.Contains(orch.stdout, "supervisor:") {
+		t.Errorf("orch: exit %d, stdout %q, stderr %q; want 1, no supervisor line and %q", orch.exitCode, orch.stdout, orch.stderr, want)
+	}
+	if runs != 2 || len(orchChanged) > 0 {
+		t.Errorf("orch changed %q (%d runs), want every project file as seeded", orchChanged, runs)
+	}
+}
+
 // notDeferredCase is a both-red kickoff that must fail with exit 1 because the step named by
 // failed did. supervisorError starts the error the failing supervisor's answer holds ("": the
 // answer is compared as it is); pauseError starts the error line the failing pause prints on
@@ -204,7 +296,7 @@ type notDeferredCase struct {
 // is checked to be the expected error and then removed: the supervisor's answer, when it
 // failed, becomes "<answer>", and the pause's diagnostic is dropped from stderr. Everything
 // else is compared, as is every file but the temp the JS leaves beside a flip.json it could
-// not replace (PE-21).
+// not replace (PE-32: orch now refuses the unreadable record before a replacement).
 func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, nc notDeferredCase) {
 	t.Helper()
 	js, orch := h.runPair(t, inv)
@@ -215,7 +307,11 @@ func (h *harness) compareKickoffNotDeferred(t *testing.T, inv invocation, nc not
 		if o.exitCode != 1 || !endsWithWant || strings.Contains(o.stdout, "paused") || saved != nc.briefSaved {
 			t.Errorf("%s: exit %d, stdout %q, stderr %q, brief saved %v; want exit 1 ending %q, no pause and brief saved %v", side, o.exitCode, o.stdout, o.stderr, saved, want, nc.briefSaved)
 		}
-		if err := checkChildDiagnostic(side, diagnostic, nc.pauseError); err != "" {
+		expectedPauseError := nc.pauseError
+		if side == "orch" && nc.pauseError != "" {
+			expectedPauseError = "Error: flip state unreadable: $PROJECT/.orchestrator/flip.json: EISDIR"
+		}
+		if err := checkChildDiagnostic(side, diagnostic, expectedPauseError); err != "" {
 			t.Errorf("pause diagnostic: %s", err)
 		}
 		o.stderr = want
@@ -278,7 +374,13 @@ func (h *harness) kickoffInvocation(c kickoffCase) invocation {
 		// a case may make .git a file
 		extraFilesMayBeBlocked: true,
 		normalize: func(s string) string {
-			return normalizeFlip(time.Now().Add(-time.Minute))(normalizeGeneratedAt(s))
+			return withSupervisorHolder(normalizeFlip(time.Now().Add(-time.Minute))(normalizeGeneratedAt(s)))
+		},
+		normalizeWrites: func(o outcome, before map[string]string) outcome {
+			if !slices.Contains(c.args, "--dry-run") {
+				o = flipTransactionSidecar(o, before)
+			}
+			return withLockHolderPids(o)
 		},
 	}
 }
@@ -345,7 +447,7 @@ func (h *harness) testKickoffDryRunChangesNothingInTheProject(t *testing.T, s se
 				changed = append(changed, key)
 			}
 		}
-		return o
+		return withLockHolderPids(o)
 	}
 	js, orch := h.runPair(t, inv)
 	if len(unseeded) > 0 {
@@ -379,6 +481,7 @@ func (h *harness) testKickoffDryRunThenReal(t *testing.T, s seed, dryRun, real [
 		}
 		o := h.run(t, sb, realArgv, nil, then.env)
 		collectExtraFiles(t, sb, then, o.files)
+		o = then.normalizeWrites(o, first.files)
 		return o.withProjectPlaceholder(t, sb).normalized(then.normalize)
 	}
 	js, orch := run("js", dry.js, then.js), run("orch", dry.orch, then.orch)

@@ -33,7 +33,20 @@ var bridgeRuns = map[string]func(args []string, stdin *os.File, stdout, stderr i
 // refreshReportEnv names the file fakeUsageRefresh reports to; without it the fake exits at once.
 const refreshReportEnv = "ORCH_BRIDGE_TEST_REFRESH_REPORT"
 
+const envDumpEnv = "ORCH_BRIDGE_TEST_ENV_DUMP"
+
 func TestMain(m *testing.M) {
+	if report := os.Getenv(envDumpEnv); report != "" && filepath.Base(os.Args[0]) == "claude" {
+		cwd, err := syscall.Getwd()
+		if err != nil {
+			os.Exit(1)
+		}
+		data := strings.Join(append(os.Environ(), "CWD="+cwd), "\n") + "\n"
+		if err := os.WriteFile(report, []byte(data), 0o600); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if run, isBridge := bridgeRuns[os.Getenv(runBridgeEnv)]; isBridge {
 		if len(os.Args) > 1 && os.Args[1] == "usage" {
 			os.Exit(fakeUsageRefresh(os.Args[1:]))
@@ -41,6 +54,44 @@ func TestMain(m *testing.M) {
 		os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	os.Exit(m.Run())
+}
+
+func TestRunClaudeChildPWDIsTheProject(t *testing.T) {
+	stale := t.TempDir()
+	t.Setenv("PWD", stale)
+	t.Setenv("CLAUDECODE", "1")
+	sb := newClaudeSandbox(t)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(sb.bin, "claude")); err != nil {
+		t.Fatal(err)
+	}
+	report := filepath.Join(sb.home, "child-env")
+	cmd := sb.command("--prompt", "hello")
+	cmd.Env = append(cmd.Env, "PWD="+stale, envDumpEnv+"="+report)
+	// An eventless fake need not produce a successful bridge result; only its environment matters.
+	_ = exitCode(t, cmd.Run())
+	data, err := os.ReadFile(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pwd []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PWD=") {
+			pwd = append(pwd, line)
+		}
+		if strings.HasPrefix(line, "CLAUDECODE=") {
+			t.Errorf("nested Claude marker leaked: %s", line)
+		}
+	}
+	if len(pwd) != 1 || pwd[0] != "PWD="+sb.project {
+		t.Errorf("PWD entries = %q, want PWD=%s", pwd, sb.project)
+	}
+	if !strings.Contains(string(data), "CWD="+sb.project+"\n") {
+		t.Errorf("physical cwd missing from dump: %s", data)
+	}
 }
 
 // fakeUsageRefresh stands in for `orch usage --refresh`: it reports its argv, pid and process
@@ -370,6 +421,31 @@ func TestRunClaudeUsageLimitPath(t *testing.T) {
 	}
 	if !strings.Contains(sb.incidents(t), `"kind":"limit","summary":"claude run ended on a session-limit message"`) {
 		t.Errorf("incidents:\n%s", sb.incidents(t))
+	}
+}
+
+// PE-45 over the usage-limit path: a claude that printed its limit message but did not exit is
+// stopped at the cap, and the run is filed as the timeout, with its run record and exit 1, not
+// as a deferred limit (exit 75, no record).
+func TestRunClaudeCapStopAfterALimitMessageIsATimeout(t *testing.T) {
+	sb := newClaudeSandbox(t)
+	limit := `{"type":"result","is_error":true,"result":"You've hit your session limit"}` + "\n"
+	sb.fakeClaude(t, limit, "", `trap 'exit 143' TERM
+while :; do /bin/sleep 0.05; done`)
+	code, stdout, _ := sb.run(t, "--quiet", "--timeout-min", "0.01", "--prompt", "p")
+	if code != 1 {
+		t.Fatalf("exit %d, stdout %s", code, stdout)
+	}
+	result := parseResult(t, stdout)
+	if _, present := result.Get("reason"); present || jsjson.Path(result, "exit_code") != 143.0 {
+		t.Errorf("result %s", stdout)
+	}
+	if _, err := os.Stat(jsjson.Path(result, "record").(string)); err != nil {
+		t.Errorf("no run record: %v", err)
+	}
+	incidents := sb.incidents(t)
+	if !strings.Contains(incidents, `"kind":"timeout","summary":"claude bridge timed out after 0.01 min"`) || strings.Count(incidents, "\n") != 1 {
+		t.Errorf("want one timeout incident:\n%s", incidents)
 	}
 }
 

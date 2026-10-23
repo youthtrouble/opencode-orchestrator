@@ -29,8 +29,8 @@ const launcherUnits = 400
 const pendingNote = "lane locked by the current conductor; supervisor will launch after release"
 
 // Run hands the project over to the conductor at --to (bin/flip.mjs l.72-101) and returns the
-// line to print and the exit code. In order, each step's failure (Node's error, as the JS
-// dies of it) leaving the earlier writes in place: it adds .orchestrator/ to the repository's
+// line to print and the exit code. It first reads state under Update and refuses an
+// unreadable record or, with --unless-gated, a human gate. It adds .orchestrator/ to the repository's
 // info/exclude, writes the continue brief, replaces flip.json with the flip record
 // (clearing paused and awaiting_human), posts a handoff (failures ignored) and launches the
 // conductor through launch as worker lane "conductor". When the record it replaces holds a
@@ -41,7 +41,9 @@ const pendingNote = "lane locked by the current conductor; supervisor will launc
 // supervisor: flip.json gains pending_launch, which keeps the kickoff's brief for the
 // supervisor's retry, and the answer is pending, exit 0. Otherwise
 // the answer carries the launcher's output and the exit is 0 when the launcher exited 0, else 1.
-// The error is ErrToRequired, or the exception the JS dies of; the exit code is then unused.
+// A launch whose last stdout line is a detach answer also carries its run_id and runner_pid.
+// Errors include ErrToRequired, StateError, and transaction/filesystem failures; the exit
+// code is then unused. The transaction is released before posting or launching.
 func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, error) {
 	to, isText := opts.JS("to").(string)
 	if !isText || (to != flip.DoorOpencode && to != flip.DoorClaude) {
@@ -51,27 +53,41 @@ func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, e
 	reason := opts.Or("reason", nil)
 	// The brief and the handoff body say why with a default text; flip.json keeps null.
 	reasonOrDefault := opts.Or("reason", "vendor budget flip")
-	prev := p.ReadFlip()
-	if _, err := EnsureGitExclude(p.Root); err != nil {
-		return nil, 0, err
-	}
-	kickoffBrief := p.savedBrief(prev)
-	brief := kickoffBrief
-	if kickoffBrief == "" {
-		written, err := p.writeContinueBrief(to, from, reasonOrDefault)
-		if err != nil {
-			return nil, 0, err
+	var kickoffBrief, brief string
+	gated := false
+	err := p.Update(func(prev Record) (any, error) {
+		if opts.Truthy("unless-gated") && jsjson.Truthy(jsjson.Path(prev.Value, "awaiting_human")) {
+			gated = true
+			return nil, ErrNoUpdate
 		}
-		brief = written
-	}
-	record := jsjson.NewObject()
-	record.Set("at", jsjson.ISOString(p.Now()))
-	record.Set("from", from)
-	record.Set("to", to)
-	record.Set("reason", reason)
-	record.Set("previous", previousFlip(prev))
-	if err := p.writeFlip(record); err != nil {
+		if _, err := EnsureGitExclude(p.Root); err != nil {
+			return nil, err
+		}
+		kickoffBrief = p.savedBrief(prev.Value)
+		brief = kickoffBrief
+		if brief == "" {
+			var err error
+			brief, err = p.writeContinueBrief(to, from, reasonOrDefault)
+			if err != nil {
+				return nil, err
+			}
+		}
+		record := jsjson.NewObject()
+		record.Set("at", jsjson.ISOString(p.Now()))
+		record.Set("from", from)
+		record.Set("to", to)
+		record.Set("reason", reason)
+		record.Set("previous", previousFlip(prev.Value))
+		return record, nil
+	})
+	if err != nil {
 		return nil, 0, err
+	}
+	if gated {
+		answer := jsjson.NewObject()
+		answer.Set("flipped", false)
+		answer.Set("reason", "awaiting human")
+		return answer, 1, nil
 	}
 	p.postIgnoringErrors(mailbox.Draft{
 		From:    conductor(from),
@@ -88,7 +104,7 @@ func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, e
 	}
 	out = strings.Trim(out, jsstr.WhiteSpace)
 	if (status == nil || *status != 0) && strings.Contains(out, "lane locked") {
-		return p.leaveLaunchPending(opts, record, to, from, reason, kickoffBrief)
+		return p.leaveLaunchPending(opts, to, from, reason, kickoffBrief)
 	}
 	launched := status != nil && *status == 0
 	answer := jsjson.NewObject()
@@ -96,10 +112,29 @@ func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, e
 	answer.Set("to", to)
 	answer.Set("from", from)
 	answer.Set("launcher", jsstr.Slice(out, 0, launcherUnits))
-	if launched {
-		return answer, 0, nil
+	if !launched {
+		return answer, 1, nil
 	}
-	return answer, 1, nil
+	// PE-63: the supervisor confirms a launch from these fields, never from the cut quote.
+	if detach, ok := launchedRun(stdout); ok {
+		answer.Set("run_id", jsjson.Path(detach, "run_id"))
+		answer.Set("runner_pid", jsjson.Path(detach, "runner_pid"))
+	}
+	return answer, 0, nil
+}
+
+// launchedRun is the launcher's last stdout line when it is a detach answer: an object with a
+// string run_id and a numeric runner_pid.
+func launchedRun(stdout string) (*jsjson.Object, bool) {
+	lines := strings.Split(strings.Trim(stdout, jsstr.WhiteSpace), "\n")
+	value, err := jsjson.Unmarshal([]byte(strings.Trim(lines[len(lines)-1], jsstr.WhiteSpace)))
+	if err != nil {
+		return nil, false
+	}
+	detach, isObject := value.(*jsjson.Object)
+	_, hasRun := jsjson.Path(detach, "run_id").(string)
+	_, hasPID := jsjson.Path(detach, "runner_pid").(float64)
+	return detach, isObject && hasRun && hasPID
 }
 
 // savedBrief is the brief a kickoff saved: the one its pause names (`flip pause --brief`),
@@ -157,7 +192,7 @@ func previousFlip(prev any) any {
 }
 
 // conductorLaunchArgs are the arguments after `worker start` of the detached conductor
-// worker. A bare --resume is passed as "true", as spawnSync stringifies its arguments.
+// worker. The CLI requires a value for --resume.
 func (p Project) conductorLaunchArgs(opts cliargs.Opts, to, brief string) []string {
 	args := []string{"start", "--brief", brief, "--lane", "conductor", "--harness", to, "--agent", "conductor",
 		"--breadth", "broad", "--cwd", p.Root, "--detach"}
@@ -175,8 +210,9 @@ func (p Project) conductorLaunchArgs(opts cliargs.Opts, to, brief string) []stri
 
 // leaveLaunchPending rewrites flip.json as {...record, pending_launch: {to, from, reason,
 // resume, at, brief}}, which the supervisor launches once the lane is released, and returns the
-// pending answer. brief is the kickoff's, left out when it is "".
-func (p Project) leaveLaunchPending(opts cliargs.Opts, record *jsjson.Object, to string, from, reason any, kickoffBrief string) (*jsjson.Object, int, error) {
+// pending answer. It merges into current state so a gate installed during launch survives.
+// brief is the kickoff's, left out when it is "".
+func (p Project) leaveLaunchPending(opts cliargs.Opts, to string, from, reason any, kickoffBrief string) (*jsjson.Object, int, error) {
 	pending := jsjson.NewObject()
 	pending.Set("to", to)
 	pending.Set("from", from)
@@ -186,9 +222,11 @@ func (p Project) leaveLaunchPending(opts cliargs.Opts, record *jsjson.Object, to
 	if kickoffBrief != "" {
 		pending.Set("brief", kickoffBrief)
 	}
-	withPending := jsjson.Spread(record)
-	withPending.Set("pending_launch", pending)
-	if err := p.writeFlip(withPending); err != nil {
+	if err := p.Update(func(prev Record) (any, error) {
+		withPending := jsjson.Spread(prev.Value)
+		withPending.Set("pending_launch", pending)
+		return withPending, nil
+	}); err != nil {
 		return nil, 0, err
 	}
 	answer := jsjson.NewObject()

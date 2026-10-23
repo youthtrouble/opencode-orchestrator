@@ -18,6 +18,27 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 )
 
+func TestRunSetsPWDToDir(t *testing.T) {
+	t.Setenv("PWD", t.TempDir())
+	dir := projectDir(t)
+	out, err := run(context.Background(), dir, "/usr/bin/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pwd []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "PWD=") {
+			pwd = append(pwd, line)
+		}
+	}
+	if !slices.Equal(pwd, []string{"PWD=" + dir}) {
+		t.Errorf("PWD entries = %q, want PWD=%s", pwd, dir)
+	}
+	if !strings.Contains(string(out), "GH_HOST=github.com\n") {
+		t.Error("lost GH_HOST override")
+	}
+}
+
 // projectDir is a directory for the fake git and gh to run in, by its physical path.
 func projectDir(t *testing.T) string {
 	t.Helper()

@@ -72,14 +72,34 @@ func resolvePath(v any) (string, error) {
 	return abs, nil
 }
 
+// resolveProjectRoot keeps option type errors identical to resolvePath, while preventing
+// bridge runs from treating .orchestrator itself as a project (PE-41).
+func resolveProjectRoot(v any) (string, error) {
+	abs, err := resolvePath(v)
+	if err != nil {
+		return "", err
+	}
+	return paths.ProjectRoot(abs)
+}
+
+// artifactRoot keeps orchestration output separate from the child working directory (PE-42).
+// An explicit flag wins over the environment; the default remains the resolved child cwd.
+func artifactRoot(opts options, cwd string) (string, error) {
+	return resolveProjectRoot(opts.Or("artifact-root", or(os.Getenv("ORCH_ARTIFACT_ROOT"), cwd)))
+}
+
+// timeoutMinutes is `Number(opts["timeout-min"] || defaultMinutes)`.
+func timeoutMinutes(timeoutMin any, defaultMinutes float64) float64 {
+	if jsjson.Truthy(timeoutMin) {
+		return jsjson.ToNumber(timeoutMin)
+	}
+	return defaultMinutes
+}
+
 // timeoutDelay is the delay Node gives setTimeout for
 // `Number(opts["timeout-min"] || defaultMinutes) * 60000` milliseconds (procs.TimerDelay).
 func timeoutDelay(timeoutMin any, defaultMinutes float64) time.Duration {
-	minutes := defaultMinutes
-	if jsjson.Truthy(timeoutMin) {
-		minutes = jsjson.ToNumber(timeoutMin)
-	}
-	return procs.TimerDelay(minutes * 60000)
+	return procs.TimerDelay(timeoutMinutes(timeoutMin, defaultMinutes) * 60000)
 }
 
 // refuse is the budget-red refusal every bridge makes the same way: an incident naming the
@@ -106,15 +126,23 @@ func refuse(stdout, stderr io.Writer, decision *budget.Decision, cwd, script str
 // record ({...result, prompt_sha256, prompt_head}), the post-run hook, the "done" progress
 // line, an incident for a failed run, then the result on stdout.
 type finishedRun struct {
-	log    *logger
-	cwd    string
-	prompt string
+	log          *logger
+	cwd          string
+	artifactRoot string
+	prompt       string
 	// afterRecord runs once the run record is written, where claude-exec and codex-exec start
 	// their usage refresh, or is nil. A run record the JS throws on ends the run before it.
 	afterRecord func()
 	// doneLine is the "done" progress line given the result and its record file, or nil for a
 	// bridge that logs none.
 	doneLine func(result *jsjson.Object, record string) string
+	// timedOut is set when the bridge's own cap of timeoutMinutes stopped the child; a failed
+	// run is then filed as kind timeout (PE-45).
+	timedOut       bool
+	timeoutMinutes float64
+	// model is the incident's context.model for a result without a model key (opencode,
+	// PE-47), or nil.
+	model any
 }
 
 // report writes the run record, runs afterRecord, writes the "done" line, an incident for a
@@ -124,7 +152,14 @@ func (r finishedRun) report(stdout, stderr io.Writer, result *jsjson.Object) int
 	record := jsjson.Spread(result)
 	record.Set("prompt_sha256", hex.EncodeToString(hash[:]))
 	record.Set("prompt_head", jsstr.Slice(r.prompt, 0, 400)) // U+FFFD for a split surrogate pair (PE-1)
-	file, err := runrecord.Write(r.cwd, record, time.Now())
+	root := r.artifactRoot
+	if root == "" {
+		root = r.cwd
+	}
+	if root != r.cwd {
+		record.Set("artifact_root", root)
+	}
+	file, err := runrecord.Write(root, record, time.Now())
 	if err != nil {
 		return crash(stderr, err)
 	}
@@ -136,27 +171,33 @@ func (r finishedRun) report(stdout, stderr io.Writer, result *jsjson.Object) int
 		r.log.printf("%s", r.doneLine(result, file))
 	}
 	if !jsjson.Truthy(jsjson.Path(result, "ok")) {
-		recordFailure(result, r.cwd)
+		r.recordFailure(result, root)
 		return printResult(stdout, stderr, result, exitFailed)
 	}
 	return printResult(stdout, stderr, result, exitOK)
 }
 
-// recordFailure is the incident of a failed run: kind limit when the errors mention a limit
-// or a rate, else crash.
-func recordFailure(result *jsjson.Object, cwd string) {
+// recordFailure is the incident of a failed run: kind timeout when the bridge's own cap stopped
+// the child (PE-45), else limit when the errors mention a limit or a rate, else crash.
+func (r finishedRun) recordFailure(result *jsjson.Object, cwd string) {
 	errs := jsjson.Path(result, "errors").([]any)
+	harness := text(jsjson.Path(result, "harness"))
 	kind := "crash"
-	if matchesIgnoringCase(limitOrRate, jsjson.Join(errs, " ")) {
+	summary := harness + " bridge failed: " + jsstr.Slice(jsjson.Join(errs, "; "), 0, 160) // PE-1
+	switch {
+	case r.timedOut:
+		kind = "timeout"
+		summary = harness + " bridge timed out after " + text(r.timeoutMinutes) + " min"
+	case matchesIgnoringCase(limitOrRate, jsjson.Join(errs, " ")):
 		kind = "limit"
 	}
 	context := jsjson.NewObject()
-	context.Set("model", or(jsjson.Path(result, "model"), nil))
+	context.Set("model", or(jsjson.Path(result, "model"), r.model))
 	context.Set("exit_code", jsjson.Path(result, "exit_code"))
 	recordIncident(incident.Draft{
 		Component: "bridge",
 		Kind:      kind,
-		Summary:   text(jsjson.Path(result, "harness")) + " bridge failed: " + jsstr.Slice(jsjson.Join(errs, "; "), 0, 160), // PE-1
+		Summary:   summary,
 		Detail:    jsjson.Join(errs, "\n"),
 		Context:   context,
 		Project:   cwd,

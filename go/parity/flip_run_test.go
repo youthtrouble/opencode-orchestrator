@@ -22,22 +22,25 @@ const (
 	conductorState = ".orchestrator/workers/conductor.json"
 )
 
-// heldByThisTest locks the conductor lane with this test process's pid, which is only ever
-// sent signal 0: both launchers refuse with "lane locked", so the run records a pending launch
-// and nothing is launched.
-func heldByThisTest() seed {
-	return seedProjectFile(conductorLock, strconv.Itoa(os.Getpid()))
+// heldByAHelper has a helper process hold the conductor lane's kernel lock with its own pid
+// (CA2), which the JS only ever sends signal 0: both launchers refuse with "lane locked", so
+// the run records a pending launch and nothing is launched.
+func heldByAHelper() seed {
+	return seedHeldLock(conductorLock)
 }
 
 // flipRunInvocation is a `run` whose launch the lane lock refuses (plus the case's seed).
 func (h *harness) flipRunInvocation(args []string, s seed, crash crashClass, errorLine string) invocation {
-	all := heldByThisTest()
+	all := heldByAHelper()
 	if s != nil {
 		all = seeds(all, s)
 	}
 	inv := h.flipInvocation(flipCase{args: append([]string{"run"}, args...), seed: all, crash: crash, errorLine: errorLine})
 	// a case may make .git a file or the exclude a directory
 	inv.extraFilesMayBeBlocked = true
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		return withLockHolderPids(flipTransactionSidecar(o, before))
+	}
 	return inv
 }
 
@@ -81,7 +84,14 @@ func (h *harness) testFlipRun(t *testing.T) {
 		{"usage/to-bare", []string{"--to"}},
 	}
 	for _, c := range refusals {
-		t.Run(c.name, func(t *testing.T) { h.comparePair(t, h.flipRunInvocation(c.args, nil, noCrash, "")) })
+		t.Run(c.name, func(t *testing.T) {
+			inv := h.flipRunInvocation(c.args, nil, noCrash, "")
+			if c.name == "usage/to-bare" {
+				h.compareFlipBareValuePE35(t, inv, "--to")
+				return
+			}
+			h.comparePair(t, inv)
+		})
 	}
 	t.Run("usage/cwd-bare", func(t *testing.T) {
 		h.comparePair(t, h.flipRunInvocation(append(claude, "--cwd"), nil, crashC1, cwdBoolean))
@@ -132,7 +142,18 @@ func (h *harness) testFlipRun(t *testing.T) {
 		{"exclude/git-file-malformed", claude, withGit(text("not a pointer\n"))},
 	}
 	for _, c := range pending {
-		t.Run(c.name, func(t *testing.T) { h.compareFlipPending(t, h.flipRunInvocation(c.args, c.seed, noCrash, "")) })
+		t.Run(c.name, func(t *testing.T) {
+			inv := h.flipRunInvocation(c.args, c.seed, noCrash, "")
+			if strings.HasSuffix(c.name, "-bare") {
+				h.compareFlipBareValuePE35(t, inv, c.args[len(c.args)-1])
+				return
+			}
+			if c.name == "previous/unparsable" {
+				h.compareFlipCorruptRunPE32(t, inv, `{"at":`)
+				return
+			}
+			h.compareFlipPending(t, inv)
+		})
 	}
 	t.Run("pending/paused-brief", h.testFlipRunPausedBrief)
 	t.Run("exclude/worktree-layout", func(t *testing.T) {
@@ -170,7 +191,7 @@ func (h *harness) testFlipRun(t *testing.T) {
 				return
 			}
 			if c.leftover != "" {
-				h.compareFlipPE21FailedRename(t, inv, c.leftover)
+				h.compareFlipUnreadableDirectoryPE32(t, inv, c.leftover)
 				return
 			}
 			h.comparePair(t, inv)
@@ -227,21 +248,24 @@ type flipLaunchCase struct {
 	args   []string // after "run"
 	bridge bridge
 	run    bridgeCase
+	// launchOptions is the PE-62 launch_options the launched conductor's state records.
+	launchOptions string
 }
 
 // testFlipLaunches compares full launches: the run's answer, which quotes the launcher's line,
 // and everything the settled runner wrote.
 func (h *harness) testFlipLaunches(t *testing.T) {
 	ok := bridgeCase{fixture: "ok"}
+	const claudeOptions, opencodeOptions = `{"agent":"conductor","permission-mode":"auto"}`, `{"agent":"conductor"}`
 	stale := seedProjectFile(conductorLock, strconv.Itoa(reapedPid(t)))
 	cases := []flipLaunchCase{
-		{"claude", []string{"--to", "claude"}, claudeBridge, ok},
+		{"claude", []string{"--to", "claude"}, claudeBridge, ok, claudeOptions},
 		{"opencode-handback", []string{"--to", "opencode", "--from", "claude", "--reason", "handback: home door opencode is stably green again"},
-			opencodeBridge, bridgeCase{script: opencodeRunOK}},
-		{"claude-resume", []string{"--to", "claude", "--resume", "00000000-0000-4000-8000-0000000000aa"}, claudeBridge, ok},
-		{"claude-force-anthropic-red", []string{"--to", "claude", "--force"}, claudeBridge, bridgeCase{fixture: "ok", usage: "anthropic-red"}},
-		{"claude-deferred-anthropic-red", []string{"--to", "claude"}, claudeBridge, bridgeCase{usage: "anthropic-red"}},
-		{"claude-stale-lock", []string{"--to", "claude"}, claudeBridge, bridgeCase{fixture: "ok", seed: stale}},
+			opencodeBridge, bridgeCase{script: opencodeRunOK}, opencodeOptions},
+		{"claude-resume", []string{"--to", "claude", "--resume", "00000000-0000-4000-8000-0000000000aa"}, claudeBridge, ok, claudeOptions},
+		{"claude-force-anthropic-red", []string{"--to", "claude", "--force"}, claudeBridge, bridgeCase{fixture: "ok", usage: "anthropic-red"}, claudeOptions},
+		{"claude-deferred-anthropic-red", []string{"--to", "claude"}, claudeBridge, bridgeCase{usage: "anthropic-red"}, claudeOptions},
+		{"claude-stale-lock", []string{"--to", "claude"}, claudeBridge, bridgeCase{fixture: "ok", seed: stale}, claudeOptions},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -251,6 +275,8 @@ func (h *harness) testFlipLaunches(t *testing.T) {
 					t.Errorf("%s: exit %d, stdout %q, stderr %q; want a launch", side, o.exitCode, o.stdout, o.stderr)
 				}
 			}
+			pinLaunchedRun(t, js, &orch)
+			withPE62(t, &js, &orch, c.launchOptions)
 			compareOutcomes(t, js, orch)
 		})
 	}
@@ -282,12 +308,15 @@ func (h *harness) testFlipLaunches(t *testing.T) {
 // brief was written, then compares the pair.
 func (h *harness) testFlipLaunchesASavedBrief(t *testing.T, state seed, prompt string, continued bool) {
 	js, orch := h.runFlipLaunchPair(t, flipLaunchCase{args: []string{"--to", "claude", "--from", "opencode"}, bridge: claudeBridge, run: bridgeCase{fixture: "ok", seed: state}})
+	// PE-62: the claude conductor launch records its agent and permission mode.
+	withPE62(t, &js, &orch, `{"agent":"conductor","permission-mode":"auto"}`)
 	for side, o := range map[string]outcome{"js": js, "orch": orch} {
 		_, wrote := o.files["project/briefs/conductor-continue.md"]
 		if o.exitCode != 0 || !strings.HasPrefix(o.stdout, `{"flipped":true,`) || wrote != continued || !strings.Contains(o.files["fakelog/claude-argv.txt"], prompt) {
 			t.Errorf("%s: exit %d, stdout %q, argv %q, continue brief %v; want the conductor launched on %q (continue brief %v)", side, o.exitCode, o.stdout, o.files["fakelog/claude-argv.txt"], wrote, prompt, continued)
 		}
 	}
+	pinLaunchedRun(t, js, &orch)
 	compareOutcomes(t, js, orch)
 }
 
@@ -300,6 +329,10 @@ func (h *harness) flipLaunchInvocation(t *testing.T, c flipLaunchCase) invocatio
 	inv.js = append([]string{h.node, filepath.Join(h.orchJS, "bin", "flip.mjs")}, args...)
 	inv.orch = append([]string{h.orchBin, "flip"}, args...)
 	inv.extraFiles = []string{".git/info/exclude"}
+	normalizeWrites := inv.normalizeWrites
+	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
+		return normalizeWrites(flipTransactionSidecar(o, before), before)
+	}
 	worker, fresh := inv.normalize, normalizeFlip(time.Now())
 	inv.normalize = func(s string) string { return fresh(worker(s)) }
 	return inv
@@ -330,6 +363,26 @@ func flipLauncherLine(t *testing.T, stdout string) string {
 		t.Errorf("the launcher's line may have been cut: %q", answer.Launcher)
 	}
 	return answer.Launcher // a cut line fails to parse, which fails the case
+}
+
+// launchedRunFields is how a launch answer ends since PE-63, after the normalizers have
+// masked the run id and the pid.
+const launchedRunFields = `,"run_id":"<run-id>","runner_pid":<pid>}` + "\n"
+
+// pinLaunchedRun asserts PE-63 for a successful launch: orch's answer copies the detach
+// line's run_id and runner_pid after launcher, the frozen JS answer (old behaviour) has
+// neither. It then drops them from orch's answer so the rest is compared.
+func pinLaunchedRun(t *testing.T, js outcome, orch *outcome) {
+	t.Helper()
+	detach := `\"run_id\":\"<run-id>\"`
+	if !strings.HasSuffix(orch.stdout, launchedRunFields) || !strings.Contains(orch.stdout, detach) || !strings.Contains(orch.stdout, `\"runner_pid\":<pid>`) {
+		t.Errorf("orch: answer %q, want the launcher's run_id and runner_pid after launcher (PE-63)", orch.stdout)
+		return
+	}
+	if strings.Contains(js.stdout, launchedRunFields) {
+		t.Errorf("js: answer %q already carries the PE-63 fields", js.stdout)
+	}
+	orch.stdout = strings.TrimSuffix(orch.stdout, launchedRunFields) + "}\n"
 }
 
 // testFlipLauncherCrash asserts PE-2 (extended) in run's answer when the launcher dies before
@@ -375,7 +428,7 @@ func (h *harness) testFlipRunCrossRuntime(t *testing.T) {
 	for writer, argv := range writers {
 		t.Run("written-by-"+writer, func(t *testing.T) {
 			sb := h.newSandbox(t)
-			heldByThisTest()(t, sb)
+			heldByAHelper()(t, sb)
 			run := []string{"run", "--to", "opencode", "--from", "claude", "--reason", "R", "--resume", "S"}
 			written := h.run(t, sb, append(append([]string{}, argv...), run...), nil, []string{noPostRunRefresh})
 			content := written.files["project/flip.json"]

@@ -5,10 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/cmdref"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 )
 
 // fakeLauncher records each launch and answers with a fixed status and outputs.
@@ -238,9 +242,8 @@ func TestRunWritesTheContinueBriefWithoutASavedBrief(t *testing.T) {
 	}
 }
 
-// Only a trailing key is bare: the run-record parser takes the next argument as a value even
-// when it starts with "--".
-func TestRunWritesBareOptionsAsTrue(t *testing.T) {
+// Internal callers retain JS option types; the CLI rejects bare value options before Run.
+func TestRunInternalOptionValuesRetainJSTypes(t *testing.T) {
 	pendingFlip := func(from, reason, resume string) string {
 		return `{"at":"` + nowISO + `","from":` + from + `,"to":"claude","reason":` + reason + `,"previous":null,` +
 			`"pending_launch":{"to":"claude","from":` + from + `,"reason":` + reason + `,"resume":` + resume + `,"at":"` + nowISO + `"}}`
@@ -293,7 +296,6 @@ func TestRunRecordsThePreviousFlip(t *testing.T) {
 		{"number", `5`, `{}`},
 		{"zero", `0`, `null`},
 		{"json null", `null`, `null`},
-		{"unparsable", `{"at":`, `null`},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newGitProject(t)
@@ -383,11 +385,11 @@ func TestRunStopsAtTheFirstFailingStep(t *testing.T) {
 		{"exclude is a directory", func(t *testing.T, p Project) { mkdir(t, filepath.Join(p.Root, ".git", "info", "exclude")) },
 			"EISDIR: illegal operation on a directory, read", nil},
 		{".orchestrator is a file", func(t *testing.T, p Project) { writeFile(t, filepath.Join(p.Root, ".orchestrator"), "") },
-			"ENOTDIR: not a directory, mkdir '$ROOT/.orchestrator/briefs'", []string{"exclude"}},
+			"EEXIST: file already exists, mkdir '$ROOT/.orchestrator'", nil},
 		{"brief is a directory", func(t *testing.T, p Project) { mkdir(t, p.briefPath()) },
 			"EISDIR: illegal operation on a directory, rename '$ROOT/.orchestrator/briefs/conductor-continue.md.tmp-*' -> '$ROOT/.orchestrator/briefs/conductor-continue.md'", []string{"exclude"}},
 		{"flip.json is a directory", func(t *testing.T, p Project) { mkdir(t, p.FlipPath) },
-			"EISDIR: illegal operation on a directory, rename '$ROOT/.orchestrator/flip.json.tmp-*' -> '$ROOT/.orchestrator/flip.json'", []string{"exclude", "brief"}},
+			"flip state unreadable: $ROOT/.orchestrator/flip.json: EISDIR", nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p := newGitProject(t)
@@ -414,6 +416,53 @@ func TestRunStopsAtTheFirstFailingStep(t *testing.T) {
 				if want := slices.Contains(c.written, name); isFile != want {
 					t.Errorf("%s written %v, want %v", name, isFile, want)
 				}
+			}
+		})
+	}
+}
+
+// E-L2 (PE-63): a launch answer carries the detach line's run_id and runner_pid at the top
+// level, so a cut launcher quote no longer hides them.
+func TestRunAnswerCarriesTheLaunchedRun(t *testing.T) {
+	deep := t.TempDir()
+	for jsstr.Len(deep) < 600 {
+		deep = filepath.Join(deep, strings.Repeat("d", 60))
+	}
+	mkdir(t, filepath.Join(deep, ".git"))
+	p := NewProject(deep)
+	p.Now = func() time.Time { return now }
+	p.NewID = func() string { return "id-1" }
+	detach := `{"run_id":"run-1","lane":"conductor","cwd":` + strconv.Quote(deep) + `,"runner_pid":42}`
+	answer, code, err := p.Run(opts("run", "--to", "claude"), (&fakeLauncher{status: exitStatus(0), stdout: "noise\n" + detach + "\n"}).launch)
+	if err != nil || code != 0 {
+		t.Fatalf("Run = %v, %d, %v", answer, code, err)
+	}
+	launcher, _ := jsjson.Path(answer, "launcher").(string)
+	if jsstr.Len(launcher) != launcherUnits || jsjson.Path(answer, "run_id") != "run-1" || jsjson.Path(answer, "runner_pid") != float64(42) {
+		t.Fatalf("answer %s", compact(t, answer))
+	}
+	if keys := answer.Keys(); !slices.Equal(keys, []string{"flipped", "to", "from", "launcher", "run_id", "runner_pid"}) {
+		t.Errorf("keys %q", keys)
+	}
+	for _, c := range []struct {
+		name     string
+		launcher *fakeLauncher
+	}{
+		{"no runner_pid", &fakeLauncher{status: exitStatus(0), stdout: `{"run_id":"run-1"}`}},
+		{"string runner_pid", &fakeLauncher{status: exitStatus(0), stdout: `{"run_id":"run-1","runner_pid":"42"}`}},
+		{"not the last line", &fakeLauncher{status: exitStatus(0), stdout: `{"run_id":"run-1","runner_pid":42}` + "\ntrailer"}},
+		{"exit 1", &fakeLauncher{status: exitStatus(1), stdout: `{"run_id":"run-1","runner_pid":42}`}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			answer, _, err := newGitProject(t).Run(opts("run", "--to", "claude"), c.launcher.launch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, has := jsjson.Lookup(answer, "run_id"); has {
+				t.Errorf("answer %s", compact(t, answer))
+			}
+			if _, has := jsjson.Lookup(answer, "runner_pid"); has {
+				t.Errorf("answer %s", compact(t, answer))
 			}
 		})
 	}

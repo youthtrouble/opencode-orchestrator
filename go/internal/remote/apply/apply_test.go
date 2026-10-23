@@ -14,6 +14,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/remote/wire"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/supervisor"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/worker"
@@ -148,9 +149,17 @@ func (f *fixture) flip(t *testing.T) any {
 	return value
 }
 
-// holdSupervisorLock is a live supervisor claiming supervisor.lock.
+// holdSupervisorLock is a live supervisor claiming supervisor.lock: a helper process holding
+// its kernel lock until the test ends (CA2), unless one already does.
 func (f *fixture) holdSupervisorLock(t *testing.T) {
-	writeFile(t, supervisor.NewProject(f.root).LockPath, fmt.Sprintf("%d\n", livePid))
+	path := supervisor.NewProject(f.root).LockPath
+	if held, _, err := ownlock.Probe(path); err != nil || held {
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	holdLock(t, path)
 }
 
 func (f *fixture) journal() actionJournal { return newActionJournal(f.root) }
@@ -389,13 +398,13 @@ func TestAnswerToTheGatesQuestionClearsTheGateAndQueuesTheRelaunch(t *testing.T)
 	}
 }
 
-func TestAGateThatCannotBeCheckedLeavesTheReplyAppliedAndIsReturned(t *testing.T) {
+func TestAGateThatCannotBeCheckedFailsClosed(t *testing.T) {
 	f := newFixture(t)
 	q := f.question(t)
 	writeFile(t, f.flipPath(), `{`)
 	got, err := f.applier.ApplyAnswer(answer(q, "accept", "ship it"))
-	var applyErr *Error
-	if got != (Outcome{Applied, "replied; could not check the human gate"}) || !errors.As(err, &applyErr) {
+	var applyErr *RetryableError
+	if got != (Outcome{}) || !errors.As(err, &applyErr) {
 		t.Errorf("outcome = %+v, err = %v", got, err)
 	}
 }
@@ -460,9 +469,10 @@ func TestResumeClearsTheGateAndQueuesTheRelaunch(t *testing.T) {
 	}
 }
 
+// PE-30: a supervisor.lock no process holds is no supervisor, whatever pid its text names.
 func TestResumeStartsTheSupervisorWhenNoneRuns(t *testing.T) {
 	f := newFixture(t)
-	writeFile(t, supervisor.NewProject(f.root).LockPath, "999999")
+	writeFile(t, supervisor.NewProject(f.root).LockPath, fmt.Sprintf("%d\n", os.Getpid()))
 	writeFile(t, f.flipPath(), `{"awaiting_human":{"door":"opencode"}}`)
 	got, err := f.applier.ApplyAction(action("resume"))
 	expect(t, got, err, Outcome{Applied, "resuming: opencode conductor relaunches within a minute"})
@@ -1217,5 +1227,65 @@ func TestStartSupervisorRunsSupervisorStartAndReportsAFailure(t *testing.T) {
 	var startErr *SupervisorStartError
 	if err := startSupervisor(failing, "/p"); !errors.As(err, &startErr) || startErr.Output != "lock busy\n" {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestResumeStartsSupervisorOutsideFlipTransactionAndKeepsANewerGate(t *testing.T) {
+	f := newFixture(t)
+	writeFile(t, f.flipPath(), `{"awaiting_human":{"reason":"old","door":"opencode"}}`)
+	start := f.applier.StartSupervisor
+	f.applier.StartSupervisor = func(root string) error {
+		held, _, err := ownlock.Probe(f.flipPath() + ".lock")
+		if err != nil || held {
+			t.Fatalf("supervisor start under flip lock: %v, %v", held, err)
+		}
+		// An explicit decision during startup supersedes the old remote resume.
+		_, err = f.applier.flipProject(root).Gate(cliargs.Opts{"reason": {Value: "newer human gate"}})
+		if err != nil {
+			return err
+		}
+		return start(root)
+	}
+	got, err := f.applier.ApplyAction(action("resume"))
+	expect(t, got, err, Outcome{Superseded, "gate changed; send it again"})
+	if jsjson.Path(f.flip(t), "awaiting_human", "reason") != "newer human gate" {
+		t.Fatal("resume erased newer gate")
+	}
+}
+
+func TestRemoteFlipWritersRefuseCorruptAndUnreadableState(t *testing.T) {
+	for _, kind := range []string{"corrupt", "mode-0000"} {
+		for _, actionKind := range []string{"pause", "resume"} {
+			t.Run(kind+"/"+actionKind, func(t *testing.T) {
+				f := newFixture(t)
+				content := "{"
+				if kind == "mode-0000" {
+					content = `{"awaiting_human":{"door":"claude"}}`
+				}
+				writeFile(t, f.flipPath(), content)
+				if kind == "mode-0000" {
+					if err := os.Chmod(f.flipPath(), 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(f.flipPath(), 0600) })
+					if _, err := os.ReadFile(f.flipPath()); err == nil {
+						t.Skip("process can read mode-0000 files")
+					}
+				}
+				got, err := f.applier.ApplyAction(action(actionKind))
+				var stateErr *flipcmd.StateError
+				if got.Result != Rejected || !errors.As(err, &stateErr) || len(f.supervisorStarts) != 0 {
+					t.Fatalf("outcome %+v, err %v, starts %v", got, err, f.supervisorStarts)
+				}
+				if kind == "mode-0000" {
+					if err := os.Chmod(f.flipPath(), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if got := f.flipBytes(t); got != content {
+					t.Fatalf("bytes changed: %s", got)
+				}
+			})
+		}
 	}
 }

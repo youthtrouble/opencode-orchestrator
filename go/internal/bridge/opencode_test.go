@@ -3,6 +3,7 @@ package bridge
 import (
 	"bytes"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,12 +41,15 @@ func TestOpencodeArgv(t *testing.T) {
 	}
 }
 
-// opencode-exec.mjs knows no effort key: --effort is a flag and its value a positional, which
-// readPrompt then takes for the prompt.
-func TestOpencodeEffortValueIsAPositional(t *testing.T) {
+// PE-46: --effort takes a value, which opencode-exec ignores; in the JS it was a flag and its
+// value the prompt.
+func TestOpencodeEffortTakesAValue(t *testing.T) {
 	opts, positional := parseOpencode("--effort", "high", "--help")
-	if !reflect.DeepEqual(positional, []string{"high"}) || opts.JS("effort") != true || opts.JS("help") != true {
+	if len(positional) != 0 || opts.JS("effort") != "high" || opts.JS("help") != true {
 		t.Errorf("opts %v, positional %q", opts, positional)
+	}
+	if got := opencodeArgv(opts, "p"); slices.Contains(got, "high") {
+		t.Errorf("argv %q passes the effort on", got)
 	}
 }
 
@@ -79,8 +83,8 @@ func replayOpencode(t *testing.T, input string, args ...string) (*opencodeEvents
 func TestOpencodeEvents(t *testing.T) {
 	text := func(s string) string { return `{"part":{"type":"text","text":"` + s + `"}}` + "\n" }
 	cases := []struct {
-		name, input, wantLog, wantCrash, wantSession, wantText string
-		args                                                   []string
+		name, input, wantLog, wantCrash, wantSession, wantText, wantErrors string
+		args                                                               []string
 	}{
 		{name: "unparsable lines and primitives are skipped", input: "not json\n5\n\"s\"\n[1]\n{}\n" + `{"part":5}` + "\n" + `{"part":null}` + "\n" + `{"part":"text"}` + "\n", wantSession: "null"},
 		{name: "null event", input: text("before") + "null\n" + text("after"), wantLog: "[opencode] message: before\n", wantCrash: "TypeError: Cannot read properties of null (reading 'sessionID')"},
@@ -95,6 +99,15 @@ func TestOpencodeEvents(t *testing.T) {
 		{name: "text that is a number", input: `{"part":{"type":"text","text":5}}` + "\n", wantCrash: "TypeError: p.text.slice is not a function"},
 		{name: "text that is an array", input: `{"part":{"type":"text","text":["a"]}}` + "\n", wantCrash: "TypeError: p.text.slice(...).replace is not a function"},
 		{name: "text that is an object crashes under --quiet too", args: []string{"--quiet"}, input: text("quiet") + `{"part":{"type":"text","text":{}}}` + "\n", wantCrash: "TypeError: p.text.slice is not a function"},
+		// PE-44: the JS ignored error events.
+		{name: "error events push data.message, else message, else the error or the event",
+			input: `{"type":"error","sessionID":"s","error":{"type":"unknown","message":"ChatGPT usage limit reached"}}` + "\n" +
+				`{"type":"error","error":{"name":"APIError","data":{"message":"Rate limited"},"message":"outer"}}` + "\n" +
+				`{"type":"error","error":{"type":"unknown"}}` + "\n" + `{"type":"error"}` + "\n",
+			wantLog: "[opencode] error: ChatGPT usage limit reached\n[opencode] error: Rate limited\n" +
+				"[opencode] error: {\"type\":\"unknown\"}\n[opencode] error: {\"type\":\"error\"}\n",
+			wantSession: `"s"`,
+			wantErrors:  `["ChatGPT usage limit reached","Rate limited","{\"type\":\"unknown\"}","{\"type\":\"error\"}"]`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -117,6 +130,9 @@ func TestOpencodeEvents(t *testing.T) {
 			if events.text != c.wantText {
 				t.Errorf("text %q, want %q", events.text, c.wantText)
 			}
+			if got := marshal(t, jsjson.Path(events.result, "errors")); c.wantErrors != "" && got != c.wantErrors {
+				t.Errorf("errors %s, want %s", got, c.wantErrors)
+			}
 		})
 	}
 }
@@ -125,18 +141,20 @@ func TestOpencodeResultOfEveryExitPath(t *testing.T) {
 	input := `{"sessionID":"s","part":{"type":"text","text":"answer"}}` + "\n"
 	cases := []struct {
 		name     string
+		events   string // lines after input
 		exitCode any
 		stderr   string
 		want     string
 	}{
-		{"ok", 0.0, "noise", `{"ok":true,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":[],"exit_code":0,"duration_ms":1500}`},
-		{"a non-zero exit pushes the bare stderr tail", 3.0, "a\nb\nc\nd\n", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":["b | c | d"],"exit_code":3,"duration_ms":1500}`},
-		{"an empty stderr pushes an empty string", 1.0, " \n", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":[""],"exit_code":1,"duration_ms":1500}`},
-		{"killed by a signal", nil, "", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":[""],"exit_code":null,"duration_ms":1500}`},
+		{"ok", "", 0.0, "noise", `{"ok":true,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":[],"exit_code":0,"duration_ms":1500}`},
+		{"a non-zero exit pushes the bare stderr tail", "", 3.0, "a\nb\nc\nd\n", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":["b | c | d"],"exit_code":3,"duration_ms":1500}`},
+		{"an empty stderr pushes an empty string", "", 1.0, " \n", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":[""],"exit_code":1,"duration_ms":1500}`},
+		{"killed by a signal", "", nil, "", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":[""],"exit_code":null,"duration_ms":1500}`},
+		{"an error event replaces the stderr tail (PE-44)", `{"type":"error","error":{"message":"limit"}}` + "\n", 1.0, "tail", `{"ok":false,"harness":"opencode","session_id":"s","agent":"conductor","cwd":"/w","started_at":"t","final_message":"answer","errors":["limit"],"exit_code":1,"duration_ms":1500}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			events, _ := replayOpencode(t, input)
+			events, _ := replayOpencode(t, input+c.events)
 			events.handleClose(c.exitCode, []byte(c.stderr), 1500*time.Millisecond)
 			if got := marshal(t, events.result); got != c.want {
 				t.Errorf("result\n got %s\nwant %s", got, c.want)

@@ -11,7 +11,6 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
 )
 
 // human is the mailbox name the reply is posted and acknowledged as.
@@ -25,9 +24,6 @@ const (
 	terminalAckNote = "replied"
 	remoteAckNote   = "replied via Work Trains"
 )
-
-// ErrFlipNotJSON is a flip.json that exists but does not parse, so the gate cannot be checked.
-var ErrFlipNotJSON = errors.New(".orchestrator/flip.json is not valid JSON")
 
 // Request is a reply to the message ID (a full id or a unique prefix) with Body. A reply pulled
 // from Work Trains carries Remote, which marks the posted line `"via": "remote"` with the
@@ -59,7 +55,7 @@ const (
 )
 
 // Result is a posted reply: the full id it answers, the reply's own id and what happened to the
-// human gate. The reply has succeeded whatever Gate says.
+// human gate. An unreadable gate returns an error even when the note was already posted.
 type Result struct {
 	ID      string
 	ReplyID string
@@ -70,7 +66,7 @@ type Result struct {
 
 // Post resolves r.ID, posts the human's note to the original's sender (`*` when the original
 // is gone or has no sender) threaded on it and finishes the reply (Finish). An error means
-// nothing was posted, unless it comes from the ack: the note is then already written.
+// nothing was posted, unless the ack or gate check failed after posting the note.
 func Post(box *mailbox.Mailbox, project flipcmd.Project, r Request) (Result, error) {
 	id, err := box.ResolveID(r.ID)
 	if err != nil {
@@ -94,11 +90,8 @@ func Post(box *mailbox.Mailbox, project flipcmd.Project, r Request) (Result, err
 		return Result{}, err
 	}
 	result, err := Finish(box, project, id, r.Remote, false)
-	if err != nil {
-		return Result{}, err
-	}
 	result.ReplyID, _ = jsjson.Path(note, "id").(string)
-	return result, nil
+	return result, err
 }
 
 // Finish is what follows a posted reply to the message id: the human's ack of it (skipped when
@@ -114,6 +107,9 @@ func Finish(box *mailbox.Mailbox, project flipcmd.Project, id string, remote *ma
 	}
 	result := Result{ID: id}
 	result.Gate, result.Door, result.GateErr = clearGateAnsweredBy(box, project, id)
+	if result.Gate == GateUnreadable {
+		return result, result.GateErr
+	}
 	return result, nil
 }
 
@@ -151,43 +147,38 @@ func ackNote(remote *mailbox.RemoteRef) string {
 // a full id or a prefix) resolves to that same message, the way the reply's own id was
 // resolved. A question that resolves to no single message answers nothing.
 func clearGateAnsweredBy(box *mailbox.Mailbox, project flipcmd.Project, id string) (Gate, any, error) {
-	record, err := readFlip(project)
-	if err != nil {
-		return GateUnreadable, nil, err
-	}
-	question, _ := jsjson.Path(record, "awaiting_human", "question").(string)
-	if question == "" {
-		return GateUntouched, nil, nil
-	}
-	gateID, err := box.ResolveID(question)
-	if err != nil {
-		return GateUnmatched, nil, err
-	}
-	if gateID != id {
-		return GateUntouched, nil, nil
-	}
-	door, queued, err := project.ClearGate(record, true)
-	switch {
-	case err != nil:
-		return GateClearFailed, nil, err
-	case !queued:
-		return GateClearedWithoutRelaunch, nil, nil
-	}
-	return GateCleared, door, nil
-}
-
-// readFlip is flip.json, or nil when there is none.
-func readFlip(project flipcmd.Project) (any, error) {
-	data, err := nodefs.ReadFile(project.FlipPath)
-	if err != nil {
-		if nodefs.Code(err) == "ENOENT" {
-			return nil, nil
+	result := GateUntouched
+	var door any
+	err := project.Update(func(prev flipcmd.Record) (any, error) {
+		question, _ := jsjson.Path(prev.Value, "awaiting_human", "question").(string)
+		if question == "" {
+			return nil, flipcmd.ErrNoUpdate
 		}
-		return nil, err
-	}
-	record, err := jsjson.Unmarshal([]byte(jsstr.DecodeUTF8(data)))
+		gateID, err := box.ResolveID(question)
+		if err != nil {
+			result = GateUnmatched
+			return nil, err
+		}
+		if gateID != id {
+			return nil, flipcmd.ErrNoUpdate
+		}
+		next, d, queued := project.ClearGateRecord(prev.Value, true)
+		door = d
+		result = GateClearedWithoutRelaunch
+		if queued {
+			result = GateCleared
+		}
+		return next, nil
+	})
 	if err != nil {
-		return nil, ErrFlipNotJSON
+		var stateErr *flipcmd.StateError
+		if errors.As(err, &stateErr) {
+			return GateUnreadable, nil, err
+		}
+		if result == GateUnmatched {
+			return result, nil, err
+		}
+		return GateClearFailed, nil, err
 	}
-	return record, nil
+	return result, door, nil
 }

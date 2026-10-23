@@ -26,7 +26,26 @@ type workerStartCase struct {
 	crash       crashClass
 	errorLine   string
 	bridgeCrash bool
+	// launchOptions is the PE-62 launch_options orch records for a case that writes a state.
+	launchOptions string
 }
+
+// pe46WorkerEffort is PE-46 through `orch worker`: the JS's opencode-exec ran opencode on
+// --effort's value X as the prompt; orch's ignores it and runs on the worker prompt.
+func pe46WorkerEffort(t *testing.T, js, orch *outcome) {
+	t.Helper()
+	const argv = "fakelog/opencode-argv.txt"
+	const workerPrompt = "\nconductor\nYou are a worker in an orchestrated multi-agent project at "
+	if !strings.HasSuffix(js.files[argv], "\nconductor\nX\n") || !strings.Contains(orch.files[argv], workerPrompt) {
+		t.Errorf("PE-46 not observed: argv log js %q, orch %q", js.files[argv], orch.files[argv])
+	}
+	orch.files[argv] = js.files[argv]
+	record := runRecordFile(t, orch.files)
+	orch.files[record] = recordPromptHead.ReplaceAllString(orch.files[record], `${1}"X"`)
+}
+
+// recordPromptHead is a run record's prompt_head with its value.
+var recordPromptHead = regexp.MustCompile(`("prompt_head": )"(?:[^"\\]|\\.)*"`)
 
 // Fresh worker values, rewritten only in their exact place and format.
 var (
@@ -96,9 +115,11 @@ func (h *harness) workerStartInvocation(t *testing.T, c workerStartCase) invocat
 		inv.normalize = func(s string) string { return c.run.normalize(normalize(s)) }
 	}
 	inv.crash, inv.errorLine, inv.progress = c.crash, c.errorLine, ""
+	inv.launchOptions = c.launchOptions
+	inv.exception = c.run.exception
 	runFileNames := inv.normalizeWrites
 	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
-		return withWorkerLockPid(runFileNames(o, before), before)
+		return withLockHolderPids(withWorkerLockPid(runFileNames(o, before), before))
 	}
 	return inv
 }
@@ -117,6 +138,33 @@ func withWorkerLockPid(o outcome, before map[string]string) outcome {
 }
 
 func text(s string) *string { return &s }
+
+// PE-28: the lane-locked hint. The JS tells people to remove the lock; orch never does (C8).
+const (
+	jsLaneLockedHint   = `"hint":"inspect worker state; remove the lock only after confirming the process is gone"`
+	orchLaneLockedHint = `"hint":"inspect worker status; the lane frees itself when its runner exits"`
+)
+
+// withJSLaneLockedHint rewrites orch's lane-locked hint to the JS's (PE-28).
+func withJSLaneLockedHint(s string) string {
+	return strings.ReplaceAll(s, orchLaneLockedHint, jsLaneLockedHint)
+}
+
+// testWorkerStartReclaimsAStaleLock asserts PE-28 (L8): a lock file that no process holds, as a
+// runner killed with SIGKILL leaves it, does not block a foreground start. The JS, pinned here,
+// refuses the lane until a person removes the file; orch claims it, runs and removes it.
+func (h *harness) testWorkerStartReclaimsAStaleLock(t *testing.T) {
+	stale := seeds(seedWorkerLockHolding("b", strconv.Itoa(reapedPid(t))), seedWorkerState("b", `{"lane":"b","status":"running","pid":1}`))
+	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: []string{"--brief", "b.md", "--harness", "claude"}, run: bridgeCase{fixture: "ok", seed: stale}}))
+	// The state's pid reads <pid> once normalized.
+	jsRefusal := `{"error":"lane locked","lane":"b","previous":{"status":"running","pid":<pid>,"alive":true},` + jsLaneLockedHint + "}\n"
+	if js.exitCode != 3 || js.stdout != "" || js.stderr != jsRefusal {
+		t.Errorf("js: exit %d, stdout %q, stderr %q; want the pinned lane-locked refusal", js.exitCode, js.stdout, js.stderr)
+	}
+	if _, locked := orch.files["project/workers/b.lock"]; orch.exitCode != 0 || !strings.Contains(orch.stdout, `"status":"finished"`) || locked {
+		t.Errorf("orch: exit %d, stdout %q, stderr %q, lock left %v; want a finished run that removed the lock", orch.exitCode, orch.stdout, orch.stderr, locked)
+	}
+}
 
 // opencodeRunOK scripts the fake opencode run to finish a session that used a tool.
 var opencodeRunOK = map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n" + `{"part":{"type":"tool","tool":"bash"}}` + "\n", "exit": "0\n"}
@@ -140,11 +188,11 @@ func (h *harness) testWorkerStart(t *testing.T) {
 	live := strconv.Itoa(os.Getpid())
 	dead := strconv.Itoa(reapedPid(t))
 	locked := func(state string) bridgeCase {
-		s := seedWorkerLock("b")
+		s := seedHeldLock(workerLockPath("b"))
 		if state != "" {
 			s = seeds(s, seedWorkerState("b", state))
 		}
-		return bridgeCase{seed: s}
+		return bridgeCase{seed: s, normalize: withJSLaneLockedHint}
 	}
 
 	directoryBrief := []string{"--brief", "d.md/", "--harness", "claude"}
@@ -152,39 +200,39 @@ func (h *harness) testWorkerStart(t *testing.T) {
 
 	cases := []workerStartCase{
 		// claude
-		{name: "claude/finished", args: claude, run: bridgeCase{fixture: "ok"}},
-		{name: "claude/conductor-lane", args: append(claude, "--lane", "conductor"), run: bridgeCase{fixture: "ok"}},
-		{name: "claude/permission-denials", args: claude, run: bridgeCase{fixture: "permission-denied"}},
-		{name: "claude/failed-bad-model", args: claude, run: bridgeCase{fixture: "bad-model"}},
-		{name: "claude/failed-exit-with-stderr", args: claude, run: bridgeCase{script: map[string]string{"stderr": "boom\nfatal: no auth\n", "exit": "1\n"}}},
-		{name: "claude/failed-rate-limit", args: claude, run: bridgeCase{script: map[string]string{"jsonl": `{"type":"result","is_error":true,"subtype":"rate_limited"}` + "\n", "exit": "1\n"}}},
-		{name: "claude/deferred-red-cache", args: claude, run: bridgeCase{usage: "red"}},
-		{name: "claude/deferred-usage-limit", args: claude, run: bridgeCase{fixture: "usage-limit", codex: true}},
-		{name: "claude/every-flag", run: bridgeCase{fixture: "ok"}, args: append(claude,
+		{name: "claude/finished", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "ok"}},
+		{name: "claude/conductor-lane", launchOptions: `{}`, args: append(claude, "--lane", "conductor"), run: bridgeCase{fixture: "ok"}},
+		{name: "claude/permission-denials", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "permission-denied"}},
+		{name: "claude/failed-bad-model", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "bad-model"}},
+		{name: "claude/failed-exit-with-stderr", launchOptions: `{}`, args: claude, run: bridgeCase{script: map[string]string{"stderr": "boom\nfatal: no auth\n", "exit": "1\n"}}},
+		{name: "claude/failed-rate-limit", launchOptions: `{}`, args: claude, run: bridgeCase{script: map[string]string{"jsonl": `{"type":"result","is_error":true,"subtype":"rate_limited"}` + "\n", "exit": "1\n"}}},
+		{name: "claude/deferred-red-cache", launchOptions: `{}`, args: claude, run: bridgeCase{usage: "red"}},
+		{name: "claude/deferred-usage-limit", launchOptions: `{}`, args: claude, run: bridgeCase{fixture: "usage-limit", codex: true}},
+		{name: "claude/every-flag", launchOptions: `{"effort":"high","timeout-min":"5","agent":"reviewer","sandbox":"read-only","permission-mode":"plan","allowed-tools":"Read,Edit","max-turns":"3"}`, run: bridgeCase{fixture: "ok"}, args: append(claude,
 			"--model", "claude-haiku-5-5", "--effort", "high", "--resume", "abc", "--force", "--allowed-tools", "Read,Edit", "--max-turns", "3",
 			"--timeout-min", "5", "--permission-mode", "plan", "--agent", "reviewer", "--breadth", "broad", "--run-id", "run-1",
 			"--log-path", "/tmp/w.log", "--sandbox", "read-only", "--lane", "w1")},
-		{name: "claude/bare-model", args: append(claude, "--model"), run: bridgeCase{fixture: "ok"}},
-		{name: "claude/bare-resume", args: append(claude, "--resume"), run: bridgeCase{fixture: "usage-limit", codex: true}},
-		{name: "claude/bare-lane-failed", args: append(claude, "--lane"), run: bridgeCase{fixture: "bad-model"}},
-		{name: "claude/long-final-message", args: claude, run: bridgeCase{script: result(`"result":"` + strings.Repeat("é", 2100) + `"`)}},
-		{name: "claude/empty-lane-cannot-post", args: []string{"--brief", ".md", "--harness", "claude"}, run: bridgeCase{fixture: "bad-model", seed: seedProjectFile(".md", "brief\n")},
+		{name: "claude/bare-model", launchOptions: `{}`, args: append(claude, "--model"), run: bridgeCase{fixture: "ok"}},
+		{name: "claude/bare-resume", launchOptions: `{}`, args: append(claude, "--resume"), run: bridgeCase{fixture: "usage-limit", codex: true}},
+		{name: "claude/bare-lane-failed", launchOptions: `{}`, args: append(claude, "--lane"), run: bridgeCase{fixture: "bad-model"}},
+		{name: "claude/long-final-message", launchOptions: `{}`, args: claude, run: bridgeCase{script: result(`"result":"` + strings.Repeat("é", 2100) + `"`)}},
+		{name: "claude/empty-lane-cannot-post", launchOptions: `{}`, args: []string{"--brief", ".md", "--harness", "claude"}, run: bridgeCase{fixture: "bad-model", seed: seedProjectFile(".md", "brief\n")},
 			crash: crashC1, errorLine: "Error: post needs from and subject"},
-		{name: "claude/array-final-message", args: claude, run: bridgeCase{script: result(`"result":["a",1,null]`)}},
-		{name: "claude/numeric-final-message", args: claude, run: bridgeCase{script: result(`"result":7`)}, crash: crashC2},
-		{name: "claude/bridge-crash-null-event", args: claude, run: bridgeCase{script: map[string]string{"jsonl": init + "null\n", "exit": "0\n"}}, bridgeCrash: true},
+		{name: "claude/array-final-message", launchOptions: `{}`, args: claude, run: bridgeCase{script: result(`"result":["a",1,null]`)}},
+		{name: "claude/numeric-final-message", launchOptions: `{}`, args: claude, run: bridgeCase{script: result(`"result":7`)}, crash: crashC2},
+		{name: "claude/bridge-crash-null-event", launchOptions: `{}`, args: claude, run: bridgeCase{script: map[string]string{"jsonl": init + "null\n", "exit": "0\n"}}, bridgeCrash: true},
 
 		// codex
-		{name: "codex/finished", args: append(brief, "--harness", "codex", "--agent", "x"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
-		{name: "codex/sandbox-read-only", args: append(brief, "--harness", "codex", "--sandbox", "read-only"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
+		{name: "codex/finished", launchOptions: `{"agent":"x"}`, args: append(brief, "--harness", "codex", "--agent", "x"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
+		{name: "codex/sandbox-read-only", launchOptions: `{"sandbox":"read-only"}`, args: append(brief, "--harness", "codex", "--sandbox", "read-only"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
 
 		// opencode
-		{name: "opencode/finished-with-agent", args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
-		{name: "opencode/effort-becomes-the-prompt", args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
+		{name: "opencode/finished-with-agent", launchOptions: `{"agent":"coder"}`, args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
+		{name: "opencode/PE-46/effort-is-not-the-prompt", launchOptions: `{"effort":"X"}`, args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK, exception: pe46WorkerEffort}},
 
 		// validation
-		{name: "usage/no-brief", args: []string{"--harness", "claude"}},
-		{name: "usage/no-harness", args: brief},
+		{name: "usage/no-brief", args: []string{"--harness", "claude"}, run: bridgeCase{exception: pe48UsageLine}},
+		{name: "usage/no-harness", args: brief, run: bridgeCase{exception: pe48UsageLine}},
 		{name: "usage/missing-brief", args: []string{"--brief", "absent.md", "--harness", "claude"}},
 		{name: "usage/brief-not-md", args: []string{"--brief", "b.txt", "--harness", "claude"}, run: bridgeCase{seed: seedProjectFile("b.txt", "x")}},
 		{name: "usage/harness-gemini", args: append(brief, "--harness", "gemini")},
@@ -200,7 +248,7 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		// state, and the read error wins over a held lane (exit 1, not 3).
 		{name: "crash/brief-is-a-directory", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seedProjectDir("d.md")},
 			crash: crashC1, errorLine: eisdir},
-		{name: "crash/brief-is-a-directory-lane-locked", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seeds(seedProjectDir("d.md"), seedWorkerLock("d"))},
+		{name: "crash/brief-is-a-directory-lane-locked", args: directoryBrief, brief: text(""), run: bridgeCase{seed: seeds(seedProjectDir("d.md"), seedHeldLock(workerLockPath("d")))},
 			crash: crashC1, errorLine: eisdir},
 
 		// lane locked
@@ -234,6 +282,7 @@ func (h *harness) testWorkerStart(t *testing.T) {
 			}
 		}
 	})
+	t.Run("PE-28/stale-lock-is-reclaimed", h.testWorkerStartReclaimsAStaleLock)
 	t.Run("PE-24/failed-run-scrubs-tokens", h.testWorkerFailedRunScrubsTokens)
 	t.Run("cross-runtime", h.testWorkerCrossRuntime)
 	t.Run("PE-13/unread-prompt", h.testWorkerUnreadPrompt)
@@ -247,6 +296,7 @@ func (h *harness) testWorkerFailedRunScrubsTokens(t *testing.T) {
 	apiKey := "sk-" + "ant-" + strings.Repeat("x", 24)
 	run := bridgeCase{script: map[string]string{"stderr": "401 invalid x-api-key " + apiKey + "\n", "exit": "1\n"}}
 	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{args: []string{"--brief", "b.md", "--harness", "claude"}, run: run}))
+	withPE62(t, &js, &orch, `{}`)
 	for _, file := range []string{"project/workers/b.json", "project/mailbox/messages.jsonl"} {
 		if !strings.Contains(js.files[file], apiKey) {
 			t.Errorf("js %s lacks the marker (PE-24 expects it verbatim):\n%s", file, js.files[file])
@@ -286,12 +336,13 @@ func (h *harness) testWorkerCrossRuntime(t *testing.T) {
 	}
 }
 
-// testWorkerUnreadPrompt asserts the PE-13 extension: opencode-exec given --effort X takes X as
-// its prompt and never reads stdin, so a 1 MiB prompt meets a closed pipe. orch ignores the
-// EPIPE and finishes the run; the JS dies of the uncaught `Error: write EPIPE`, leaving its
-// lock and its "running" state.
+// testWorkerUnreadPrompt asserts the PE-13 extension: the JS opencode-exec given --effort X
+// takes X as its prompt and never reads stdin, so a prompt larger than a pipe buffer meets a
+// closed pipe, and the JS dies of the uncaught `Error: write EPIPE`, leaving its lock and its
+// "running" state. orch's opencode-exec reads the prompt (PE-46) and finishes the run. The brief
+// stays under Linux's 128 KiB limit on one argument, as opencode gets the prompt as one.
 func (h *harness) testWorkerUnreadPrompt(t *testing.T) {
-	brief := strings.Repeat("x", 1<<20)
+	brief := strings.Repeat("x", 100<<10)
 	opencodeOK := map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n", "exit": "0\n"}
 	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{
 		args:   []string{"--brief", "b.md", "--harness", "opencode", "--effort", "X"},

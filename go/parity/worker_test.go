@@ -3,15 +3,21 @@
 package parity
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/ownlock"
 )
 
 type workerCase struct {
@@ -23,7 +29,12 @@ type workerCase struct {
 	// victims, when set, are the processes the case's stop must interrupt: each runtime's
 	// seed starts its own, and every one must have died of SIGINT once the pair has run.
 	victims *victims
+	// exception asserts a documented difference (invocation.exception).
+	exception func(t *testing.T, js, orch *outcome)
 }
+
+// pe48UsageLine is PE-48: orch's usage line names the opencode harness too.
+var pe48UsageLine = rewriteException("PE-48", "--harness codex|claude|opencode [", "--harness codex|claude [")
 
 // workerStatePid is a stored pid in stop output and state files, and workerLockPid the whole
 // text of a lock, rewritten for the cases whose pid is a victim started per runtime.
@@ -45,6 +56,7 @@ func (h *harness) workerInvocation(c workerCase) invocation {
 		crash:        c.crash,
 		errorLine:    c.errorLine,
 		projectPaths: true,
+		exception:    c.exception,
 	}
 	if c.victims != nil {
 		inv.normalize = normalizeVictimPid
@@ -57,13 +69,106 @@ func seedWorkerState(lane, content string) seed {
 	return seedProjectFile(".orchestrator/workers/"+lane+".json", content)
 }
 
+// seedWorkerLock writes a lock file naming pid 1 that no process holds: a lock that is
+// present, which only status looks at, or stale (CA2: pid text alone never models a live
+// holder).
 func seedWorkerLock(lane string) seed {
 	return seedWorkerLockHolding(lane, "1")
 }
 
-// seedWorkerLockHolding writes the lane's lock holding pid as text, as a worker claims it.
+// seedWorkerLockHolding writes the lane's lock holding pid as text and no kernel lock: what a
+// runner that died leaves.
 func seedWorkerLockHolding(lane, pid string) seed {
-	return seedProjectFile(".orchestrator/workers/"+lane+".lock", pid)
+	return seedProjectFile(workerLockPath(lane), pid)
+}
+
+func workerLockPath(lane string) string { return ".orchestrator/workers/" + lane + ".lock" }
+
+// seedHeldLock has a helper process hold the kernel lock of the project file rel with its own
+// pid, as a running runner holds its lane, until the test ends (CA2). The JS sees a live pid in
+// the text, orch the kernel's lock.
+func seedHeldLock(rel string) seed {
+	return func(t *testing.T, sb sandbox) { startLockHolder(t, filepath.Join(sb.project, rel), false) }
+}
+
+// TestParityLockHolder is not a test: re-executed by startLockHolder, it holds the kernel lock
+// of $PARITY_LOCK_HOLDER with its own pid, prints "locked" and keeps the lock until its stdin
+// closes.
+func TestParityLockHolder(t *testing.T) {
+	path := os.Getenv("PARITY_LOCK_HOLDER")
+	if path == "" {
+		return
+	}
+	lock, err := ownlock.Acquire(path, os.Getpid())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println("locked")
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	if err := lock.Release(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// lockHolders are the pids, as text, of the holders startLockHolder started.
+var lockHolders sync.Map
+
+// startLockHolder starts a holder of path, in a session of its own when leader is set, and
+// returns it once it holds the lock. A holder still running when the test ends is killed: it is
+// the test's own child.
+func startLockHolder(t *testing.T, path string, leader bool) *exec.Cmd {
+	t.Helper()
+	mustMkdir(t, filepath.Dir(path))
+	cmd := exec.Command(os.Args[0], "-test.run=^TestParityLockHolder$")
+	cmd.Env = append(os.Environ(), "PARITY_LOCK_HOLDER="+path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: leader}
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if _, err := cmd.StdinPipe(); err != nil { // kept open by cmd until Wait
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	line := make(chan string, 1)
+	go func() {
+		first, _ := bufio.NewReader(stdout).ReadString('\n')
+		line <- first
+	}()
+	select {
+	case got := <-line:
+		if got != "locked\n" {
+			t.Fatalf("lock holder of %s printed %q; stderr: %s", path, got, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("lock holder of %s did not lock", path)
+	}
+	lockHolders.Store(strconv.Itoa(cmd.Process.Pid), true)
+	return cmd
+}
+
+// withLockHolderPids rewrites a lock whose text is a holder's pid, which differs per runtime,
+// to "<holder>".
+func withLockHolderPids(o outcome) outcome {
+	for name, content := range o.files {
+		if _, held := lockHolders.Load(content); held && strings.HasSuffix(name, ".lock") {
+			o.files[name] = "<holder>"
+		}
+	}
+	return o
 }
 
 func seedProjectDir(rel string) seed {
@@ -75,6 +180,8 @@ func seedProjectDir(rel string) seed {
 // started itself. Stop of the pids the JS would turn into kill(-1) (PE-14), and of a live pid
 // without its lock (PE-23), runs orch only.
 func (h *harness) testWorker(t *testing.T) {
+	t.Run("PE-42-project-and-child-roots", h.testWorkerProjectAndChildRoots)
+	h.testNestedProjectRoot(t, "worker")
 	live := strconv.Itoa(os.Getpid())
 	dead := strconv.Itoa(reapedPid(t))
 	pidState := func(pid string) string { return `{"lane":"w","status":"running","pid":` + pid + `}` }
@@ -128,9 +235,9 @@ func (h *harness) testWorker(t *testing.T) {
 		{name: "stop/lane-traversal", args: []string{"stop", "--lane", "../flip"}, seed: seeds(seedProjectFile(".orchestrator/flip.json", `{"lane":"w","status":"running","pid":`+dead+`}`),
 			seedProjectFile(".orchestrator/flip.lock", dead))},
 
-		{name: "usage/no-command", args: nil},
-		{name: "usage/unknown-command", args: []string{"frob", "--lane", "w"}},
-		{name: "usage/start-without-brief", args: []string{"start", "--harness", "claude"}},
+		{name: "usage/no-command", args: nil, exception: pe48UsageLine},
+		{name: "usage/unknown-command", args: []string{"frob", "--lane", "w"}, exception: pe48UsageLine},
+		{name: "usage/start-without-brief", args: []string{"start", "--harness", "claude"}, exception: pe48UsageLine},
 		{name: "usage/cwd-bare", args: []string{"frob", "--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 	}
 	for _, c := range cases {
@@ -165,8 +272,8 @@ func (h *harness) testWorkerStopVictims(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			v := &victims{}
 			seedVictim := func(t *testing.T, sb sandbox) {
-				pid := strconv.Itoa(v.start(t, c.leader))
-				seedWorkerLockHolding(c.lane, pid)(t, sb) // PE-23: the running worker holds its lock
+				// PE-23: the running worker holds its lane's kernel lock.
+				pid := strconv.Itoa(v.holdLock(t, filepath.Join(sb.project, workerLockPath(c.lane)), c.leader))
 				if c.quote {
 					pid = `"` + pid + `"`
 				}
@@ -199,24 +306,34 @@ func (h *harness) testWorkerStopGuard(t *testing.T) {
 }
 
 // testWorkerStopNeedsTheLock asserts PE-23 on orch alone: a live process recorded as the
-// state's pid is not signalled unless the lane's lock holds that pid. The JS is never run
-// here: it would interrupt the stand-in, as it would an unrelated process that reused a
-// finished worker's pid.
+// state's pid is not signalled unless the kernel says it holds the lane's lock. The JS is never
+// run here: it would interrupt the stand-in, as it would an unrelated process that reused a
+// finished or killed worker's pid.
 func (h *harness) testWorkerStopNeedsTheLock(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		lock seed // nil: no lock
+		lock func(t *testing.T, sb sandbox, v *victims, standIn string) // nil: no lock
 	}{
 		{name: "no-lock"},
-		{name: "lock-of-another-pid", lock: seedWorkerLockHolding("w", strconv.Itoa(reapedPid(t)))},
+		{name: "lock-of-another-pid", lock: func(t *testing.T, sb sandbox, _ *victims, _ string) {
+			seedWorkerLockHolding("w", strconv.Itoa(reapedPid(t)))(t, sb)
+		}},
+		// R3: the text names the state's pid, but no process holds the lock, as after the
+		// runner was killed with SIGKILL and its pid reused.
+		{name: "text-of-the-state-pid-unheld", lock: func(t *testing.T, sb sandbox, _ *victims, standIn string) {
+			seedWorkerLockHolding("w", standIn)(t, sb)
+		}},
+		{name: "held-by-another-process", lock: func(t *testing.T, sb sandbox, v *victims, _ string) {
+			v.holdLock(t, filepath.Join(sb.project, workerLockPath("w")), true)
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			v := &victims{}
 			standIn := strconv.Itoa(v.start(t, true))
 			sb := h.newSandbox(t)
-			seedWorkerState("w", `{"lane":"w","status":"finished","pid":`+standIn+`}`)(t, sb)
+			seedWorkerState("w", `{"lane":"w","status":"running","pid":`+standIn+`}`)(t, sb)
 			if c.lock != nil {
-				c.lock(t, sb)
+				c.lock(t, sb, v, standIn)
 			}
 			h.requireOrchStopsNothing(t, sb, v, "PE-23")
 		})
@@ -263,6 +380,15 @@ func (v *victims) start(t *testing.T, leader bool) int {
 			_ = cmd.Wait()
 		}
 	})
+	v.cmds = append(v.cmds, cmd)
+	return cmd.Process.Pid
+}
+
+// holdLock starts a victim that holds the kernel lock of path (see startLockHolder) and returns
+// its pid.
+func (v *victims) holdLock(t *testing.T, path string, leader bool) int {
+	t.Helper()
+	cmd := startLockHolder(t, path, leader)
 	v.cmds = append(v.cmds, cmd)
 	return cmd.Process.Pid
 }
