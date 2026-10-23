@@ -70,7 +70,11 @@ func (l *Launch) Detach(rt DetachRuntime) (int, error) {
 		return 1, err
 	}
 	defer log.Close() // the runner holds its own copy of the descriptor
-	cmd, args := rt.KeepAwake(rt.Self, runnerArgs(rt.Argv, l.project.Root, logPath, runID))
+	childCWD := ""
+	if l.opts.Truthy("root") {
+		childCWD = l.cwd
+	}
+	cmd, args := rt.KeepAwake(rt.Self, runnerArgs(rt.Argv, l.project.Root, childCWD, logPath, runID))
 	pid, err := procs.Detached{Name: cmd, Args: args, Dir: l.project.Root, Output: log}.Start()
 	var notStarted *procs.StartError
 	if err != nil && !(errors.As(err, &notStarted) && notStarted.Code != "") {
@@ -105,17 +109,21 @@ func createLog(path string) (*os.File, error) {
 // runnerArgs is the runner's command line after the executable: `worker`, the raw arguments
 // without every token that is exactly "--detach" (even one that was another key's value, so
 // that key takes the next token in the runner), then --log-path, --run-id and --cwd with the
-// absolute project root, which win in the runner's parse by coming last. The runner already
-// runs in the root, so a relative --cwd from the command line would be applied twice (Sol
-// S2/R6).
-func runnerArgs(argv []string, root, logPath, runID string) []string {
+// absolute project root, which win in the runner's parse by coming last. With an explicit
+// root, childCWD is nonempty and both absolute selectors are appended instead. The runner
+// runs in the project root; neither relative selector may be applied twice (Sol S2/R6).
+func runnerArgs(argv []string, root, childCWD, logPath, runID string) []string {
 	args := []string{"worker"}
 	for _, arg := range argv {
 		if arg != "--detach" {
 			args = append(args, arg)
 		}
 	}
-	return append(args, "--log-path", logPath, "--run-id", runID, "--cwd", root)
+	args = append(args, "--log-path", logPath, "--run-id", runID)
+	if childCWD != "" {
+		return append(args, "--root", root, "--cwd", childCWD)
+	}
+	return append(args, "--cwd", root)
 }
 
 // KeepAwakeEnabled is `loadRegistry().runtime?.keep_awake !== false`, where any failure to

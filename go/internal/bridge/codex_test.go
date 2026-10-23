@@ -246,7 +246,7 @@ func closeCodex(t *testing.T, input string, exitCode any, stderr string) *codexR
 	t.Helper()
 	events, _ := replayCodex(t, input)
 	events.handleClose(exitCode, []byte(stderr), 1500*time.Millisecond)
-	events.result.flagToolHostOutage()
+	events.result.flagToolHostOutage(events.result.cwd)
 	return events.result
 }
 

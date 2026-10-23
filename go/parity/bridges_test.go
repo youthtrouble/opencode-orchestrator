@@ -21,6 +21,47 @@ const claudeFixtures = "../testdata/claude/stream-json"
 // fake standing in for the CLI (see parity/fakes).
 func (h *harness) testBridges(t *testing.T) {
 	h.testNestedProjectRoot(t, "bridges")
+	t.Run("PE-42-artifact-root", func(t *testing.T) {
+		for _, b := range []bridge{claudeBridge, codexBridge, opencodeBridge} {
+			t.Run(b.name, func(t *testing.T) {
+				// The frozen JS ignores this environment variable and writes in child.
+				inv := h.bridgeInvocation(t, b, bridgeCase{args: []string{"--cwd", "child", "--prompt", "bounded", "--force"}, script: map[string]string{"exit": "0\n", "jsonl": ""}})
+				inv.seed = seeds(inv.seed, seedProjectDir("child"))
+				inv.env = append(inv.env, "ORCH_ARTIFACT_ROOT=$PROJECT/.orchestrator/reports")
+				for _, runtime := range []string{"js", "orch"} {
+					sb := h.newSandbox(t)
+					inv.seed(t, sb)
+					argv := inv.orch
+					if runtime == "js" {
+						argv = inv.js
+					}
+					o := h.run(t, sb, argv, inv.stdin, inv.env)
+					// Without completion events claude/codex report failure even at exit 0;
+					// all three still write a record, which is the behaviour under test.
+					wantCode := 1
+					if b.name == "opencode" {
+						wantCode = 0
+					}
+					if o.exitCode != wantCode {
+						t.Fatalf("%s exit %d: %s", runtime, o.exitCode, o.stderr)
+					}
+					root := sb.project
+					if runtime == "js" {
+						root = filepath.Join(root, "child")
+					}
+					files, err := filepath.Glob(filepath.Join(root, ".orchestrator", "runs", "*.json"))
+					if err != nil || len(files) != 1 {
+						t.Fatalf("%s records %v, %v", runtime, files, err)
+					}
+					if runtime == "orch" {
+						if _, err := os.Stat(filepath.Join(sb.project, "child", ".orchestrator")); !os.IsNotExist(err) {
+							t.Fatalf("child artifacts: %v", err)
+						}
+					}
+				}
+			})
+		}
+	})
 	t.Run("claude", h.testClaudeExec)
 	t.Run("codex", h.testCodexExec)
 	t.Run("opencode", h.testOpencodeExec)

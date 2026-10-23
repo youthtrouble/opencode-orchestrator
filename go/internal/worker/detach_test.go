@@ -295,7 +295,7 @@ func TestRunnerArgsDropEveryDetachToken(t *testing.T) {
 		{[]string{"start", "--cwd", "sub"}, []string{"start", "--cwd", "sub"}},
 	} {
 		want := append(append([]string{"worker"}, c.want...), "--log-path", "/l/b-1.log", "--run-id", "r", "--cwd", "/p")
-		if got := runnerArgs(c.argv, "/p", "/l/b-1.log", "r"); !slices.Equal(got, want) {
+		if got := runnerArgs(c.argv, "/p", "", "/l/b-1.log", "r"); !slices.Equal(got, want) {
 			t.Errorf("runnerArgs(%q) = %q, want %q", c.argv, got, want)
 		}
 	}
@@ -303,10 +303,18 @@ func TestRunnerArgsDropEveryDetachToken(t *testing.T) {
 
 // The runner parses its arguments as `orch worker` does, so its last --cwd, the root, wins.
 func TestRunnerArgsRunInTheProjectRoot(t *testing.T) {
-	args := runnerArgs([]string{"start", "--cwd", "sub", "--detach"}, "/repo/sub", "/l", "r")
+	args := runnerArgs([]string{"start", "--cwd", "sub", "--detach"}, "/repo/sub", "", "/l", "r")
 	opts, _ := cliargs.ParseArgs(args[1:], []string{"cwd", "log-path", "run-id"}, []string{"detach"})
 	if cwd, _ := opts.Value("cwd"); cwd != "/repo/sub" {
 		t.Errorf("the runner's --cwd is %q, want the root", cwd)
+	}
+}
+
+func TestRunnerArgsPreserveExplicitProjectAndChild(t *testing.T) {
+	argv := []string{"start", "--root", "..", "--cwd", ".", "--detach"}
+	want := []string{"worker", "start", "--root", "..", "--cwd", ".", "--log-path", "/l", "--run-id", "r", "--root", "/p", "--cwd", "/p/child"}
+	if got := runnerArgs(argv, "/p", "/p/child", "/l", "r"); !slices.Equal(got, want) {
+		t.Fatalf("runner args %q; want %q", got, want)
 	}
 }
 

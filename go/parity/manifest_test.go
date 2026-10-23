@@ -193,8 +193,6 @@ func (h *harness) testManifest(t *testing.T) {
 		{name: "verify/root", args: []string{"verify", "--root", "tree", ".orchestrator/ok.json"}, seed: withTree},
 		{name: "verify/no-argument", args: []string{"verify"}, seed: withTree, crash: crashC1,
 			errorLine: `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received undefined`},
-		{name: "verify/no-manifest-file", args: []string{"verify", "absent.json"}, seed: withTree, crash: crashC1,
-			errorLine: "Error: ENOENT: no such file or directory, open '$PROJECT/absent.json'"},
 		{name: "verify/manifest-is-dir", args: []string{"verify", "tree"}, seed: withTree, crash: crashC1, errorLine: "Error: EISDIR: illegal operation on a directory, read"},
 		{name: "verify/entry-is-dir", args: []string{"verify", ".orchestrator/dir.json"}, seed: withTree, crash: crashC1, errorLine: "Error: EISDIR: illegal operation on a directory, read"},
 		{name: "verify/files-absent", args: []string{"verify", ".orchestrator/nofiles.json"}, seed: withTree, crash: crashC1, errorLine: "TypeError: Cannot convert undefined or null to object"},
@@ -233,6 +231,18 @@ func (h *harness) testManifest(t *testing.T) {
 	t.Run("create/out-is-symlink", func(t *testing.T) { h.testManifestOutIsSymlink(t, create(treeOut, "tree/top.txt"), withTree) })
 	t.Run("create/out-is-dir", func(t *testing.T) { h.testManifestOutIsDir(t, create(treeOut, "tree/top.txt"), withTree) })
 	t.Run("verify/unparsable-json", func(t *testing.T) { h.testManifestSyntaxError(t, manifests) })
+	t.Run("PE-43-missing-manifest-remedy", func(t *testing.T) {
+		inv := h.manifestInvocation(manifestCase{args: []string{"verify", "absent.json"}, seed: withTree})
+		inv.projectPaths = true
+		js, orch := h.runPair(t, inv)
+		if js.exitCode != 1 || !strings.Contains(js.stderr, "ENOENT: no such file or directory, open '$PROJECT/absent.json'") {
+			t.Fatalf("frozen JS missing manifest: exit %d, err %s", js.exitCode, js.stderr)
+		}
+		want := "manifest not found: $PROJECT/absent.json; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)\n"
+		if orch.exitCode != 1 || orch.stdout != "" || orch.stderr != want {
+			t.Fatalf("Go missing manifest: exit %d, out %q, err %q", orch.exitCode, orch.stdout, orch.stderr)
+		}
+	})
 	t.Run("harness/created-at-normalization", testCreatedAtNormalization)
 	t.Run("harness/temp-suffix-normalization", testTempSuffixNormalization)
 }

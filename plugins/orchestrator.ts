@@ -458,6 +458,7 @@ export default {
           "Anthropic models run through the Claude Code CLI on your Claude subscription; OpenAI models run natively here or via the Codex CLI.",
           "Returns the final message plus a session/thread id you can pass back as `resume` to continue that same worker with full context.",
           "If the role resolves to a native opencode subagent, the result tells you which subagent to call instead.",
+          "A different cwd changes the child working directory; run artifacts stay in the session's project root.",
         ].join(" "),
         input: {
           type: "object",
@@ -465,7 +466,7 @@ export default {
           properties: {
             role: { type: "string", enum: ["planner", "coder", "reviewer", "verifier", "researcher", "explorer"] },
             prompt: { type: "string", description: "Complete, self-contained brief: goal, acceptance criteria, files/paths in scope, constraints, what to report back. The worker has NO access to this conversation." },
-            cwd: { type: "string", description: "Project directory (default: current project)" },
+            cwd: { type: "string", description: "Child working directory (default: current project); artifacts stay in the session project" },
             resume: { type: "string", description: "Previous session_id (Claude) or thread_id (Codex) to continue" },
             harness: { type: "string", enum: ["auto", "claude", "codex"], description: "Force a harness; default auto (routing decides)" },
             model: { type: "string", description: "Override model id for the chosen harness" },
@@ -513,6 +514,8 @@ export default {
           const effort = input.effort || policyEffort || role.effort || role.variant || "medium";
           const bridge = rt.command(harness === "claude" ? "claude-exec" : "codex-exec");
           const args = [...bridge.args, "--cwd", cwd, "--model", model, "--effort", effort, "--timeout-min", String(input.timeout_min || 90), "--quiet"];
+          const sessionRoot = cwdOf(undefined, c);
+          if (cwd !== sessionRoot) args.push("--artifact-root", sessionRoot);
           if (input.resume) args.push("--resume", input.resume);
           if (input.force) args.push("--force");
           if (harness === "claude") { args.push("--permission-mode", write ? "auto" : "plan"); if (input.max_turns) args.push("--max-turns", String(input.max_turns)); }
@@ -590,7 +593,7 @@ export default {
 
       add({
         name: "manifest_verify",
-        description: "Verify the working tree still matches a manifest (run before AND after reading code you are reviewing).",
+        description: "Verify the working tree still matches a manifest (run before AND after reading code you are reviewing); a relative manifest path resolves against `cwd`; pass an absolute path when the manifest lives in another checkout.",
         input: { type: "object", required: ["manifest"], properties: { cwd: { type: "string" }, manifest: { type: "string" } } },
         async execute(input: any, c: any) {
           const root = cwdOf(input, c);
@@ -601,12 +604,14 @@ export default {
 
       add({
         name: "worker_start",
-        description: "Start a detached, lock-protected worker that runs a brief file on Claude Code or Codex in the background (survives this session). Pair with the supervisor to get woken on completion.",
+        description: "Start a detached, lock-protected worker that runs a brief file on Claude Code or Codex in the background (survives this session). Lanes and run records belong to the session's project; cwd is where the child runs. Pair with the supervisor to get woken on completion.",
         input: { type: "object", required: ["brief", "harness"], properties: { cwd: { type: "string" }, brief: { type: "string" }, harness: { type: "string", enum: ["claude", "codex"] }, lane: { type: "string" }, model: { type: "string" }, effort: { type: "string" }, resume: { type: "string" }, breadth: { type: "string", enum: ["focused", "standard", "broad"] } } },
         async execute(input: any, c: any) {
           const cwd = cwdOf(input, c);
           const worker = rt.command("worker");
           const args = [...worker.args, "start", "--brief", input.brief, "--harness", input.harness, "--cwd", cwd, "--detach"];
+          const sessionRoot = cwdOf(undefined, c);
+          if (cwd !== sessionRoot) args.push("--root", sessionRoot);
           for (const k of ["lane", "model", "effort", "resume", "breadth"]) if (input[k]) args.push(`--${k}`, String(input[k]));
           const res = await run(worker.cmd, args, { cwd, timeoutMs: 60000 });
           return { content: (res.stdout || res.stderr).trim() };

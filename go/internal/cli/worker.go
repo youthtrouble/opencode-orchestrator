@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	workerValueKeys = []string{"brief", "harness", "lane", "model", "effort", "sandbox", "permission-mode", "allowed-tools", "resume", "breadth", "cwd", "max-turns", "timeout-min", "log-path", "run-id", "agent"}
+	workerValueKeys = []string{"brief", "harness", "lane", "model", "effort", "sandbox", "permission-mode", "allowed-tools", "resume", "breadth", "root", "cwd", "max-turns", "timeout-min", "log-path", "run-id", "agent"}
 	workerFlagKeys  = []string{"detach", "force", "help"}
 )
 
@@ -31,7 +31,7 @@ var errResolveArgBoolean = &jsTypeError{"ERR_INVALID_ARG_TYPE", cliargs.ErrPathA
 func Worker(args []string, stdio Stdio) int {
 	argv := decodeArgv(args) // process.argv.slice(2): parsed here, and passed on by --detach
 	opts, positional := cliargs.ParseArgs(argv, workerValueKeys, workerFlagKeys)
-	root, err := projectRoot(opts)
+	root, selector, err := workerProjectRoot(opts)
 	if err != nil {
 		return crash(stdio, err)
 	}
@@ -41,7 +41,7 @@ func Worker(args []string, stdio Stdio) int {
 		command = positional[0]
 	}
 	if command == "status" || command == "stop" {
-		if code, ok := requireProject(stdio, root, "--cwd"); !ok {
+		if code, ok := requireProject(stdio, root, selector); !ok {
 			return code
 		}
 	}
@@ -57,10 +57,26 @@ func Worker(args []string, stdio Stdio) int {
 	return workerStart(project, opts, argv, stdio)
 }
 
+// workerProjectRoot preserves --cwd's legacy project selection unless --root is explicit.
+func workerProjectRoot(opts cliargs.Opts) (string, string, error) {
+	if opts.IsFlag("root") {
+		return "", "--root", errResolveArgBoolean
+	}
+	if value, _ := opts.Value("root"); value != "" {
+		root, err := paths.ProjectRoot(value)
+		return root, "--root", err
+	}
+	root, err := projectRoot(opts)
+	return root, "--cwd", err
+}
+
 // workerStart validates the start, then runs it in the foreground with the bridges of this
 // executable, or, with --detach, launches this executable as its detached runner. argv is the
 // unparsed command line as the JS reads it, which the runner receives.
 func workerStart(project worker.Project, opts cliargs.Opts, argv []string, stdio Stdio) int {
+	if opts.IsFlag("cwd") {
+		return crash(stdio, errResolveArgBoolean)
+	}
 	launch, err := project.PrepareStart(opts)
 	if err != nil {
 		return workerFailed(stdio, err)

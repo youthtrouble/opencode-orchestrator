@@ -46,6 +46,7 @@ type Launch struct {
 	brief   string // absolute
 	lane    any    // the --lane value, or the brief's base name without ".md"
 	harness string
+	cwd     string // child cwd, independent of the project that owns the lane
 }
 
 // PrepareStart is the validation of `worker.mjs start` that follows the usage check
@@ -71,7 +72,15 @@ func (p Project) PrepareStart(opts cliargs.Opts) (*Launch, error) {
 	if err := CheckLane(lane); err != nil {
 		return nil, err
 	}
-	return &Launch{project: p, opts: opts, brief: brief, lane: lane, harness: harness}, nil
+	cwd := p.Root
+	if value, ok := opts.Value("cwd"); opts.Truthy("root") && ok && value != "" {
+		var err error
+		cwd, err = nodefs.Resolve(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Launch{project: p, opts: opts, brief: brief, lane: lane, harness: harness, cwd: cwd}, nil
 }
 
 // resolveAgainst is path.resolve(root, p) for an absolute root.
@@ -268,7 +277,14 @@ func (l *Launch) preamble() string {
 func (l *Launch) bridgeArgs() []string {
 	o := l.opts
 	text := func(key string) string { return jsjson.TemplateString(o.JS(key)) }
-	args := []string{l.harness + "-exec", "--cwd", l.project.Root, "--timeout-min", jsjson.TemplateString(o.Or("timeout-min", "120"))}
+	cwd := l.project.Root
+	if l.cwd != "" {
+		cwd = l.cwd
+	}
+	args := []string{l.harness + "-exec", "--cwd", cwd, "--timeout-min", jsjson.TemplateString(o.Or("timeout-min", "120"))}
+	if cwd != l.project.Root {
+		args = append(args, "--artifact-root", l.project.Root)
+	}
 	for _, key := range []string{"model", "effort", "resume"} {
 		if o.Truthy(key) {
 			args = append(args, "--"+key, text(key))

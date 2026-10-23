@@ -21,6 +21,15 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- delegation (S13i, PE-42): bridges accept `--artifact-root DIR` or `ORCH_ARTIFACT_ROOT`
+  (flag wins) for project run records independently of the child cwd. `worker --root DIR`
+  explicitly owns lane state, locks, logs and records, independently of child `--cwd`, in both
+  foreground and detached runs; without `--root`, legacy behavior is unchanged. Plugin
+  delegation and worker start retain the session project; incidents name the artifact project.
+- review (S13i, PE-43): a missing manifest names its absolute path and explains checkout-local
+  storage: pass an absolute path or run from the checkout; `--root` selects the source tree.
+  Malformed and permission errors stay distinct.
+
 - project roots (S13h, PE-41): commands run from `.orchestrator/` or below it target the
   project above the first exact `.orchestrator` component, including explicit cwd/root,
   mailbox environment and session hook paths. This prevents nested state and stale nested

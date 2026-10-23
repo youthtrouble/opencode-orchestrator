@@ -16,7 +16,7 @@ import (
 // `--effort X` is a flag followed by the positional X, which becomes the prompt (latent JS
 // defects, mirrored).
 var (
-	opencodeValueKeys = []string{"agent", "cwd", "resume", "timeout-min", "prompt", "prompt-file", "model"}
+	opencodeValueKeys = []string{"agent", "cwd", "artifact-root", "resume", "timeout-min", "prompt", "prompt-file", "model"}
 	opencodeFlagKeys  = []string{"quiet", "force", "help"}
 )
 
@@ -45,6 +45,10 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return crash(stderr, err)
 	}
 	log := &logger{w: stderr, prefix: "[opencode] ", quiet: parsed.IsFlag("quiet")}
+	root, err := artifactRoot(opts, cwd)
+	if err != nil {
+		return crash(stderr, err)
+	}
 
 	cfg, err := usageConfig()
 	if err != nil {
@@ -55,7 +59,7 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return crash(stderr, err)
 	}
 	if !decision.Allowed {
-		return refuse(stdout, stderr, &decision, cwd, "opencode-exec")
+		return refuse(stdout, stderr, &decision, root, "opencode-exec")
 	}
 
 	started := time.Now()
@@ -71,7 +75,7 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if err != nil {
 		return crash(stderr, err)
 	}
-	return finishedRun{log: log, cwd: cwd, prompt: prompt}.report(stdout, stderr, result)
+	return finishedRun{log: log, cwd: cwd, artifactRoot: root, prompt: prompt}.report(stdout, stderr, result)
 }
 
 // opencodeArgv is the argv opencode-exec.mjs passes to opencode (l.19-22): the prompt is the

@@ -422,6 +422,7 @@ The steps below use `X.Y.Z = 0.6.0` (0.5.0 was released this way on 2026-10-19).
 | `ORCH_REGISTRY` | `$ORCH_HOME/models.json` | The model registry. |
 | `ORCH_REMOTE_CONFIG` | `~/.config/orch/remote.json` | The `orch remote` config file. |
 | `ORCH_NO_POST_RUN_REFRESH` | unset | `1` stops `orch claude-exec` and `orch codex-exec` from starting their detached post-run usage refresh (PE-12). Set only by the parity harness. |
+| `ORCH_ARTIFACT_ROOT` | child cwd | Bridge project root for run records and incident project attribution; `--artifact-root DIR` wins (PE-42). |
 | `ORCH_JS` | unset | Parity only: the JS `orchestrator/` tree `parity/run.sh` compares against. Set, it wins over `ORCH_JS_REF` and nothing is extracted. |
 | `ORCH_JS_REF` | the commit in `go/parity/js-ref` | Parity only: the commit-ish (e.g. `v0.5.0`) whose `orchestrator/` `parity/run.sh` extracts from git when `ORCH_JS` is unset. |
 | `HOME` | OS user home if unset/empty | Per-user state lives in `~/.local/state/opencode/orchestrator`. `orch incident` keeps an explicitly empty `HOME` as Node's `os.homedir()` does (log relative to the working directory). |
@@ -1563,6 +1564,32 @@ The other documented differences, each asserted by its own parity case:
   manifest, incident, policy, bridges, worker, flip, supervisor, watch, kickoff, session)
   pins the frozen JS's nested-state behaviour and asserts Go's corrected result, including
   ignoring a stale nested flip gate. The latent nesting defect is no longer mirrored.
+
+- PE-42 (S13i, 8cecd17d): `claude-exec`, `codex-exec` and `opencode-exec` accept
+  `--artifact-root DIR` and `ORCH_ARTIFACT_ROOT` (flag wins; default is cwd), normalized by
+  `paths.ProjectRoot`. The child cwd and result's `cwd` stay unchanged. Run records go to
+  that root's `.orchestrator/runs` and include `artifact_root` only when different from cwd;
+  refusal, usage-limit, failure and tool-host incidents identify the artifact project. Incidents
+  remain in the user-wide incident log, and the detached post-run usage refresh remains
+  user-wide, not a second project write. Plugin delegation forwards the session root for a
+  different child cwd. `worker start|status|stop --root DIR` explicitly selects the owning
+  project for lane state, locks, logs and run records. With `--root`, the child's `--cwd`
+  defaults to the project root; otherwise it resolves independently, and differing roots
+  generate the bridge's `--artifact-root`. Detached runners receive absolute `--root` and
+  `--cwd` selectors while their process runs in the owning project. Without `--root` (or
+  with `--root ""`), legacy project selection, bridge argv and `.orchestrator` normalization
+  are unchanged; a bare `--root` is the same error as bare `--cwd`. Plugin `worker_start`
+  supplies `--root <session project>` for a different child cwd; `worker_status` still inspects
+  its cwd project. `--artifact-root`, `ORCH_ARTIFACT_ROOT`, `--root` and `--cwd` resolve against
+  the invoking process's directory; pass absolute paths. Frozen JS ignores the new bridge
+  environment variable and has no worker `--root`; bridges/worker parity pins these differences.
+- PE-43 (S13i, 31e490b1): `manifest verify` exits 1 on a missing manifest with
+  `manifest not found: <abs>; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)`.
+  The plugin preserves this diagnostic and accepts absolute manifest paths; verify source files
+  from the checkout the manifest describes (`--root` in the CLI, `cwd` in the plugin).
+  Manifest input paths retain their process-cwd-relative semantics; `--root` selects source
+  files, not the manifest's directory. Malformed JSON, permissions, directories and absent
+  arguments keep their distinct errors. Frozen JS reports a generic ENOENT instead.
 
 Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
 events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"time"
 
@@ -91,6 +93,14 @@ func writeManifest(out string, m *jsjson.Object) error {
 func manifestVerify(root string, positional []string, stdio Stdio) int {
 	m, err := readManifest(positional, 0)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) && len(positional) > 0 {
+			file, resolveErr := nodefs.Resolve(positional[0])
+			if resolveErr != nil {
+				return crash(stdio, resolveErr)
+			}
+			fmt.Fprintf(stdio.Err, "manifest not found: %s; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)\n", file)
+			return 1
+		}
 		return crash(stdio, err)
 	}
 	v, err := manifest.Verify(root, m)

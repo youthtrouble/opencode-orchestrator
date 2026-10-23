@@ -36,6 +36,10 @@ func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return crash(stderr, err)
 	}
 	timeout := timeoutDelay(opts.JS("timeout-min"), defaultCodexTimeoutMins)
+	root, err := artifactRoot(opts, request.cwd)
+	if err != nil {
+		return crash(stderr, err)
+	}
 	log := &logger{w: stderr, prefix: "[codex] ", quiet: parsed.IsFlag("quiet")}
 
 	cfg, err := usageConfig()
@@ -48,7 +52,7 @@ func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return crash(stderr, err)
 	}
 	if !decision.Allowed {
-		return refuse(stdout, stderr, &decision, request.cwd, "codex-exec")
+		return refuse(stdout, stderr, &decision, root, "codex-exec")
 	}
 
 	argv, err := request.argv()
@@ -71,12 +75,12 @@ func RunCodex(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 	if err != nil {
 		return crash(stderr, err)
 	}
-	result.flagToolHostOutage()
+	result.flagToolHostOutage(root)
 	out := result.JSON()
 	if decision.CreditFunded {
 		out.Set("credits", creditsSpent(decision.CreditsBefore, budget.FreshCreditsBalance(cfg)))
 	}
-	return finishedRun{log: log, cwd: request.cwd, prompt: prompt, afterRecord: startUsageRefresh, doneLine: codexDoneLine}.report(stdout, stderr, out)
+	return finishedRun{log: log, cwd: request.cwd, artifactRoot: root, prompt: prompt, afterRecord: startUsageRefresh, doneLine: codexDoneLine}.report(stdout, stderr, out)
 }
 
 // creditsSpent is the {before, after} balance a credit-funded run records.

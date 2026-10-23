@@ -264,6 +264,27 @@ pause is not recorded, it exits 1 instead, since nothing would relaunch.
 
 ### 3. While it runs
 
+**Delegating into nested repositories.** The plugin delegate tool keeps run artifacts in the
+session project even when its `cwd` selects a child repository. For direct bridge calls, use
+`orch codex-exec --cwd /parent/child --artifact-root /parent` (also supported by `claude-exec`
+and `opencode-exec`), or set `ORCH_ARTIFACT_ROOT=/parent`; the flag wins. The child still runs
+in its selected cwd, while run records go to `/parent/.orchestrator/runs`. Artifact roots
+inside `.orchestrator/` resolve to the owning project, just like other project roots.
+For workers, `orch worker start --root /parent --cwd /parent/child --brief
+.orchestrator/briefs/b.md --harness codex [--detach]` keeps lane state, locks, logs and run
+records in the parent while the child runs in the nested repository. `worker status|stop
+--root /parent` inspects that project's lanes. Without `--root`, `--cwd` still selects the
+owning project as before; the plugin's `worker_start` supplies the session root when needed.
+`--artifact-root`, `ORCH_ARTIFACT_ROOT`, `--root` and `--cwd` resolve against the invoking
+process's directory; pass absolute paths.
+
+**Reviewing across worktrees.** Manifests live in the checkout that created them, not necessarily
+the checkout being reviewed. Pass an absolute manifest path and select the described source
+checkout with `--root`: `orch manifest verify /main/.orchestrator/manifests/task.json --root
+/worktree`. The plugin's `manifest_verify` likewise accepts an absolute manifest path and a
+`cwd` for the source checkout. A missing manifest reports its absolute path and this remedy;
+malformed or unreadable manifests remain errors, not source mismatches.
+
 **Answering questions.** A background conductor asks through the mailbox (see
 [the mailbox](#how-do-i) above). Run these in the project directory:
 

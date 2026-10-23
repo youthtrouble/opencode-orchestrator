@@ -82,6 +82,12 @@ func resolveProjectRoot(v any) (string, error) {
 	return paths.ProjectRoot(abs)
 }
 
+// artifactRoot keeps orchestration output separate from the child working directory (PE-42).
+// An explicit flag wins over the environment; the default remains the resolved child cwd.
+func artifactRoot(opts options, cwd string) (string, error) {
+	return resolveProjectRoot(opts.Or("artifact-root", or(os.Getenv("ORCH_ARTIFACT_ROOT"), cwd)))
+}
+
 // timeoutDelay is the delay Node gives setTimeout for
 // `Number(opts["timeout-min"] || defaultMinutes) * 60000` milliseconds (procs.TimerDelay).
 func timeoutDelay(timeoutMin any, defaultMinutes float64) time.Duration {
@@ -116,9 +122,10 @@ func refuse(stdout, stderr io.Writer, decision *budget.Decision, cwd, script str
 // record ({...result, prompt_sha256, prompt_head}), the post-run hook, the "done" progress
 // line, an incident for a failed run, then the result on stdout.
 type finishedRun struct {
-	log    *logger
-	cwd    string
-	prompt string
+	log          *logger
+	cwd          string
+	artifactRoot string
+	prompt       string
 	// afterRecord runs once the run record is written, where claude-exec and codex-exec start
 	// their usage refresh, or is nil. A run record the JS throws on ends the run before it.
 	afterRecord func()
@@ -134,7 +141,14 @@ func (r finishedRun) report(stdout, stderr io.Writer, result *jsjson.Object) int
 	record := jsjson.Spread(result)
 	record.Set("prompt_sha256", hex.EncodeToString(hash[:]))
 	record.Set("prompt_head", jsstr.Slice(r.prompt, 0, 400)) // U+FFFD for a split surrogate pair (PE-1)
-	file, err := runrecord.Write(r.cwd, record, time.Now())
+	root := r.artifactRoot
+	if root == "" {
+		root = r.cwd
+	}
+	if root != r.cwd {
+		record.Set("artifact_root", root)
+	}
+	file, err := runrecord.Write(root, record, time.Now())
 	if err != nil {
 		return crash(stderr, err)
 	}
@@ -146,7 +160,7 @@ func (r finishedRun) report(stdout, stderr io.Writer, result *jsjson.Object) int
 		r.log.printf("%s", r.doneLine(result, file))
 	}
 	if !jsjson.Truthy(jsjson.Path(result, "ok")) {
-		recordFailure(result, r.cwd)
+		recordFailure(result, root)
 		return printResult(stdout, stderr, result, exitFailed)
 	}
 	return printResult(stdout, stderr, result, exitOK)

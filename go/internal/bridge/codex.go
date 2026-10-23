@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	codexValueKeys = []string{"model", "effort", "sandbox", "cwd", "resume", "schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
+	codexValueKeys = []string{"model", "effort", "sandbox", "cwd", "artifact-root", "resume", "schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
 	codexFlagKeys  = []string{"force", "quiet", "ephemeral", "help"}
 )
 
@@ -202,7 +202,7 @@ var toolHostFailure = regexp.MustCompile(`timed out negotiating with the code-mo
 
 // flagToolHostOutage is l.86-89: a completed turn that ran nothing and whose message reports
 // a tool-host failure is a failed run, with an incident of its own.
-func (r *codexResult) flagToolHostOutage() {
+func (r *codexResult) flagToolHostOutage(root string) {
 	if !r.ok || len(r.commands) > 0 || len(r.filesChanged) > 0 || !matchesIgnoringCase(toolHostFailure, r.finalMessage) {
 		return
 	}
@@ -218,7 +218,7 @@ func (r *codexResult) flagToolHostOutage() {
 		Summary:   "codex turn completed with zero tool calls; code-mode host timeout reported in prose",
 		Detail:    jsstr.Slice(r.finalMessage, 0, 400), // PE-1
 		Context:   context,
-		Project:   r.cwd,
+		Project:   root,
 	})
 }
 

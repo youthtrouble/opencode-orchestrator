@@ -174,6 +174,7 @@ func seedProjectDir(rel string) seed {
 // started itself. Stop of the pids the JS would turn into kill(-1) (PE-14), and of a live pid
 // without its lock (PE-23), runs orch only.
 func (h *harness) testWorker(t *testing.T) {
+	t.Run("PE-42-project-and-child-roots", h.testWorkerProjectAndChildRoots)
 	h.testNestedProjectRoot(t, "worker")
 	live := strconv.Itoa(os.Getpid())
 	dead := strconv.Itoa(reapedPid(t))

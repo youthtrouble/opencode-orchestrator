@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -102,7 +103,7 @@ func TestManifestCrashLines(t *testing.T) {
 		{[]string{"diff", "nofiles.json"}, `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received undefined`},
 		{[]string{"create", "--task", "t", "--author", "a", "--out", "o.json", "nope"}, "Error: manifest path does not exist: nope"},
 		{[]string{"verify", "nofiles.json"}, "TypeError: Cannot convert undefined or null to object"},
-		{[]string{"verify", "missing.json"}, "Error: ENOENT: no such file or directory, open '" + filepath.Join(physical, "missing.json") + "'"},
+		{[]string{"verify", "missing.json"}, "manifest not found: " + filepath.Join(physical, "missing.json") + "; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)"},
 		{[]string{"verify", "d"}, "Error: EISDIR: illegal operation on a directory, read"},
 	}
 	for _, c := range cases {
@@ -114,6 +115,21 @@ func TestManifestCrashLines(t *testing.T) {
 	// JSON.parse failures keep the class; V8's wording is not reproduced.
 	if code, _, stderr := run(t, Manifest, []string{"verify", "bad.json"}, ""); code != 1 || !regexp.MustCompile(`^SyntaxError: .+\n$`).MatchString(stderr) {
 		t.Errorf("bad JSON: code %d stderr %q", code, stderr)
+	}
+}
+
+func TestManifestVerifyPermissionErrorIsNotMissing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read mode-000 files")
+	}
+	t.Chdir(t.TempDir())
+	writeTestFile(t, "private.json", `{}`)
+	if err := os.Chmod("private.json", 0); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := run(t, Manifest, []string{"verify", "private.json"}, "")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "EACCES") || strings.Contains(stderr, "manifest not found") {
+		t.Fatalf("permission: exit %d, out %q, err %q", code, stdout, stderr)
 	}
 }
 

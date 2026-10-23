@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	claudeValueKeys = []string{"model", "effort", "permission-mode", "allowed-tools", "disallowed-tools", "max-turns", "max-budget-usd", "cwd", "resume", "agent", "append-system-prompt", "json-schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
+	claudeValueKeys = []string{"model", "effort", "permission-mode", "allowed-tools", "disallowed-tools", "max-turns", "max-budget-usd", "cwd", "artifact-root", "resume", "agent", "append-system-prompt", "json-schema", "timeout-min", "prompt", "prompt-file", "add-dir"}
 	claudeFlagKeys  = []string{"force", "quiet", "help"}
 )
 

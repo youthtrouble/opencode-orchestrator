@@ -148,6 +148,40 @@ func TestBridgeArgsPassTheOptionsAsTheJSDoes(t *testing.T) {
 	}
 }
 
+func TestBridgeArgsKeepLaneProjectSeparateFromChildCWD(t *testing.T) {
+	p := testProject(t, "brief")
+	child := filepath.Join(p.Root, "child")
+	l, err := p.PrepareStart(opts("--brief", "b.md", "--harness", "codex", "--root", p.Root, "--cwd", child))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"codex-exec", "--cwd", child, "--timeout-min", "120", "--artifact-root", p.Root, "--sandbox", "workspace-write"}
+	if got := l.bridgeArgs(); !slices.Equal(got, want) {
+		t.Fatalf("bridge args %q; want %q", got, want)
+	}
+	if l.project.Root != p.Root || l.brief != filepath.Join(p.Root, "b.md") {
+		t.Fatal("child cwd changed the lane or brief project")
+	}
+}
+
+func TestPrepareStartDefaultsChildCWDToProjectRoot(t *testing.T) {
+	p := testProject(t, "brief")
+	for _, args := range [][]string{
+		{"--cwd", filepath.Join(p.Root, ".orchestrator", "briefs")},
+		{"--root", p.Root},
+		{"--root", p.Root, "--cwd", ""},
+		{"--root", "", "--cwd", filepath.Join(p.Root, ".orchestrator")},
+	} {
+		l, err := p.PrepareStart(opts(append([]string{"--brief", "b.md", "--harness", "codex"}, args...)...))
+		if err != nil || l.cwd != p.Root {
+			t.Fatalf("%q: launch %v, error %v", args, l, err)
+		}
+		if slices.Contains(l.bridgeArgs(), "--artifact-root") {
+			t.Fatalf("%q: unexpected artifact flag: %q", args, l.bridgeArgs())
+		}
+	}
+}
+
 func TestPrepareStartValidatesInTheJSOrder(t *testing.T) {
 	p := testProject(t, "brief")
 	writeFile(t, filepath.Join(p.Root, "b.txt"), "x")

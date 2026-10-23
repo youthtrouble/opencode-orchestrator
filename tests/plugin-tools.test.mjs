@@ -242,6 +242,39 @@ describe("manifest_create and manifest_verify", { skip }, () => {
     assert.equal(r.error.name, "OrchCommandError");
     assert.equal(r.error.message, "orch manifest verify exited 1: SyntaxError: Unexpected token");
   });
+
+  test("verify preserves the missing-manifest remedy and accepts an absolute path", async (t) => {
+    const sandbox = createSandbox(t);
+    const manifest = path.join(sandbox.root, "other-checkout", "manifest.json");
+    const diagnostic = `manifest not found: ${manifest}; manifests live in the checkout that created them: pass an absolute path or run from that checkout (--root selects the source tree, not the manifest)`;
+    const { plugin } = await loadGoInto(t, sandbox, { [`manifest verify ${manifest}`]: { code: 1, stderr: diagnostic + "\n" } });
+    const r = await plugin.toolResult("manifest_verify", { manifest });
+    assert.equal(r.error.message, `orch manifest verify exited 1: ${diagnostic}`);
+    assert.deepEqual(orchCalls(sandbox, "manifest")[0].argv, ["manifest", "verify", manifest, "--root", sandbox.project]);
+    assert.equal(plugin.tools.manifest_verify.description, "Verify the working tree still matches a manifest (run before AND after reading code you are reviewing); a relative manifest path resolves against `cwd`; pass an absolute path when the manifest lives in another checkout.");
+  });
+});
+
+test("delegate keeps nested-cwd artifacts in the session project", { skip }, async (t) => {
+  const { sandbox, plugin } = await loadGo(t, { "effort": { stdout: "medium\n" }, "claude-exec": { stdout: { ok: true, final_message: "done" } } });
+  const child = path.join(sandbox.project, "child");
+  fs.mkdirSync(child);
+  await plugin.callTool("delegate", { role: "coder", prompt: "bounded", harness: "claude", cwd: child });
+  const [call] = orchCalls(sandbox, "claude-exec");
+  assert.equal(call.cwd, fs.realpathSync(child));
+  assert.equal(call.argv[call.argv.indexOf("--cwd") + 1], child);
+  assert.equal(call.argv[call.argv.indexOf("--artifact-root") + 1], sandbox.project);
+});
+
+test("worker_start keeps nested-cwd lanes in the session project", { skip }, async (t) => {
+  const { sandbox, plugin } = await loadGo(t, { "worker start": { stdout: "started\n" } });
+  const child = path.join(sandbox.project, "child");
+  fs.mkdirSync(child);
+  await plugin.callTool("worker_start", { brief: ".orchestrator/briefs/b.md", harness: "codex", cwd: child });
+  const [call] = orchCalls(sandbox, "worker");
+  assert.deepEqual(call.argv, ["worker", "start", "--brief", ".orchestrator/briefs/b.md", "--harness", "codex", "--cwd", child, "--detach", "--root", sandbox.project]);
+  assert.equal(call.cwd, fs.realpathSync(child));
+  assert.match(plugin.tools.worker_start.description, /Lanes and run records belong to the session's project; cwd is where the child runs/);
 });
 
 describe("incident", { skip }, () => {
