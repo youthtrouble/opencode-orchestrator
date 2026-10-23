@@ -108,32 +108,34 @@ func Start(s Spec) (*Child, error) {
 	if err != nil {
 		return nil, err
 	}
-	path, err := resolve(s.Name, s.Dir, env)
-	if err != nil {
-		return nil, err
-	}
-	cmd := &exec.Cmd{
-		Path: path,
-		Args: append([]string{s.Name}, s.Args...),
-		Dir:  s.Dir,
-		Env:  env,
-	}
-	switch {
-	case s.NewSession:
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	case s.OwnGroup:
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
 	stdio := &pipes{}
-	if err := stdio.attach(cmd, s); err != nil {
+	streams := &exec.Cmd{}
+	if err := stdio.attach(streams, s); err != nil {
 		stdio.closeAll()
 		return nil, err
 	}
-	err = cmd.Start()
+	cmd, err := startResolved(s.Name, s.Dir, env, func(path string) *exec.Cmd {
+		cmd := &exec.Cmd{
+			Path:   path,
+			Args:   append([]string{s.Name}, s.Args...),
+			Dir:    s.Dir,
+			Env:    env,
+			Stdin:  streams.Stdin,
+			Stdout: streams.Stdout,
+			Stderr: streams.Stderr,
+		}
+		switch {
+		case s.NewSession:
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		case s.OwnGroup:
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		}
+		return cmd
+	})
 	closeFiles(stdio.childEnds) // the child holds its own copies now, or never started
 	if err != nil {
 		closeFiles(stdio.parentEnds)
-		return nil, startError(s.Name, err)
+		return nil, err
 	}
 	stdio.startCopies()
 	return &Child{cmd: cmd, grace: s.Grace, ownGroup: s.OwnGroup, stdio: stdio}, nil

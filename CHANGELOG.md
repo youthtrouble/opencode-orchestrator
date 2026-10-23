@@ -21,6 +21,9 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- process execution (S13g, sol-5 R14, PE-40): try later PATH candidates when execution fails
+  with ENOENT, ENOTDIR or EACCES, including executable scripts with missing interpreters.
+  Preserve EACCES precedence, error spelling and pipe ownership; never retry a started child.
 - kickoff (S13p, plan 1.7 D2, PE-61): a real kickoff whose gate clear is refused (unreadable
   `flip.json`, a crash) prints `kickoff: the human gate could not be cleared: <reason>; nothing
   was launched` and exits 1 before it starts the supervisor, writes a brief, pauses or launches.

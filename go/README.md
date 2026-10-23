@@ -1538,6 +1538,19 @@ The other documented differences, each asserted by its own parity case:
   `TestAckConcurrentProcesses` (two helpers, FIFO data-read barrier and kernel holder
   observation), and parity `ack/PE-39-own-events-only`.
 
+- PE-40 (S13g, sol-5 R14): PATH search attempts execution of each candidate, rather than
+  selecting the first file with execute permission. A script whose `#!` interpreter is missing
+  no longer hides a later working executable. `Start`, `Detached` and `RunSync` continue on
+  ENOENT, ENOTDIR and EACCES; if none starts, EACCES wins when encountered, otherwise ENOENT.
+  Errors other than ENOENT, ENOTDIR and EACCES stop the search (for example ELOOP), unlike
+  the old Go pre-check which skipped stat failures such as a symlink loop; ENOEXEC already
+  stopped after the old pre-check passed. A child that starts is never retried, even when it
+  exits nonzero. Names containing `/` remain single candidates with their original
+  error spelling. This corrects Go's search to match Node/libuv, not a latent JS defect or a
+  divergence from the frozen JS oracle. Asserted by `internal/procs`'s `TestPATH*` tests,
+  including missing-interpreter fallback at all three entry points, error precedence,
+  non-retry after exit 7, intact pipes and before/after fd counts on darwin and Linux.
+
 Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
 events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure
 incident. Those `orch worker` mirrors: the usage line lists `codex|claude` only; `--effort` is passed to opencode-exec,

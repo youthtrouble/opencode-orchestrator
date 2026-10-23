@@ -53,24 +53,19 @@ func (d Detached) start() (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	path, err := resolve(d.Name, d.Dir, env)
-	if err != nil {
-		return nil, err
-	}
-	cmd := &exec.Cmd{
-		Path:        path,
-		Args:        append([]string{d.Name}, d.Args...),
-		Dir:         d.Dir,
-		Env:         env,
-		SysProcAttr: &syscall.SysProcAttr{Setsid: true},
-	}
-	if d.Output != nil { // a nil *os.File in the io.Writer fields would not mean /dev/null
-		cmd.Stdout, cmd.Stderr = d.Output, d.Output
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, startError(d.Name, err)
-	}
-	return cmd, nil
+	return startResolved(d.Name, d.Dir, env, func(path string) *exec.Cmd {
+		cmd := &exec.Cmd{
+			Path:        path,
+			Args:        append([]string{d.Name}, d.Args...),
+			Dir:         d.Dir,
+			Env:         env,
+			SysProcAttr: &syscall.SysProcAttr{Setsid: true},
+		}
+		if d.Output != nil { // a nil *os.File in the io.Writer fields would not mean /dev/null
+			cmd.Stdout, cmd.Stderr = d.Output, d.Output
+		}
+		return cmd
+	})
 }
 
 // StartDetached starts the program at path with args as a Detached child with its output on

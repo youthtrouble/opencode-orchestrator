@@ -2,8 +2,8 @@ package procs
 
 import (
 	"errors"
-	"io/fs"
-	"os"
+	"iter"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -12,9 +12,6 @@ import (
 // defaultSearchPath is libuv's _PATH_DEFPATH, searched when the child's environment has no
 // PATH at all. Node does not fall back to the parent's PATH (probed on Node 26.5.1, macOS).
 const defaultSearchPath = "/usr/bin:/bin"
-
-// accessExecute is X_OK from <unistd.h>; package syscall does not export it.
-const accessExecute = 0x1
 
 // StartError is a failure to start a child. Error() is Node's message, "spawn <name> <CODE>",
 // for the codes Node delivers as an "error" event (ENOENT and EACCES); any other failure keeps
@@ -51,40 +48,58 @@ func startError(name string, err error) *StartError {
 	return failure
 }
 
-// resolve finds the file execvp would run for name, as an absolute path. A name containing
+// resolve yields the absolute candidates execvp would try for name. A name containing
 // "/" is used as is, relative to dir; failures to execute it surface from exec as errnos.
 // Otherwise each PATH entry is tried in order as <entry>/<name> (an empty entry is dir). Paths
 // are never cleaned lexically: in "link/../bin" the kernel resolves ".." after following the
-// symlink, so cleaning it to "bin" would check and run a different file. A directory or a file
-// that may not be executed records EACCES and the search goes on; when nothing runs, the error
-// is EACCES if one was recorded, else ENOENT.
-func resolve(name, dir string, env []string) (string, error) {
-	if strings.Contains(name, "/") {
-		path, err := absoluteIn(name, dir)
-		if err != nil {
-			return "", startError(name, err)
+// symlink, so cleaning it to "bin" would run a different file.
+func resolve(name, dir string, env []string) iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		if strings.Contains(name, "/") {
+			path, err := absoluteIn(name, dir)
+			yield(path, err)
+			return
 		}
-		return path, nil
+		searchPath, ok := lookupEnv(env, "PATH")
+		if !ok {
+			searchPath = defaultSearchPath
+		}
+		for _, entry := range strings.Split(searchPath, ":") {
+			candidate, err := absoluteIn(candidateIn(entry, name), dir)
+			if !yield(candidate, err) || err != nil {
+				return
+			}
+		}
 	}
-	searchPath, ok := lookupEnv(env, "PATH")
-	if !ok {
-		searchPath = defaultSearchPath
-	}
+}
+
+// startResolved tries execution, not just access(X_OK): an executable script can still
+// fail with ENOENT when its interpreter is missing. Only pre-start failures are retried;
+// once a child starts, its eventual exit status must never launch a second candidate.
+// command must build a fresh Cmd each time and retain any caller-owned stdio between tries.
+func startResolved(name, dir string, env []string, command func(string) *exec.Cmd) (*exec.Cmd, error) {
 	failure := syscall.ENOENT
-	for _, entry := range strings.Split(searchPath, ":") {
-		candidate, err := absoluteIn(candidateIn(entry, name), dir)
+	for path, err := range resolve(name, dir, env) {
 		if err != nil {
-			return "", startError(name, err)
+			return nil, startError(name, err)
 		}
-		err = checkExecutable(candidate)
+		cmd := command(path)
+		err = cmd.Start()
 		if err == nil {
-			return candidate, nil
+			return cmd, nil
 		}
-		if errors.Is(err, fs.ErrPermission) {
+		if strings.Contains(name, "/") {
+			return nil, startError(name, err)
+		}
+		switch {
+		case errors.Is(err, syscall.EACCES):
 			failure = syscall.EACCES
+		case errors.Is(err, syscall.ENOENT), errors.Is(err, syscall.ENOTDIR):
+		default:
+			return nil, startError(name, err)
 		}
 	}
-	return "", startError(name, failure)
+	return nil, startError(name, failure)
 }
 
 // candidateIn is the file execvp tries for name in one PATH entry; an empty entry is the
@@ -112,19 +127,6 @@ func absoluteIn(path, dir string) (string, error) {
 		return "", err
 	}
 	return cwd + "/" + path, nil
-}
-
-// checkExecutable is the test execve applies: a directory, or a file without execute
-// permission for this process, is EACCES.
-func checkExecutable(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		return syscall.EACCES
-	}
-	return syscall.Access(path, accessExecute)
 }
 
 // lookupEnv returns the value of key in env. The last entry wins, as it does for the child:
