@@ -9,7 +9,6 @@ name: Go 0.6.0 Linux audit (temporary)
 on:
   push:
     branches: [slice/go-060-linux-audit]
-  workflow_dispatch:
 
 permissions:
   contents: read
