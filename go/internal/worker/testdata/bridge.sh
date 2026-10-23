@@ -3,7 +3,9 @@
 # this script as its own executable, so $1 is the bridge subcommand. It acts on FAKE_*:
 #   FAKE_LOG       directory receiving argv (one argument per line), stdin and diagnostics
 #   FAKE_NO_STDIN  set: never read stdin (the worker's prompt meets a closed pipe)
-#   FAKE_WAIT      set: run a foreground child until a signal reaches the process group; the
+#   FAKE_WAIT      set: run the test binary as a foreground child, so a trapped signal cannot
+#                  stay pending behind a shell read(2); FAKE_SIGNAL_CHILD is its absolute path.
+#                  Wait until a signal reaches the process group; the
 #                  child and bridge ACK on events; ready follows both installed handlers.
 #                  ready-go, child-go and bridge-go are blocking FIFO gates owned by the
 #                  test, whose cleanup releases all gates and waits for the foreground tree.
@@ -28,22 +30,15 @@ if [ -n "$FAKE_GATE" ]; then
   exec 3<&-
 fi
 if [ -n "$FAKE_WAIT" ]; then
+  if [ -z "$FAKE_SIGNAL_CHILD" ]; then
+    echo 'FAKE_WAIT requires FAKE_SIGNAL_CHILD' >&2
+    exit 3
+  fi
   echo "$$" > "$log/bridge-pid"
   exec 4> "$log/events"
   trap 'echo "bridge TERM" >&4' TERM
   trap 'echo "bridge INT" >&4' INT
-  sh -c '
-    echo "$$" > "$1/child-pid"
-    trap "echo \"child TERM\" >&4; exit 0" TERM
-    trap "echo \"child INT\" >&4; exit 0" INT
-    echo child-started >&4
-    read -r _ < "$1/ready-go"
-    if [ "$FAKE_WAIT" = child-exit ]; then
-      echo child-exit >&4
-      exit 0
-    fi
-    echo ready >&4
-    read -r _ < "$1/child-go"' child "$log"
+  WORKER_HELPER=signal-child "$FAKE_SIGNAL_CHILD" -test.run='^TestHelperProcess$'
   echo child-done >&4
   read -r _ < "$log/bridge-go"
   exec 4>&-
