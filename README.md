@@ -296,9 +296,11 @@ Repair the JSON or restore read access to `.orchestrator/flip.json`, or remove t
 Removing it also drops any gate it held: if that gate must remain, stop supervision before
 removal and re-gate with `orch flip gate --active <door> --reason "..."` (and `--question <id>`
 if needed) before restarting supervision.
-Do not remove `flip.json.lock`. Repair state before kickoff: its preflight currently ignores
-the gate-clear child's failure and can continue launching when a vendor is usable. The
-both-red path exits 1 if it cannot record its pause; kickoff is not a repair command.
+Do not remove `flip.json.lock`. Kickoff is not a repair command: when its gate clear is refused
+(unreadable flip state, or the clear crashed), it prints
+`kickoff: the human gate could not be cleared: <reason>; nothing was launched` and exits 1
+before it starts the supervisor, writes a brief, pauses or launches anything. Repair the state,
+then run kickoff again.
 
 **Flip option values.** A trailing bare `--active`, `--from`, `--reason`, `--question`, `--resume`,
 `--to` or `--brief` is a one-line usage error (exit 2, no writes or mailbox post). Supply the

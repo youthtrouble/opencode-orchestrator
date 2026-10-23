@@ -8,6 +8,7 @@
 package kickoff
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/procs"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/routing"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/usage"
@@ -98,6 +100,10 @@ type RoutingError struct{ Err error }
 func (e *RoutingError) Error() string { return e.Err.Error() }
 func (e *RoutingError) Unwrap() error { return e.Err }
 
+// errGateNotCleared is a preflight whose gate clear was refused, already reported on stderr:
+// the kickoff exits 1 with nothing after the clear run (PE-61).
+var errGateNotCleared = errors.New("the human gate could not be cleared")
+
 // Run performs the kickoff and returns the exit code. An error is what the JS dies of: a
 // *RoutingError, the TypeError of an unknown door, a file error or a launch that could not
 // start.
@@ -128,7 +134,9 @@ func Run(args Args, d Deps) (int, error) {
 	}
 	if args.Opts.Truthy("dry-run") {
 		fmt.Fprintln(d.Out, dryRunSupervisorLine)
-	} else if _, err := preflight(args.Opts, d); err != nil {
+	} else if _, err := preflight(args.Opts, d); errors.Is(err, errGateNotCleared) {
+		return 1, nil
+	} else if err != nil {
 		return 0, err
 	}
 	line, err := doorLine(door, home, args.Opts.Truthy("headless"), &r.Resolved.Postures)
@@ -199,14 +207,18 @@ func promptHead(prompt string) string {
 // conductor's brief, pauses the home door naming that brief through `orch flip pause` (whose
 // answer reaches this stdout), which the supervisor's relaunch (`flip run`) then starts from,
 // and says so. The gate clear in the preflight drops any older pause, so it must come first.
-// Exit 75 promises that relaunch, so a supervisor that did not start (before the brief is
-// written) or a pause that was not recorded is an ordinary failure instead: exit 1.
+// Exit 75 promises that relaunch, so a refused gate clear or a supervisor that did not start
+// (both before the brief is written) or a pause that was not recorded is an ordinary failure
+// instead: exit 1.
 func bothRed(opts cliargs.Opts, home, prompt string, d Deps) (int, error) {
 	if opts.Truthy("dry-run") {
 		fmt.Fprintln(d.Out, "dry-run: both vendors red; a real run would pause and let the supervisor relaunch at the first reset.")
 		return exitBothRed, nil
 	}
 	supervising, err := preflight(opts, d)
+	if errors.Is(err, errGateNotCleared) {
+		return 1, nil
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -228,23 +240,64 @@ func bothRed(opts cliargs.Opts, home, prompt string, d Deps) (int, error) {
 
 // preflight runs in the JS order, never for a dry run: --unattended applies the unattended
 // policy, a human gate is cleared (a human is running this), the supervisor is started and
-// its answer printed, and .orchestrator/ is excluded from git. The policy and gate outputs
-// are discarded. The gate is cleared with --no-relaunch: kickoff starts the conductor itself
-// (or, both red, records its own pause), so the clear also drops any queued relaunch or pause,
-// which would let the supervisor start an older conductor or a second one beside an
-// interactive kickoff. supervising reports that the supervisor is running: `start` exits 0
-// when it started one or found one.
+// its answer printed, and .orchestrator/ is excluded from git. The policy's result is
+// discarded, as the JS does. The gate is cleared with --no-relaunch: kickoff starts the
+// conductor itself (or, both red, records its own pause), so the clear also drops any queued
+// relaunch or pause, which would let the supervisor start an older conductor or a second one
+// beside an interactive kickoff. A refused clear stops the preflight with errGateNotCleared
+// (see gateCleared). supervising reports that the supervisor is running: `start` exits 0 when
+// it started one or found one.
 func preflight(opts cliargs.Opts, d Deps) (supervising bool, err error) {
 	if opts.Truthy("unattended") {
 		d.Children.Self([]string{"policy", "unattended", "--cwd", d.Root})
 	}
-	d.Children.Self([]string{"flip", "gate", "--clear", "--no-relaunch", "--cwd", d.Root})
+	gateClear := d.Children.Self([]string{"flip", "gate", "--clear", "--no-relaunch", "--cwd", d.Root})
+	if !gateCleared(gateClear, d.Root) {
+		fmt.Fprintf(d.Err, "kickoff: %s: %s; nothing was launched\n", errGateNotCleared, childDiagnostic(gateClear))
+		return false, errGateNotCleared
+	}
 	supervisor := d.Children.Self([]string{"supervisor", "start", "--cwd", d.Root})
 	fmt.Fprintf(d.Out, "supervisor: %s\n", jsstr.Slice(trim(stdoutOrStderr(supervisor)), 0, 120))
 	if _, err := flipcmd.EnsureGitExclude(d.Root); err != nil {
 		return false, err
 	}
 	return supervisor.Status != nil && *supervisor.Status == 0, nil
+}
+
+// gateCleared reports that the gate clear left no gate in the way: it exited 0, or it exited 2
+// (not a project) and the root still has no .orchestrator/ directory to hold a gate, as in a
+// first kickoff. Anything else, an unreadable flip.json (exit 1) included, is a refusal
+// (PE-61; the JS ignores the clear's result).
+func gateCleared(gateClear procs.SyncResult, root string) bool {
+	switch {
+	case gateClear.Status == nil:
+		return false
+	case *gateClear.Status == 0:
+		return true
+	case *gateClear.Status == 2:
+		var notAProject *paths.NotAProjectError
+		return errors.As(paths.RequireProject(root, "--cwd"), &notAProject)
+	}
+	return false
+}
+
+// childDiagnostic is the first non-empty line of a child's stderr, else of its stdout, else
+// why it gave no output: the start error, its exit status or that it had none.
+func childDiagnostic(result procs.SyncResult) string {
+	for _, output := range []string{result.Stderr, result.Stdout} {
+		for line := range strings.SplitSeq(output, "\n") {
+			if line = trim(line); line != "" {
+				return line
+			}
+		}
+	}
+	switch {
+	case result.Err != nil:
+		return result.Err.Error()
+	case result.Status != nil:
+		return fmt.Sprintf("exit status %d", *result.Status)
+	}
+	return "no exit status"
 }
 
 // doorLine is `door: <door> (<vendor> <overall>; home <home>) headless|interactive`. A door

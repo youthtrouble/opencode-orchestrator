@@ -72,6 +72,7 @@ func newRun(t *testing.T, anthropic, openai string) *kickoffRun {
 	return &kickoffRun{
 		root: root,
 		children: &fakeChildren{answers: map[string]procs.SyncResult{
+			"flip gate":        {Status: exitStatus(0), Stdout: "{\"cleared\":false}\n"},
 			"supervisor start": {Status: exitStatus(0), Stdout: "  {\"started\":false}\n"},
 		}, inherited: exitStatus(0)},
 		routing: &usage.Routing{
@@ -168,8 +169,11 @@ func TestDryRunChangesNothingAndPrintsThePrompt(t *testing.T) {
 	}
 }
 
+// A first kickoff has no .orchestrator/ to clear a gate in: the clear's not-a-project exit 2
+// is nothing to stop for.
 func TestPreflightRunsBeforeTheLaunch(t *testing.T) {
 	k := newRun(t, "green", "green")
+	k.children.answers["flip gate"] = procs.SyncResult{Status: exitStatus(2), Stderr: "not an orchestrator project: " + k.root + " has no .orchestrator/ directory; cd into the project or pass --cwd <project dir>\n"}
 	k.children.interactive.code = new(int)
 	if code, err := k.run("--brief", "a.md", "--unattended"); err != nil || code != 0 {
 		t.Fatalf("code %d err %v", code, err)
@@ -183,6 +187,67 @@ func TestPreflightRunsBeforeTheLaunch(t *testing.T) {
 	}
 	if exclude, _ := os.ReadFile(filepath.Join(k.root, ".git", "info", "exclude")); string(exclude) != ".orchestrator/\n" {
 		t.Errorf("exclude = %q", exclude)
+	}
+}
+
+// A refused gate clear (an unreadable flip.json since S13d, a crash, a clear that gave no
+// status, or exit 2 while .orchestrator/ exists) stops every real kickoff right after it: no
+// supervisor, no exclude, no brief, no pause and no launch (PE-61).
+func TestARefusedGateClearStopsTheKickoff(t *testing.T) {
+	unreadable := procs.SyncResult{Status: exitStatus(1), Stderr: "\nError: flip state unreadable: /p/.orchestrator/flip.json: EJSON\nmore\n"}
+	refusals := []struct {
+		name          string
+		clear         procs.SyncResult
+		orchestrator  bool // .orchestrator/ exists before the run
+		wantDiagnosis string
+	}{
+		{"unreadable", unreadable, true, "Error: flip state unreadable: /p/.orchestrator/flip.json: EJSON"},
+		{"exit 2 in a project", procs.SyncResult{Status: exitStatus(2), Stdout: " usage \n"}, true, "usage"},
+		{"other code", procs.SyncResult{Status: exitStatus(3)}, false, "exit status 3"},
+		{"no status", procs.SyncResult{Err: errors.New("no executable")}, false, "no executable"},
+		{"signal", procs.SyncResult{}, false, "no exit status"},
+	}
+	modes := []struct {
+		name, anthropic string
+		argv            []string
+	}{
+		{"headless", "green", []string{"--headless"}},
+		{"interactive", "green", nil},
+		{"both red", "red", []string{"--unattended"}},
+	}
+	for _, refusal := range refusals {
+		for _, mode := range modes {
+			t.Run(refusal.name+"/"+mode.name, func(t *testing.T) {
+				k := newRun(t, mode.anthropic, mode.anthropic)
+				if refusal.orchestrator {
+					if err := os.Mkdir(filepath.Join(k.root, ".orchestrator"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				k.children.answers["flip gate"] = refusal.clear
+				k.children.interactive.code = new(int)
+				code, err := k.run(append([]string{"--brief", "a.md"}, mode.argv...)...)
+				if err != nil || code != 1 {
+					t.Fatalf("code %d err %v, want 1", code, err)
+				}
+				want := "kickoff: the human gate could not be cleared: " + refusal.wantDiagnosis + "; nothing was launched\n"
+				if k.err.String() != want {
+					t.Errorf("stderr %q, want %q", k.err.String(), want)
+				}
+				calls := k.preflightCalls()[:1]
+				if mode.anthropic == "red" {
+					calls = append([][]string{{"self", "policy", "unattended", "--cwd", k.root}}, calls...)
+				}
+				if !reflect.DeepEqual(k.children.calls, calls) {
+					t.Errorf("calls %q, want %q", k.children.calls, calls)
+				}
+				for _, path := range []string{filepath.Join(".git", "info"), filepath.Join(".orchestrator", "briefs")} {
+					if _, err := os.Stat(filepath.Join(k.root, path)); !errors.Is(err, os.ErrNotExist) {
+						t.Errorf("%s: stat err %v, want it never created", path, err)
+					}
+				}
+			})
+		}
 	}
 }
 

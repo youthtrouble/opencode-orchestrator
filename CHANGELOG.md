@@ -21,6 +21,10 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- kickoff (S13p, plan 1.7 D2, PE-61): a real kickoff whose gate clear is refused (unreadable
+  `flip.json`, a crash) prints `kickoff: the human gate could not be cleared: <reason>; nothing
+  was launched` and exits 1 before it starts the supervisor, writes a brief, pauses or launches.
+  A first kickoff in a repository with no `.orchestrator/` is unchanged.
 - supervisor (S13e, sol-5 R5, PE-36): keep relaunch attempt records in
   `supervisor-state.json`, prune obsolete run/pending keys, and never overwrite a worker-owned
   lane file; legacy `redispatched_at` is read-only.

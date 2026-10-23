@@ -313,10 +313,12 @@ Repair the file's JSON or read permissions, or remove `.orchestrator/flip.json`.
 drops any gate it held as well as its other flip state. If the gate must remain, stop supervision
 before removal, then set it again with `orch flip gate --active <door> --reason "..."` (and
 `--question <id>` if needed) before restarting supervision. Never remove the separate
-`flip.json.lock`. Repair state before kickoff: its preflight currently discards the gate-clear
-child's status, so a usable-vendor kickoff can
-continue launching despite that refusal. A both-red kickoff exits 1 when its subsequent pause
-cannot be recorded; there is no blanket kickoff exit-1 guarantee for unreadable flip state.
+`flip.json.lock`. Repair state before kickoff: a real kickoff (not `--dry-run`) whose
+`flip gate --clear --no-relaunch` is refused, or gives no exit status, prints
+`kickoff: the human gate could not be cleared: <first line of its error>; nothing was launched`
+and exits 1, before it starts the supervisor, writes the exclude or a brief, pauses or launches
+anything, whichever vendor is usable. A first kickoff in a repository with no `.orchestrator/`
+(the clear's not-a-project exit 2) carries on as before.
 
 **Required option values.** A trailing bare `--active`, `--from`, `--reason`, `--question`,
 `--resume`, `--to` or `--brief` on `orch flip` prints `--<option> requires a value` on one stderr
