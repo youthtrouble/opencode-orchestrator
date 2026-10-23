@@ -39,6 +39,9 @@ func TestMain(m *testing.M) {
 	if scenario := os.Getenv(fakeOpencodeEnv); scenario != "" && filepath.Base(os.Args[0]) == "opencode" {
 		os.Exit(fakeOpencode(scenario))
 	}
+	if os.Getenv(fakeSignalAckEnv) != "" {
+		os.Exit(fakeSignalAck())
+	}
 	if report := os.Getenv(envDumpEnv); report != "" && filepath.Base(os.Args[0]) == "claude" {
 		cwd, err := syscall.Getwd()
 		if err != nil {
