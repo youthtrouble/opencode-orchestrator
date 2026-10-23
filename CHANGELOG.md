@@ -21,6 +21,7 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- tests: split PE-13 worker briefs (JS 1 MiB, orch 100 KiB) for default Unix socket buffers and assert orch passes the whole brief to opencode; no runtime change.
 - plugin (S13s1): the orchestrator plugin keeps a per-instance activity ledger at
   `.orchestrator/activity/opencode/<pid>-<hex>.json`: the last activity of any session in the
   project (subagents included, from bus events, the context hook and the tool hooks) and the
