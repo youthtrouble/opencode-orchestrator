@@ -43,9 +43,14 @@ product code yourself: edit only `.orchestrator/**` and documentation.
 
 If the OpenAI window is red (usage says so, or the bridge exits 75), use the `reviewer` subagent
 (Sonnet 5.5) and mark the review `cross_vendor: false` in STATE.md and the report; schedule a real
-cross-vendor pass after the reset. If the Claude session window is red, stop starting new Claude
-work: write STATE.md, post a `handoff` mailbox message, and tell the user to continue from opencode
-(`/continue`) where the OpenAI-native conductor lives.
+cross-vendor pass after the reset.
+
+- If your own vendor hits a usage limit, stop starting new work: write `.orchestrator/STATE.md`
+  with the exact next action and post a `handoff` mailbox message. A bare handoff does not stop
+  supervisor relaunches. For a budget stop, run `orch flip pause --active <door>` before ending;
+  the supervisor resumes when budgets allow. To remain stopped until human action, run
+  `orch flip gate --active <door> --reason "<reason>"` instead. Tell the user the reset time
+  and how to resume from the recorded state.
 
 ## Headless rule (print mode / worker lane)
 When you run as a worker lane (print mode), ending your turn ENDS THE SESSION and kills any

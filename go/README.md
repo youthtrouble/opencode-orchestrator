@@ -257,7 +257,7 @@ The `claude-exec`, `codex-exec`, `opencode-exec`, `worker start` and `supervisor
 also differ from JS by PE-58: when setting a child's directory, orch replaces its `PWD`.
 References above to the whole inherited environment exclude that normalized `PWD`.
 
-## Ownership primitive (S13a; not yet used by commands)
+## Ownership primitive (S13a–f)
 
 `internal/ownlock` provides non-blocking `Acquire`, non-acquiring `Probe`, idempotent
 `Release` and blocking `Transaction` using POSIX record locks on regular files opened
@@ -1314,6 +1314,12 @@ The other documented differences, each asserted by its own parity case:
   `mailbox/inbox/orch-reply-hint-unconditional-PE-19` and
   `watch/questions/orch-reply-hint-unconditional-PE-19` keep a stub `orch` on `PATH` and compare
   the pair byte for byte under PE-19, hint included.
+
+S13 catalogue coverage: PE-27..30 and PE-32..68 are documented below (grouped by landing
+slice, not numeric order). PE-31 was reserved for S13c and unused; PE-69 was conditional on
+closure review and not needed. No number is silently missing or reused. S13 amends PE-23
+(stop identity) and PE-37 (publication-loss retries) rather than assigning new numbers.
+
 - PE-27: Codex windows are mapped by duration (owner bug a90ac3eb), which the `9e3a456` JS
   predates. A duration-labeled single-window reading appends `applicable: false` to its missing
   slot; two-window and unreadable outputs are unchanged. This applies equally to `rateLimits`
@@ -1448,7 +1454,7 @@ The other documented differences, each asserted by its own parity case:
   Pruning always retains the current conductor slot key, using the same read as flip
   evaluation; an array is read as an empty object and keeps the normal object derivation.
   The synthetic key is pruned on the next tick after a real conductor run is published.
-  S13p's kickoff gate refusal and S13q's launch-option carry-over remain open.
+  Kickoff gate refusal and launch-option carry-over are fixed by PE-61 and PE-62.
 - PE-38 (S13e, L21): a failed redispatch or blocked-note post adds one supervisor diagnostic
   line and continues the tick; a failed diagnostic append is ignored because the attempt
   is already in state. A normal relaunch-log error still fails that tick, with the in-memory
@@ -1729,13 +1735,24 @@ Doctor's native `orch on PATH` check recognizes hard links via file identity bef
 back to resolved path comparison (S12c F1). Toolchain discovery uses the same injected
 `LookPath` dependency as binary discovery (F2); no second `OnPath` predicate remains.
 
-Those `orch supervisor` mirrors (S8a part): the tick (run by `serve`) keeps the JS order and
-partial writes. This is to be fixed in Go (S13 plan, Q-S8-3).
+### Latent JS defects still mirrored or explicitly deferred
+
+The S13 fixes above replace the old worker, flip, supervisor, watch, kickoff and bridge latent
+defects; they are not pending fixes. The remaining supervisor reminder display mirror is that
+a running lane's `next_check` freezes while a delivered reminder is unacknowledged (PE-59
+changes ended lanes only). Tick side effects still occur in order, not as one transaction.
 
 Those `orch doctor` mirrors: the JS row texts (`claude login` has no detail, `codex login` prints
 the whole trimmed output, the anthropic row is OK either way); a registry read failure worded as
 Node's (`ENOENT: no such file or directory, open '<file>'`, in every command that reads the
 registry).
+
+Deferred beyond this slice: sol-5 R17 (low); the redispatch cap diagnostic can be permanently
+skipped if logging fails after confirmation expiry (closure F3, low); and identity-safe ledger
+lifecycle cleanup (S13s2 F3, low), since more than 64 accumulated writer files disables idle
+enforcement. These two F3s are distinct. PE-23 retains the owner-accepted worker-stop identity
+residual, not an identity-safe stop; PE-67 retains the healthy quiet-model phase longer than N
+false-stop risk. Neither is mechanically eliminated by this release.
 
 The formerly mirrored kickoff both-red
 supervisor-start defect is fixed: kickoff preflights and records a pause naming its saved brief,

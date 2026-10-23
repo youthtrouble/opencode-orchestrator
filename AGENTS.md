@@ -171,9 +171,12 @@ At a HUMAN gate while headless (push, deploy, spend, product question): post the
   both first-class coders; the one with clearly more room gets the slice. Follow the routing table.
 - Fable has its own weekly cap: spend it on genuinely hard planning and root-cause work, not routine plans.
 - Prefer finishing a slice over starting a new one when a reset is near.
-- If your OWN model returns a usage-limit error, stop starting new work: write `.orchestrator/STATE.md`
-  with the exact next action, post a `handoff` mailbox message, and tell the user when the window resets
-  and that `/continue` (or the Claude Code `orchestrator` skill) resumes it.
+- If your own vendor hits a usage limit, stop starting new work: write `.orchestrator/STATE.md`
+  with the exact next action and post a `handoff` mailbox message. A bare handoff does not stop
+  supervisor relaunches. For a budget stop, run `orch flip pause --active <door>` before ending;
+  the supervisor resumes when budgets allow. To remain stopped until human action, run
+  `orch flip gate --active <door> --reason "<reason>"` instead. Tell the user the reset time
+  and how to resume from the recorded state.
 - Delegated workers consume the same subscriptions. Keep briefs tight and self-contained; a worker
   cannot see this conversation.
 

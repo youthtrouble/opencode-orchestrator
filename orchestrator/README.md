@@ -569,6 +569,26 @@ config is rejected. There is one active receipt at a time.
 every command go through the `orch` binary. Pull in the checkout, rebuild `orch`
 beside the installed one and swap it in, reload, check health:
 
+Before replacing orch, stop the supervisor and lanes in every affected project. Inspect and
+record existing human gates and budget pauses (door/reason/optional brief/time), preserving
+human gates unchanged. Create an upgrade gate only for an
+ungated project, using its correct active door, and record that gate. Request supervisor stop,
+stop active lanes and confirm all have exited; never remove lock files. Pre-S13 pid-text locks
+do not exclude new kernel-lock runners. Keep all gates until the update and health checks
+finish. Gating removes any pause and posts an informational human handoff. For a previously
+paused project temporarily gated by this upgrade, keep supervision stopped and confirm it
+exited: clear only the matching upgrade-created gate with `--no-relaunch`, then restore
+`flip pause` with the recorded active door/reason/optional brief before starting supervision.
+The clear also removes queued launches, so reconcile any pre-existing paused project's
+`pending_launch` first. Restoration posts a supervisor handoff and creates a new pause timestamp;
+resumption follows current budgets/cooldowns, not the old timestamp. If restoration fails,
+leave supervision stopped and reconcile. For previously unpaused projects, restart supervision
+then clear only matching upgrade-created gates; never clear pre-existing human gates.
+Use a quiet window without concurrent gate writers or launchers;
+if state is unreadable or changes, stop and reconcile rather than overwrite or clear it.
+Exact commands and the accepted worker-stop identity risk are in the root README's
+[Updating](../README.md#updating) and the changelog's [Known issues](../CHANGELOG.md#known-issues).
+
 ```sh
 git pull
 (cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
