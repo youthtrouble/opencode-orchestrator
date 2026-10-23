@@ -18,7 +18,7 @@ import (
 // no effort option (its --variant is model-specific), and `orch worker` passes --effort to
 // every harness.
 var (
-	opencodeValueKeys = []string{"agent", "cwd", "artifact-root", "resume", "timeout-min", "prompt", "prompt-file", "model", "effort"}
+	opencodeValueKeys = []string{"agent", "cwd", "artifact-root", "resume", "timeout-min", "idle-min", "prompt", "prompt-file", "model", "effort"}
 	opencodeFlagKeys  = []string{"quiet", "force", "help"}
 )
 
@@ -26,7 +26,7 @@ var (
 const opencodeExecHelp = `Run one headless opencode turn (opencode run --format json) on the ChatGPT subscription, structured result back.
 
   orch opencode-exec [--agent conductor] [--model PROVIDER/MODEL] [--effort LEVEL (ignored)] [--cwd DIR]
-                     [--artifact-root DIR] [--resume SESSION_ID] [--timeout-min 120] [--force] [--quiet]
+                     [--artifact-root DIR] [--resume SESSION_ID] [--timeout-min 120] [--idle-min 20] [--force] [--quiet]
                      [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
 
 Prints one JSON object on stdout: { ok, harness, session_id, agent, cwd, started_at, final_message,
@@ -41,17 +41,23 @@ const (
 
 // RunOpencode is `orch opencode-exec [args]`: it runs one headless `opencode run` turn on the
 // prompt and prints one JSON result, exactly as bin/opencode-exec.mjs does, step for step, and
-// returns the exit code: 0 ok, 1 failed or crashed, 2 no prompt, 75 budget red. The differences
-// are the documented exceptions PE-1, PE-8 to PE-11, PE-22, PE-44 to PE-47 and PE-65 and the
-// crash output (only the error line of an exception the JS leaves uncaught). Unlike the other
-// bridges it logs neither a start, a timeout nor a done line, and starts no post-run usage
-// refresh.
+// returns the exit code: 0 ok, 1 failed or crashed, 2 invalid input, 75 budget red. The differences
+// include PE-66/67's idle watchdog. It has no start or done line or post-run usage refresh.
 func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
+	return runOpencode(args, stdin, stdout, stderr, defaultIdleRuntime())
+}
+
+func runOpencode(args []string, stdin *os.File, stdout, stderr io.Writer, runtime idleRuntime) int {
 	parsed, positional := cliargs.ParseArgs(args, opencodeValueKeys, opencodeFlagKeys)
 	opts := options(parsed)
 	if parsed.IsFlag("help") {
 		fmt.Fprintln(stdout, opencodeExecHelp)
 		return exitOK
+	}
+	idleMinutes, err := opencodeIdleMinutes(opts)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitPrompt
 	}
 	prompt, err := cliargs.ReadPrompt(parsed, positional, stdin)
 	if err != nil {
@@ -80,9 +86,15 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		return refuse(stdout, stderr, &decision, root, "opencode-exec")
 	}
 
-	started := time.Now()
+	started := runtime.now()
 	result := newOpencodeResult(opts, cwd, jsjson.ISOString(started))
 	events := newOpencodeEvents(log, result)
+	events.now = runtime.now
+	events.idleMinutes = idleMinutes
+	var watchdog *idleWatch
+	if idleMinutes > 0 {
+		watchdog = &idleWatch{root: root, minutes: idleMinutes, started: started, runtime: runtime}
+	}
 	err = childRun{
 		name:       "opencode",
 		args:       opencodeArgv(opts, prompt),
@@ -90,6 +102,7 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		timeout:    timeoutDelay(opts.JS("timeout-min"), defaultOpencodeTimeoutMins),
 		stopSignal: syscall.SIGINT, // SIGTERM leaves the session running in `opencode serve` (PE-65)
 		started:    started,
+		idle:       watchdog,
 	}.run(events.jsThread)
 	if err != nil {
 		return crash(stderr, err)
@@ -98,7 +111,18 @@ func RunOpencode(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		log: log, cwd: cwd, artifactRoot: root, prompt: prompt,
 		timedOut: events.stoppedAtTimeout(), timeoutMinutes: timeoutMinutes(opts.JS("timeout-min"), defaultOpencodeTimeoutMins),
 		model: opts.Or("model", nil), // the result has no model key (PE-47)
+		idle:  watchdog,
 	}.report(stdout, stderr, result)
+}
+
+func opencodeIdleMinutes(opts options) (float64, error) {
+	if _, present := opts["idle-min"]; present {
+		return cliargs.IdleMinutes(opts.JS("idle-min"), "opencode-exec: --idle-min")
+	}
+	if raw, present := os.LookupEnv("ORCH_IDLE_MIN"); present {
+		return cliargs.IdleMinutes(raw, "ORCH_IDLE_MIN")
+	}
+	return 20, nil
 }
 
 // opencodeArgv is the argv opencode-exec.mjs passes to opencode (l.19-22): the prompt is the
@@ -134,8 +158,9 @@ func newOpencodeResult(opts options, cwd, startedAt string) *jsjson.Object {
 // progress log, as the JS line handler does (l.29-35), on the jsThread that serializes them.
 type opencodeEvents struct {
 	*jsThread
-	result *jsjson.Object
-	text   string // the last text part, which becomes final_message on close
+	result      *jsjson.Object
+	text        string // the last text part, which becomes final_message on close
+	idleMinutes float64
 }
 
 func newOpencodeEvents(log *logger, result *jsjson.Object) *opencodeEvents {
@@ -201,6 +226,13 @@ func (e *opencodeEvents) handleError(ev any) error {
 func (e *opencodeEvents) handleClose(exitCode any, stderr []byte, duration time.Duration) {
 	e.result.Set("final_message", e.text)
 	e.result.Set("ok", exitCode == 0.0)
+	if e.stopCause == "idle" {
+		errors := jsjson.Path(e.result, "errors").([]any)
+		e.result.Set("errors", append(errors, "opencode bridge stopped: no activity for "+text(e.idleMinutes)+" min (idle watchdog)"))
+		e.result.Set("stop_cause", "idle")
+		e.result.Set("idle_min", e.idleMinutes)
+		e.result.Set("ok", false)
+	}
 	e.result.Set("exit_code", exitCode)
 	e.result.Set("duration_ms", float64(duration.Milliseconds()))
 	if errors := jsjson.Path(e.result, "errors").([]any); exitCode != 0.0 && len(errors) == 0 {

@@ -160,6 +160,18 @@ func (h *harness) testFlip(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.name == "status/unparsable" || c.name == "status/bom" || c.name == "status/directory" {
+				js, orch := h.runPair(t, h.flipInvocation(c))
+				code := "INVALID_JSON"
+				if c.name == "status/directory" {
+					code = "EISDIR"
+				}
+				want := "{\n  \"state\": \"unreadable\",\n  \"reason\": \"flip state unreadable: " + code + "; fix or remove .orchestrator/flip.json\"\n}\n"
+				if js.exitCode != 0 || js.stdout != "{\n  \"state\": \"never flipped\"\n}\n" || orch.exitCode != 0 || orch.stdout != want || orch.stderr != "" {
+					t.Errorf("PE-54 JS %+v orch %+v", js, orch)
+				}
+				return
+			}
 			if strings.HasSuffix(c.name, "-bare") && !strings.Contains(c.name, "cwd-") {
 				h.compareFlipBareValuePE35(t, h.flipInvocation(c), c.args[len(c.args)-1])
 				return

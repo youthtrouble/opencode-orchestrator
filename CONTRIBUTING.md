@@ -8,9 +8,9 @@ Run from the checkout:
 
 ```sh
 node --test tests/*.test.mjs
-bash -n install.sh uninstall.sh
+bash -n install.sh uninstall.sh orchestrator/bin/setup.sh
 node -e 'JSON.parse(require("node:fs").readFileSync("orchestrator/models.json", "utf8"))'
-(cd go && go build ./... && go vet ./... && test -z "$(gofmt -l .)" && go test ./...)
+(cd go && go build ./... && go vet ./... && go vet -tags parity ./parity && test -z "$(gofmt -l .)" && go test ./...)
 (cd go && ./parity/run.sh)   # slow; builds go/bin/orch and diffs every command against the JS at go/parity/js-ref
 ```
 
@@ -19,6 +19,17 @@ and command stubs: never test installation against a real user config. The Go li
 under a temporary HOME, export `GOCACHE` to one shared directory (e.g. `$TMPDIR/orch-gocache`).
 The Node code has no configured build or semantic typecheck task; report its syntax checks
 honestly rather than calling them typechecks.
+
+For ownership/concurrency acceptance, also run from `go/`:
+
+```sh
+GORACE=atexit_sleep_ms=0 go test -race -count=50 -timeout=12m ./internal/ownlock ./internal/worker ./internal/supervisor ./internal/flipcmd
+```
+
+This keeps race instrumentation enabled but removes the race runtime's per-helper exit delay.
+Use pipe handshakes or injected contention barriers for concurrency tests, not sleeps or
+polling as synchronization. Doctor parity repetition uses only
+`./parity/run.sh --only doctor` with fakes, never the live `orch doctor`.
 
 Match local formatting. Prettier can format Markdown/JavaScript (including the installer's embedded
 JavaScript); no runtime npm dependencies are needed. Run the doctor only when authorized to check

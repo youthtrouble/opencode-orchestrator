@@ -331,16 +331,19 @@ the default and posts the gate handoff; a bare `--reason` is a usage error, not 
 **Workers.** `orch worker start` runs one brief on one harness. State lives in
 `.orchestrator/workers/<lane>.json`, the lock in `<lane>.lock`, the log in
 `.orchestrator/logs/<lane>-<run>.log`. The runner holds a kernel record lock on `<lane>.lock`
-for its whole run, so a lane has one runner; `orch worker stop` signals only that holder. A lock
-file left by a runner that died is reclaimed by the next start, `--detach` included: never delete
+for its whole run, so a lane has one runner; `orch worker stop` checks that holder before signalling.
+A lock file left by a runner that died is reclaimed by the next start, `--detach` included: never delete
 one by hand, since deleting a held lock lets a second runner in. `--detach` launches a kept-awake runner. The bridge timeout
 for a worker is 120 minutes unless `--timeout-min` says otherwise. A failed run posts `blocked`
 and a budget refusal (exit 75 / budget red) posts `deferred` to the mailbox; a finished run posts
 nothing itself (the agent posts its own `release`). `stop --lane L` sends SIGINT to the lane's
 process group: the worker publishes `interrupted`, then records the bridge's failed result, so the
-lane ends `failed`. `orch worker stop` signals only a worker that still holds the lane's lock
-([PE-23](../go/README.md#crash-output-and-parity-exceptions)). From the conductor, `worker_start`
-accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `breadth`.
+lane ends `failed`. `orch worker stop` checks the lane's lock before signalling, not atomically
+with it: scheduling delay makes the check-to-signal gap unbounded, so runner exit and pid/group
+reuse can send SIGINT to unrelated same-user processes (group members included). The pid fallback
+is another unchecked signal step. This SIGINT-only residual is owner-accepted for v0.6.0, not
+mechanically eliminated ([PE-23](../go/README.md#crash-output-and-parity-exceptions)). From the
+conductor, `worker_start` accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `breadth`.
 Workers are instructed to publish a report and a mailbox release; check the actual state and
 messages rather than assuming every successful run did.
 
@@ -377,7 +380,11 @@ for a key, one `blocked` note includes the last output and a manual retry comman
 lane's retries then stop, while a conductor or pending launch is retried every 30 minutes until
 a launch is confirmed or a gate or pause holds it, repeating the `blocked` note at most every
 6 hours. A conductor launch that was confirmed but whose runner never published a lane (the slot
-still shows the old run, idle and unlocked, 600 seconds later) counts as a failed attempt. A
+still shows the old run, idle and unlocked, 600 seconds later) counts as a failed attempt.
+For a due, auto-enabled deferred worker lane, a confirmed launch that never publishes a
+replacement and has no kernel lock holder after the same 600-second grace loses its
+confirmation without adding an attempt, then retries under the existing backoff and
+five-launch cap, posting the one `blocked` note if the cap is reached this way. A
 lane that is not running shows `next_check` and `next_check_at` as null in the state. Conductor and pending-launch notes go to `human`; worker-lane notes go to
 `coordinator`. The decided conductor path also keeps its 600-second project cooldown;
 never-started flip targets keep their separate 120-second backoff. Gate refusals and answers
@@ -561,6 +568,26 @@ config is rejected. There is one active receipt at a time.
 **Update** (symlink install): `git pull` alone does not change what runs, because the plugin and
 every command go through the `orch` binary. Pull in the checkout, rebuild `orch`
 beside the installed one and swap it in, reload, check health:
+
+Before replacing orch, stop the supervisor and lanes in every affected project. Inspect and
+record existing human gates and budget pauses (door/reason/optional brief/time), preserving
+human gates unchanged. Create an upgrade gate only for an
+ungated project, using its correct active door, and record that gate. Request supervisor stop,
+stop active lanes and confirm all have exited; never remove lock files. Pre-S13 pid-text locks
+do not exclude new kernel-lock runners. Keep all gates until the update and health checks
+finish. Gating removes any pause and posts an informational human handoff. For a previously
+paused project temporarily gated by this upgrade, keep supervision stopped and confirm it
+exited: clear only the matching upgrade-created gate with `--no-relaunch`, then restore
+`flip pause` with the recorded active door/reason/optional brief before starting supervision.
+The clear also removes queued launches, so reconcile any pre-existing paused project's
+`pending_launch` first. Restoration posts a supervisor handoff and creates a new pause timestamp;
+resumption follows current budgets/cooldowns, not the old timestamp. If restoration fails,
+leave supervision stopped and reconcile. For previously unpaused projects, restart supervision
+then clear only matching upgrade-created gates; never clear pre-existing human gates.
+Use a quiet window without concurrent gate writers or launchers;
+if state is unreadable or changes, stop and reconcile rather than overwrite or clear it.
+Exact commands and the accepted worker-stop identity risk are in the root README's
+[Updating](../README.md#updating) and the changelog's [Known issues](../CHANGELOG.md#known-issues).
 
 ```sh
 git pull

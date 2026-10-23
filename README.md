@@ -120,6 +120,17 @@ orch mailbox reply 1a2b3c4d "Use Postgres, not SQLite"  # the id, or its first 8
 orch flip gate --clear                                  # after a gate: clear it; the conductor restarts
 ```
 
+The dashboard shows human gates even before the project's first flip, and labels corrupt or
+unreadable flip state `UNREADABLE` rather than implying no gate. `orch flip status` reports
+`{"state":"unreadable","reason":...}` (exit 0), and Work Trains snapshots show the hold reason.
+Repair the file using the gate recovery instructions below; these displays never clear it.
+Watch reads the first non-empty body line under `## Next action` (annotations such as `(exact)`
+are ignored). Watch and doctor label a non-string role model `(invalid model)` without losing
+the other roles. Kickoff accepts only `--door opencode|claude|auto`; unknown, empty or bare
+values exit 2 before routing or project writes. Doctor recognizes a hard-linked `orch` on PATH.
+After worker state storage recovers, its stale `last_state_write_error` is cleared; release
+messages are still posted by the agent, not the worker.
+
 Replying to the question a gate is waiting on clears it too. Details are in
 [step 3](#3-while-it-runs).
 
@@ -204,11 +215,30 @@ relaunches it at the first reset.
 two-hour limit by default; when one ends for any reason (early, failed, after a bare handoff, or
 killed before it recorded a final status), the supervisor relaunches the conductor, which resumes
 from `STATE.md`, and tells you once in the mailbox. Only a gate or a budget pause stops this. A lane has one runner at a time: the runner holds a kernel lock on
-`.orchestrator/workers/<lane>.lock` while it runs, and `orch worker stop` signals only that holder.
-A lock file left by a runner that crashed is reclaimed by the next start; never delete one by
-hand. Background processes are kept awake with `caffeinate` (macOS) or
+`.orchestrator/workers/<lane>.lock` while it runs, and `orch worker stop` checks the kernel holder.
+The holder must match the lane state's pid before signalling, but the check and signal are
+not atomic: a reused same-user pid or group can receive SIGINT in between (owner-accepted
+v0.6.0 risk; see [Known issues](CHANGELOG.md#known-issues)). A lock file left by a runner that
+crashed is reclaimed by the next start; never delete one by hand. Background processes are
+kept awake with `caffeinate` (macOS) or
 `systemd-inhibit` (Linux); a closed laptop lid still sleeps unless you run in clamshell mode with
 power and an external display.
+
+**Quiet opencode runs.** `orch opencode-exec` and `orch worker start --harness opencode`
+accept `--idle-min N` (flag over `ORCH_IDLE_MIN`, default 20; decimal minutes from 0 to 10080).
+`ORCH_IDLE_MIN=0` disables the watchdog. It sends SIGINT only when stdout and stderr and a
+fresh plugin activity ledger have all been quiet for N minutes, no trusted writer reports a
+tool running, and a process probe finds no live descendants. Missing, stale or unknown evidence
+never stops the run. A stopped run exits 1, records `stop_cause: "idle"` and a `timeout` incident
+with `cause: "idle"`; a conductor is then relaunched by the supervisor's existing retry policy.
+While the main stream is quiet, project activity can produce a line at most every five minutes:
+`[opencode] still working: last session activity <s>s ago[, tool running]`.
+Other sessions' activity can keep a stalled run alive; it is never subtracted. A pure model phase
+with no events or tools longer than N remains a possible false stop; disable or increase N if needed.
+Repeated user/supervisor stop signals still reach the child and do not suppress the bridge's
+absolute cap. Ledger files are revalidated after the process probe. More than 64 accumulated
+writer files disables idle enforcement conservatively, even if some writers have died; an old
+file modification time is not proof that its activity evidence can safely be discarded.
 
 ## Use it on a project
 
@@ -425,6 +455,31 @@ in live testing (probably upstream), so use `ORCH_BIN`. Details and accepted por
 `git pull` updates the symlinked prompts and plugin, but `orch` is a binary built from the checkout and stays as it was until
 you rebuild it. Do not rerun `install.sh` for this: it refuses when `orch` already exists. In the checkout:
 
+**Before replacing orch, stop the supervisor and lanes in every affected project.** In each project:
+
+1. Inspect `orch flip status` and record the existing state, including any human gate's door,
+   reason and question, and any budget pause's `door`, `reason`, optional `brief` and `at`.
+   Also record any `pending_launch`; if a paused project has one, stop and reconcile that
+   queued launch before using the pause-restoration procedure below, which would remove it.
+   Preserve an existing human gate unchanged: do not replace it with an
+   upgrade gate. If state is unreadable or the active door cannot be established, stop and
+   reconcile it before continuing.
+2. Only for an ungated project, establish its actual active door (`opencode` or `claude`) and
+   create `orch flip gate --active <door> --reason "orch upgrade"`. Record which projects this
+   upgrade gated and their resulting gate records. This command removes a budget pause, so
+   retain its recorded values for restoration. It also posts an informational human `handoff`
+   in the mailbox (`awaiting human: orch upgrade`); it does not create a question to answer.
+   Arrange a quiet window with no other gate writers or launchers: inspecting state and
+   setting or clearing a gate are not one atomic operation.
+   Recheck before each gate change; if state changes during this procedure, stop and reconcile
+   rather than overwrite or clear it.
+3. Request `orch supervisor stop` and stop each active lane with `orch worker stop --lane <lane>`.
+   Wait for the supervisor and runners to exit; a stop request is not proof of exit. Keep both
+   pre-existing and upgrade-created gates set during the update.
+
+Old pid-text locks are not kernel ownership locks: mixing pre-S13 runners with the new binary
+can start a second runner on the same lane. Never remove lock files to force the upgrade.
+
 ```sh
 git pull
 (cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch)
@@ -437,6 +492,26 @@ orch doctor
 The build writes a new file beside the installed `orch` and `mv` swaps it in at once, so nothing ever runs a
 half-written binary. Use your `ORCH_BIN_DIR` in place of `~/.local/bin` if you installed elsewhere. `orch version`
 should print the checkout's `go/internal/version/VERSION` and the commit you pulled.
+After health checks, first re-inspect state and confirm any upgrade-created gate still matches
+its recorded gate. Leave every pre-existing human gate unchanged. If state is unreadable or has
+changed, stop and reconcile instead of clearing it; a matching reason alone is not ownership.
+
+- **Previously budget-paused, temporarily gated by this upgrade:** keep the supervisor stopped
+  and confirm it has exited throughout restoration. Clear only the recorded upgrade-created
+  gate with `orch flip gate --clear --no-relaunch`, then immediately restore the pause with
+  `orch flip pause --active <recorded-pause-door> --reason "<recorded-pause-reason>"`, adding
+  `--brief "<recorded-pause-brief>"` only if one was recorded. Inspect the restored pause before
+  `orch supervisor start`. Do not use ordinary `gate --clear` here: it queues a relaunch that
+  can bypass budget waiting. `--no-relaunch` removes both pauses and queued launches, so restore
+  the pause **after** clearing, not before. If either command fails, leave supervision stopped
+  and reconcile; never start it between the clear and successful pause restoration.
+  The restored pause gets a new `at` and posts a supervisor handoff. It retains the recorded
+  door/reason/brief, not the old timestamp or a promised reset deadline. Supervision re-evaluates
+  current budgets and normal cooldown/backoff; if a vendor is now usable it may resume promptly.
+- **Previously unpaused, gated by this upgrade:** restart supervision, then clear only the
+  matching upgrade-created gate with `orch flip gate --clear` when ready to resume.
+- **Pre-existing human gate:** restart supervision without clearing or replacing that gate;
+  any coexisting pause was left unchanged. Its original approval requirement still applies.
 
 Contributor verification, including `node --test tests/*.test.mjs`, is documented in
 [CONTRIBUTING.md](CONTRIBUTING.md); it is not an upgrade prerequisite. The runtime needs no Node;

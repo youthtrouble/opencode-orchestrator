@@ -335,7 +335,7 @@ func laneRestartCause(c conductorView, handedOff bool) string {
 }
 
 // expireStaleConfirmation (D1d): a launch confirmed by its launcher whose runner died before
-// publishing a lane leaves the slot showing the confirmed key. Once relaunchCooldown has
+// publishing a lane leaves the slot showing the confirmed key. Once launchPublishGrace has
 // passed with the lane idle and its lock free, the confirmation counts as a failed attempt.
 func (s *Supervisor) expireStaleConfirmation(state *jsjson.Object, key string, t *tick, c conductorView) error {
 	record, ok := jsjson.Path(state, "redispatch", key).(*jsjson.Object)
@@ -344,7 +344,7 @@ func (s *Supervisor) expireStaleConfirmation(state *jsjson.Object, key string, t
 	}
 	confirmed := jsjson.Path(record, "confirmed_run_id")
 	since, parsed := secondsSince(record, "last_attempt_at", t.now)
-	if !jsjson.Truthy(confirmed) || !parsed || since < relaunchCooldown {
+	if !jsjson.Truthy(confirmed) || !parsed || since < launchPublishGrace {
 		return nil
 	}
 	record.Set("confirmed_run_id", nil)

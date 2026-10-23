@@ -142,7 +142,7 @@ func pe46Help(t *testing.T, js, orch *outcome) {
 const opencodeExecHelp = `Run one headless opencode turn (opencode run --format json) on the ChatGPT subscription, structured result back.
 
   orch opencode-exec [--agent conductor] [--model PROVIDER/MODEL] [--effort LEVEL (ignored)] [--cwd DIR]
-                     [--artifact-root DIR] [--resume SESSION_ID] [--timeout-min 120] [--force] [--quiet]
+                     [--artifact-root DIR] [--resume SESSION_ID] [--timeout-min 120] [--idle-min 20] [--force] [--quiet]
                      [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
 
 Prints one JSON object on stdout: { ok, harness, session_id, agent, cwd, started_at, final_message,

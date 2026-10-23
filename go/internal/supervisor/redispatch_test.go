@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -54,7 +55,7 @@ func TestRedispatchReplacementStateSurvivesLauncherReturn(t *testing.T) {
 	}
 }
 
-func TestRedispatchFailedLaneRetriesThenConfirmsOnce(t *testing.T) {
+func TestRedispatchFailedLaneRetriesAfterUnpublishedConfirmation(t *testing.T) {
 	f := deferredFixture(t)
 	f.runResult = SyncResult{Status: status(1), Stderr: "failed"}
 	state := f.mustTick(`{}`)
@@ -72,10 +73,171 @@ func TestRedispatchFailedLaneRetriesThenConfirmsOnce(t *testing.T) {
 	if len(f.runs) != 2 || jsjson.Path(state, "redispatch", "run-b1", "confirmed_run_id") != "replacement" {
 		t.Fatalf("not confirmed: %s", compact(t, state))
 	}
+	f.at(659)
+	state = f.mustTick(compact(t, state))
+	if len(f.runs) != 2 {
+		t.Fatalf("confirmed launch repeated before publication grace: %v", f.runs)
+	}
+	f.at(660)
+	// Inspect the same state at the launch boundary, before the next attempt is counted.
+	f.respond = func(SyncSpec) SyncResult {
+		record := jsjson.Path(state, "redispatch", "run-b1")
+		if jsjson.Path(record, "confirmed_run_id") != nil || jsjson.Path(record, "attempts") != float64(2) || jsjson.Path(record, "last_attempt_at") != iso(60) {
+			t.Fatalf("expiry changed launch accounting: %s", compact(t, record))
+		}
+		return SyncResult{Status: status(0), Stdout: laneLaunched}
+	}
+	if err := f.sup.Tick(state); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.runs) != 3 || jsjson.Path(state, "redispatch", "run-b1", "attempts") != float64(3) {
+		t.Fatalf("unpublished confirmation did not retry: runs=%d, state=%s", len(f.runs), compact(t, state))
+	}
+	if !strings.Contains(f.logText(), "b1 launch replacement never published a lane; confirmation expired") {
+		t.Fatalf("missing publication-loss log: %s", f.logText())
+	}
+}
+
+func TestRedispatchUnpublishedConfirmationWaitsForKernelHolder(t *testing.T) {
+	f := deferredFixture(t)
+	f.runResult = SyncResult{Status: status(0), Stdout: laneLaunched}
+	state := f.mustTick(`{}`)
+	before := compact(t, jsjson.Path(state, "redispatch", "run-b1"))
+	holder := f.holdLock("workers/b1.lock")
+	f.at(601)
+	state = f.mustTick(compact(t, state))
+	if got := compact(t, jsjson.Path(state, "redispatch", "run-b1")); got != before || len(f.runs) != 1 {
+		t.Fatalf("expired while a runner owns the lane: %s; runs=%d", got, len(f.runs))
+	}
+	if err := holder.stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code := holder.exitCode(t); code != 0 {
+		t.Fatalf("lock holder exited %d", code)
+	}
+	state = f.mustTick(compact(t, state))
+	if len(f.runs) != 2 || jsjson.Path(state, "redispatch", "run-b1", "attempts") != float64(2) {
+		t.Fatalf("unpublished launch did not retry after holder exited: runs=%d, state=%s", len(f.runs), compact(t, state))
+	}
+}
+
+func TestRedispatchUnpublishedFifthLaunchStopsAndNotesOnce(t *testing.T) {
+	f := deferredFixture(t)
+	state := f.mustTick(`{"redispatch":{"run-b1":{"attempts":5,"last_attempt_at":"` + iso(-600) + `","confirmed_run_id":"r5"}}}`)
+	record := jsjson.Path(state, "redispatch", "run-b1")
+	if jsjson.Path(record, "confirmed_run_id") != nil || jsjson.Path(record, "attempts") != float64(5) || jsjson.Path(record, "last_attempt_at") != iso(-600) || jsjson.Path(record, "blocked_noted_at") != iso(0) || len(f.runs) != 0 {
+		t.Fatalf("unpublished fifth launch not stopped: %s; runs=%d", compact(t, record), len(f.runs))
+	}
+	blocked := f.sent("blocked")
+	if len(blocked) != 1 || jsjson.Path(blocked[0], "to") != "coordinator" || jsjson.Path(blocked[0], "subject") != "b1 relaunch stopped after 5 failed attempts" {
+		t.Fatalf("blocked notes: %v", blocked)
+	}
+	body := jsjson.Path(blocked[0], "body").(string)
+	if !strings.Contains(body, "never published a lane") || !strings.Contains(body, "\nRetry by hand: orch worker start --brief b.md --harness claude --lane b1") {
+		t.Fatalf("blocked body: %s", body)
+	}
+	messageCount := len(f.messages())
 	f.at(10000)
 	f.mustTick(compact(t, state))
-	if len(f.runs) != 2 {
-		t.Fatalf("confirmed launch repeated: %v", f.runs)
+	if len(f.messages()) != messageCount || len(f.runs) != 0 {
+		t.Fatalf("stopped key repeated: messages=%v; runs=%v", f.messages(), f.runs)
+	}
+}
+
+func TestRedispatchUnpublishedFifthLaunchArgumentErrorCanRecover(t *testing.T) {
+	f := deferredFixture(t)
+	validWorker := f.read("workers/b1.json")
+	f.write("workers/b1.json", strings.TrimSuffix(validWorker, "}")+`,"launch_options":{"model":"bad\u0000model"}}`)
+	state := mustParse(t, `{"redispatch":{"run-b1":{"attempts":5,"last_attempt_at":"`+iso(-600)+`","confirmed_run_id":"r5"}}}`).(*jsjson.Object)
+	before := compact(t, jsjson.Path(state, "redispatch", "run-b1"))
+	if err := f.sup.Tick(state); !errors.Is(err, errArgValue) {
+		t.Fatalf("argument error: %v", err)
+	}
+	if got := compact(t, jsjson.Path(state, "redispatch", "run-b1")); got != before || len(f.sent("blocked")) != 0 || len(f.runs) != 0 {
+		t.Fatalf("argument error consumed blocked note: record=%s; messages=%v; runs=%v", got, f.messages(), f.runs)
+	}
+	f.write("workers/b1.json", validWorker)
+	f.onMailbox = func() {
+		if jsjson.Path(state, "redispatch", "run-b1", "blocked_noted_at") != iso(0) {
+			t.Error("blocked note not stamped before posting")
+		}
+	}
+	if err := f.sup.Tick(state); err != nil {
+		t.Fatal(err)
+	}
+	f.onMailbox = nil
+	if len(f.sent("blocked")) != 1 || jsjson.Path(state, "redispatch", "run-b1", "confirmed_run_id") != nil || jsjson.Path(state, "redispatch", "run-b1", "attempts") != float64(5) {
+		t.Fatalf("blocked note did not recover: %s; messages=%v", compact(t, state), f.messages())
+	}
+	f.at(10000)
+	f.mustTick(compact(t, state))
+	if len(f.sent("blocked")) != 1 || len(f.runs) != 0 {
+		t.Fatalf("recovered blocked note repeated or launched: messages=%v; runs=%v", f.messages(), f.runs)
+	}
+}
+
+func TestRedispatchExpiredFourthLaunchRetriesFifthInSameTick(t *testing.T) {
+	f := deferredFixture(t)
+	f.runResult = SyncResult{Status: status(0), Stdout: laneLaunched}
+	state := f.mustTick(`{"redispatch":{"run-b1":{"attempts":4,"last_attempt_at":"` + iso(-600) + `","confirmed_run_id":"r4"}}}`)
+	if len(f.runs) != 1 || jsjson.Path(state, "redispatch", "run-b1", "attempts") != float64(5) || jsjson.Path(state, "redispatch", "run-b1", "confirmed_run_id") != "replacement" || len(f.sent("blocked")) != 0 {
+		t.Fatalf("fourth launch did not retry as fifth: %s; runs=%v; messages=%v", compact(t, state), f.runs, f.messages())
+	}
+}
+
+func TestRedispatchPublishedFinalReplacementIsNotRestarted(t *testing.T) {
+	for _, finalStatus := range []string{"failed", "finished"} {
+		t.Run(finalStatus, func(t *testing.T) {
+			f := deferredFixture(t)
+			replacement := `{"run_id":"replacement","status":"` + finalStatus + `"}`
+			f.respond = func(SyncSpec) SyncResult {
+				f.write("workers/b1.json", replacement)
+				return SyncResult{Status: status(0), Stdout: laneLaunched}
+			}
+			state := f.mustTick(`{}`)
+			if jsjson.Path(state, "redispatch", "run-b1") != nil {
+				t.Fatalf("published replacement kept old key: %s", compact(t, state))
+			}
+			for _, at := range []float64{600, 10000} {
+				f.at(at)
+				state = f.mustTick(compact(t, state))
+				if len(f.runs) != 1 || f.read("workers/b1.json") != replacement {
+					t.Fatalf("replacement restarted or rewritten: runs=%v; lane=%s", f.runs, f.read("workers/b1.json"))
+				}
+			}
+		})
+	}
+}
+
+func TestRedispatchUnpublishedConfirmationGuards(t *testing.T) {
+	for _, guard := range []string{"conductor", "opt-out", "not deferred", "legacy stamp", "resume not due"} {
+		t.Run(guard, func(t *testing.T) {
+			f := deferredFixture(t)
+			lane, config := "b1", `{}`
+			fields := `"status":"deferred","brief":"b.md","harness":"claude","resume_after":"` + iso(-60) + `"`
+			switch guard {
+			case "conductor":
+				lane = "conductor"
+				if err := os.Remove(f.path("workers/b1.json")); err != nil {
+					t.Fatal(err)
+				}
+			case "opt-out":
+				config = `{"auto_redispatch_deferred":false}`
+			case "not deferred":
+				fields = `"status":"failed"`
+			case "legacy stamp":
+				fields += `,"redispatched_at":"legacy"`
+			case "resume not due":
+				fields = strings.ReplaceAll(fields, iso(-60), iso(1))
+			}
+			f.worker(lane, fields)
+			f.write("supervisor.json", config)
+			record := `{"attempts":2,"last_attempt_at":"` + iso(-600) + `","confirmed_run_id":"replacement"}`
+			state := f.mustTick(fmt.Sprintf(`{"last_flip_check":%d,"redispatch":{"run-%s":%s}}`, t0, lane, record))
+			if got := compact(t, jsjson.Path(state, "redispatch", "run-"+lane)); got != record || len(f.runs) != 0 || strings.Contains(f.logText(), "never published") {
+				t.Fatalf("guard changed confirmation: %s; runs=%v; log=%s", got, f.runs, f.logText())
+			}
+		})
 	}
 }
 

@@ -277,16 +277,18 @@ func TestDoorChoice(t *testing.T) {
 	}
 }
 
-func TestUnknownDoorCrashesAfterThePreflight(t *testing.T) {
-	for _, door := range [][]string{{"--door", "gemini"}, {"--door"}} {
+func TestInvalidDoorIsUsageErrorBeforeAnyWrite(t *testing.T) {
+	for _, door := range [][]string{{"--door", "gemini"}, {"--door"}, {"--door", ""}} {
 		k := newRun(t, "green", "green")
-		_, err := k.run(append([]string{"--brief", "a.md"}, door...)...)
-		var typeErr *jsjson.TypeError
-		if !errors.As(err, &typeErr) || err.Error() != "Cannot read properties of undefined (reading 'overall')" {
-			t.Errorf("%q: err = %v", door, err)
+		code, err := k.run(append([]string{"--brief", "a.md"}, door...)...)
+		if err != nil || code != 2 || !strings.Contains(k.err.String(), "opencode|claude|auto") {
+			t.Errorf("%q: code %d err %v stderr %q", door, code, err, k.err.String())
 		}
-		if !reflect.DeepEqual(k.children.calls, k.preflightCalls()) {
+		if len(k.children.calls) != 0 {
 			t.Errorf("%q: calls %q", door, k.children.calls)
+		}
+		if _, err := os.Stat(filepath.Join(k.root, ".orchestrator")); !os.IsNotExist(err) {
+			t.Errorf("project changed: %v", err)
 		}
 	}
 }

@@ -279,12 +279,12 @@ func TestPublishFailureIsRecordedAndNeverFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Publish(changes("status", "finished"))
-	want := "{\n  \"lane\": \"a\",\n  \"status\": \"finished\",\n  \"pid\": 42,\n  \"updated_at\": \"2026-10-19T12:00:02.000Z\",\n  \"state_storage\": \"unavailable\",\n  \"last_state_write_error\": \"EISDIR\"\n}\n"
+	want := "{\n  \"lane\": \"a\",\n  \"status\": \"finished\",\n  \"pid\": 42,\n  \"updated_at\": \"2026-10-19T12:00:02.000Z\",\n  \"state_storage\": \"unavailable\"\n}\n"
 	if got := readText(t, file); got != want {
 		t.Errorf("recovery write:\n%s\nwant:\n%s", got, want)
 	}
-	if got := marshal(t, s.Fields); !strings.Contains(got, `"state_storage":"available","last_state_write_error":"EISDIR"`) {
-		t.Errorf("state after recovery keeps its key order and the stale error: %s", got)
+	if got := marshal(t, s.Fields); strings.Contains(got, `"last_state_write_error"`) || !strings.Contains(got, `"state_storage":"available"`) {
+		t.Errorf("state after recovery: %s", got)
 	}
 }
 

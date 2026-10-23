@@ -194,17 +194,20 @@ func (h *harness) compareKickoffInteractive(t *testing.T, door string, tui seed,
 
 // testKickoffSupervisorStarted runs a kickoff with no supervisor lock, so each runtime's
 // `supervisor start` launches a serve in its own sandbox; each serve is stopped by the pid its
-// kickoff printed (see runKickoffSupervisorStarted). A dry run starts nothing, so the kickoff
-// names an unknown door: it runs the whole preflight, then dies of the door before any launch.
+// kickoff printed (see runKickoffSupervisorStarted). The valid door launches only a fake TUI.
 func (h *harness) testKickoffSupervisorStarted(t *testing.T) {
-	args := append(append([]string{}, kickoffLaunchArgs...), "--door", "gemini")
-	s := kickoffRoutedGreen(t)
+	args := append(append([]string{}, kickoffLaunchArgs...), "--door", "opencode")
+	s := seeds(kickoffRoutedGreen(t), seedFile("fake-opencode-tui/exit", "0\n"))
 	js := h.runKickoffSupervisorStarted(t, s, false, append([]string{h.node, filepath.Join(h.orchJS, "bin", "kickoff.mjs")}, args...))
 	orch := h.runKickoffSupervisorStarted(t, s, false, append([]string{h.orchBin, "kickoff"}, args...))
-	if err := crashError(crashC2, "", js, orch); err != nil {
-		t.Error(err)
+	if js.exitCode != 0 || orch.exitCode != 0 {
+		t.Fatalf("JS %+v orch %+v", js, orch)
 	}
-	js.stderr, orch.stderr = "", ""
+	const oldHint = "node ~/.config/opencode/orchestrator/bin/watch.mjs --follow"
+	if !strings.Contains(js.stdout, oldHint) {
+		t.Fatal("missing frozen JS watch hint")
+	}
+	js.stdout = strings.ReplaceAll(js.stdout, oldHint, cmdref.WatchFollow()) // PE-19
 	compareOutcomes(t, js, orch)
 }
 

@@ -32,7 +32,6 @@ func Doctor(_ []string, stdio Stdio) int {
 		Routing:     func() (*usage.Routing, error) { return usage.GetRouting(cfg, true) },
 		ReadFile:    os.ReadFile,
 		Exists:      func(path string) bool { _, err := os.Stat(path); return err == nil },
-		OnPath:      func(name string) bool { _, err := exec.LookPath(name); return err == nil },
 		LookPath:    exec.LookPath,
 		OrchVersion: version.String(),
 		Executable:  os.Executable,

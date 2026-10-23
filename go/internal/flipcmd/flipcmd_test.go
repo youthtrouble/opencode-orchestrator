@@ -125,7 +125,7 @@ func TestStatusPrintsTheRecordOrNeverFlipped(t *testing.T) {
 		`"abc"`:        `"abc"`,
 		`[1,2]`:        `[1,2]`,
 		`{"to":"x"}`:   `{"to":"x"}`,
-		`{"to":"x"`:    `{"state":"never flipped"}`,
+		`{"to":"x"`:    `{"state":"unreadable","reason":"flip state unreadable: INVALID_JSON; fix or remove .orchestrator/flip.json"}`,
 		`{"at":"now"}`: `{"at":"now"}`,
 	} {
 		p := newTestProject(t)

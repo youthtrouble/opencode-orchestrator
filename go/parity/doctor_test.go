@@ -152,6 +152,14 @@ func (h *harness) testDoctorNoBinary(t *testing.T, healthy seed, pathEnv string)
 // usage/routing failure.
 func (h *harness) testDoctorRegistryMissing(t *testing.T, healthy seed, pathEnv, orchBinEnv string) {
 	root := h.jsTreeWithRegistry(t, registryMissing)
+	// The runner stubs extracted reference suites. Keep this failure boundary explicit in
+	// the case's private copy, without changing the reference or a supplied ORCH_JS tree.
+	writeSeedFile(t, filepath.Join(root, "tests", "registry.test.mjs"), `import test from "node:test";
+import { readFileSync } from "node:fs";
+test("registry is readable", () => {
+  JSON.parse(readFileSync(new URL("../models.json", import.meta.url), "utf8"));
+});
+`)
 	inv := invocation{
 		js:        []string{h.node, filepath.Join(root, "bin", "doctor.mjs")},
 		orch:      []string{h.orchBin, "doctor"},

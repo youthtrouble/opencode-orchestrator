@@ -34,7 +34,10 @@ type workerCase struct {
 }
 
 // pe48UsageLine is PE-48: orch's usage line names the opencode harness too.
-var pe48UsageLine = rewriteException("PE-48", "--harness codex|claude|opencode [", "--harness codex|claude [")
+func pe48UsageLine(t *testing.T, js, orch *outcome) {
+	rewriteException("PE-68", "[--idle-min N (opencode)] ", "")(t, js, orch)
+	rewriteException("PE-48", "--harness codex|claude|opencode [", "--harness codex|claude [")(t, js, orch)
+}
 
 // workerStatePid is a stored pid in stop output and state files, and workerLockPid the whole
 // text of a lock, rewritten for the cases whose pid is a victim started per runtime.

@@ -24,13 +24,14 @@ func (p Project) NewState(fields *jsjson.Object, now func() time.Time) *State {
 // the whole state is written to `<lane>.json` through a private temp and a rename (PE-21). Only
 // after a successful write is state_storage set to "available", so the file shows it from the
 // second write on. A failure never stops the worker: it sets state_storage "unavailable" and
-// last_state_write_error (Node's err.code), which stays after a later write succeeds.
+// last_state_write_error (Node's err.code), cleared by a later successful write (PE-53).
 func (s *State) Publish(changes *jsjson.Object) {
 	for _, key := range changes.Keys() {
 		value, _ := changes.Get(key)
 		s.Fields.Set(key, value)
 	}
 	s.Fields.Set("updated_at", jsjson.ISOString(s.now()))
+	s.Fields.Delete("last_state_write_error")
 	if err := s.write(); err != nil {
 		s.Fields.Set("state_storage", "unavailable")
 		s.Fields.Set("last_state_write_error", nodefs.ErrorCode(err))

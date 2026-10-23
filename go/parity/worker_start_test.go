@@ -171,6 +171,22 @@ var opencodeRunOK = map[string]string{"jsonl": `{"type":"text","sessionID":"ses_
 
 // testWorkerStart compares foreground `worker start` runs over the bridges' fakes.
 func (h *harness) testWorkerStart(t *testing.T) {
+	t.Run("PE-68-idle-requires-opencode", func(t *testing.T) {
+		for _, harness := range []string{"claude", "codex"} {
+			inv := h.workerStartInvocation(t, workerStartCase{args: []string{"--brief", "b.md", "--harness", harness, "--idle-min", "1"}, run: bridgeCase{fixture: "ok"}})
+			sb := h.newSandbox(t)
+			inv.seed(t, sb)
+			o := h.run(t, sb, inv.orch, inv.stdin, inv.env)
+			if o.exitCode != 2 || o.stdout != "" || !strings.Contains(o.stderr, "--idle-min is only supported with --harness opencode") {
+				t.Errorf("%s: exit %d out %s err %s", harness, o.exitCode, o.stdout, o.stderr)
+			}
+			for path := range o.files {
+				if strings.HasPrefix(path, "project/workers/") || strings.HasPrefix(path, "project/runs/") {
+					t.Errorf("invalid start wrote %s", path)
+				}
+			}
+		}
+	})
 	brief := []string{"--brief", "b.md"}
 	claude := append(brief, "--harness", "claude")
 	init := `{"type":"system","subtype":"init","session_id":"00000000-0000-4000-8000-0000000000aa","model":"m"}` + "\n"
@@ -227,6 +243,7 @@ func (h *harness) testWorkerStart(t *testing.T) {
 		{name: "codex/sandbox-read-only", launchOptions: `{"sandbox":"read-only"}`, args: append(brief, "--harness", "codex", "--sandbox", "read-only"), bridge: codexBridge, run: bridgeCase{script: codexOK}},
 
 		// opencode
+		{name: "opencode/PE-68/idle-disabled", launchOptions: `{"idle-min":"0"}`, args: append(brief, "--harness", "opencode", "--idle-min", "0"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
 		{name: "opencode/finished-with-agent", launchOptions: `{"agent":"coder"}`, args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
 		{name: "opencode/PE-46/effort-is-not-the-prompt", launchOptions: `{"effort":"X"}`, args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK, exception: pe46WorkerEffort}},
 

@@ -41,23 +41,32 @@ type jsThread struct {
 	crash   error
 	crashed chan struct{} // closed when crash is set
 	closed  bool          // the child has closed; the timeout no longer fires
-	// timedOut is set once the bridge's own --timeout-min cap has stopped the child (PE-45).
-	timedOut bool
+	// The first bridge stop owns the result; later timers, signals and crashes cannot replace it.
+	stopCause string
+	stopSent  bool
+	stdoutAt  time.Time // complete stdout line or any stderr byte
+	now       func() time.Time
 }
 
 func newJSThread(log *logger, handler eventHandler) *jsThread {
-	return &jsThread{log: log, handler: handler, crashed: make(chan struct{})}
+	return &jsThread{log: log, handler: handler, crashed: make(chan struct{}), now: time.Now}
 }
 
 // handleLine is the readline "line" listener.
 func (t *jsThread) handleLine(line string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.stdoutAt = t.now()
 	if t.crash != nil {
 		return
 	}
 	if err := t.handler.handleEvent(line); err != nil {
+		// A late malformed event must not replace an already chosen cap/idle stop.
+		if t.stopCause != "" {
+			return
+		}
 		t.crash = err
+		t.stopCause = "crash"
 		close(t.crashed)
 	}
 }
@@ -69,10 +78,10 @@ func (t *jsThread) handleLine(line string) {
 func (t *jsThread) stopAtTimeout(line string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.closed || t.crash != nil {
+	if t.closed || t.stopCause != "" || t.stopSent {
 		return false
 	}
-	t.timedOut = true
+	t.stopCause = "cap"
 	if line != "" {
 		t.log.printf("%s", line)
 	}
@@ -83,7 +92,41 @@ func (t *jsThread) stopAtTimeout(line string) bool {
 func (t *jsThread) stoppedAtTimeout() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.timedOut
+	return t.stopCause == "cap"
+}
+
+// signalLocked serializes signals with close. Only bridge-originated stops claim a cause
+// and the one-stop guard; user signals are always forwarded while the child runs.
+func (t *jsThread) signalLocked(child *procs.Child, cause string, signal syscall.Signal) {
+	if t.closed {
+		return
+	}
+	if cause == "" {
+		child.Signal(signal)
+		return
+	}
+	if t.stopSent || (t.stopCause != "" && t.stopCause != cause) {
+		return
+	}
+	if cause != "" {
+		t.stopCause = cause
+	}
+	t.stopSent = true
+	child.Signal(signal)
+}
+
+type activityStderr struct {
+	thread *jsThread
+	buffer *lockedBuffer
+}
+
+func (s activityStderr) Write(p []byte) (int, error) {
+	s.thread.mu.Lock()
+	defer s.thread.mu.Unlock()
+	if len(p) > 0 {
+		s.thread.stdoutAt = s.thread.now()
+	}
+	return s.buffer.Write(p)
 }
 
 // close is the child's "close" event. It returns the crash the JS died of earlier, or the
@@ -122,7 +165,8 @@ type childRun struct {
 	// SIGTERM it forwards. The zero value is SIGTERM; opencode is stopped with SIGINT, because
 	// SIGTERM leaves its service session running (PE-65).
 	stopSignal syscall.Signal
-	started    time.Time // the JS `started`, from which duration_ms is measured
+	started    time.Time  // the JS `started`, from which duration_ms is measured
+	idle       *idleWatch // opencode only; nil disables every watchdog side effect
 }
 
 // stopWith is the signal that stops the child.
@@ -158,7 +202,7 @@ func (c childRun) run(thread *jsThread) error {
 		Env:      c.env,
 		Stdin:    c.stdin,
 		Stdout:   lines,
-		Stderr:   stderr,
+		Stderr:   activityStderr{thread: thread, buffer: stderr},
 		Grace:    childGrace,
 		OwnGroup: true,
 	})
@@ -166,10 +210,18 @@ func (c childRun) run(thread *jsThread) error {
 		return &jsError{class: "Error", message: err.Error()}
 	}
 	closed := make(chan struct{})
-	go forwardSignals(child, c.stopWith(), signals, thread.crashed, closed)
+	go forwardSignals(child, c.stopWith(), signals, thread, closed)
+	watchDone := make(chan struct{})
+	if c.idle != nil {
+		go func() { defer close(watchDone); c.idle.watch(thread, child, closed) }()
+	} else {
+		close(watchDone)
+	}
 	timer := time.AfterFunc(c.timeout, func() {
 		if thread.stopAtTimeout(c.timeoutLog) {
-			child.Signal(c.stopWith())
+			thread.mu.Lock()
+			thread.signalLocked(child, "cap", c.stopWith())
+			thread.mu.Unlock()
 		}
 	})
 	code, waitErr := child.Wait()
@@ -177,23 +229,32 @@ func (c childRun) run(thread *jsThread) error {
 	// line (the JS clears the timer on close). One that fired before Wait returned may still be
 	// logging; in the JS it would have fired before close too.
 	timer.Stop()
+	thread.mu.Lock()
+	thread.closed = true
+	thread.mu.Unlock()
 	lines.Close()
 	close(closed)
-	return thread.close(code, waitErr, stderr.Bytes(), time.Since(c.started))
+	<-watchDone
+	return thread.close(code, waitErr, stderr.Bytes(), thread.now().Sub(c.started))
 }
 
 // forwardSignals relays the signals orch receives to the child, a SIGTERM as stop, and stops the
 // child with stop once the JS would have crashed, until the child has closed.
-func forwardSignals(child *procs.Child, stop syscall.Signal, signals <-chan os.Signal, crashed <-chan struct{}, closed <-chan struct{}) {
+func forwardSignals(child *procs.Child, stop syscall.Signal, signals <-chan os.Signal, thread *jsThread, closed <-chan struct{}) {
+	crashed := thread.crashed
 	for {
 		select {
 		case sig := <-signals:
 			if sig == syscall.SIGTERM {
 				sig = stop
 			}
-			child.Signal(sig.(syscall.Signal))
+			thread.mu.Lock()
+			thread.signalLocked(child, "", sig.(syscall.Signal))
+			thread.mu.Unlock()
 		case <-crashed:
-			child.Signal(stop)
+			thread.mu.Lock()
+			thread.signalLocked(child, "crash", stop)
+			thread.mu.Unlock()
 			crashed = nil
 		case <-closed:
 			return

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/flipcmd"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
@@ -70,11 +71,18 @@ type message struct {
 
 func readInputs(root string, alive func(pid any) bool) (inputs, error) {
 	var in inputs
-	flip, err := readRecord(filepath.Join(paths.ProjectDir(root), "flip.json"))
+	flip, err := flipcmd.NewProject(root).Read()
 	if err != nil {
-		return inputs{}, err
+		in.gate = &gate{reason: err.(*flipcmd.StateError).GateReason()}
+	} else {
+		in.budgetPaused = jsjson.Truthy(jsjson.Path(flip.Value, "paused"))
+		in.flipTo, _ = jsjson.Path(flip.Value, "to").(string)
+		if awaiting := jsjson.Path(flip.Value, "awaiting_human"); jsjson.Truthy(awaiting) {
+			reason, _ := jsjson.Path(awaiting, "reason").(string)
+			question, _ := jsjson.Path(awaiting, "question").(string)
+			in.gate = &gate{reason: reason, question: question}
+		}
 	}
-	in.gate, in.budgetPaused, in.flipTo = gateOf(flip), flip.truthy("paused"), flip.text("to")
 	conductor, err := readRecord(filepath.Join(paths.ProjectDir(root), "workers", "conductor.json"))
 	if err != nil {
 		return inputs{}, err
@@ -141,17 +149,6 @@ func (r record) object(key string) record {
 func (r record) time(key string) time.Time {
 	at, _ := parseTime(r[key])
 	return at
-}
-
-// gateOf is flip.json's awaiting_human. Like the supervisor, any truthy value is a gate, so the
-// page shows what holds the supervisor back; flip gate writes an object, and only an object
-// carries a reason and a question.
-func gateOf(flip record) *gate {
-	if !flip.truthy("awaiting_human") {
-		return nil
-	}
-	awaiting := flip.object("awaiting_human")
-	return &gate{reason: awaiting.text("reason"), question: awaiting.text("question")}
 }
 
 func laneOf(conductor record, alive func(pid any) bool) lane {

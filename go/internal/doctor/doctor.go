@@ -5,6 +5,7 @@
 package doctor
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -72,7 +73,6 @@ type Deps struct {
 	Routing     func() (*usage.Routing, error)
 	ReadFile    func(string) ([]byte, error)
 	Exists      func(string) bool
-	OnPath      func(name string) bool
 	LookPath    func(name string) (string, error) // exec.LookPath
 	OrchVersion string
 	Executable  func() (string, error)
@@ -168,9 +168,14 @@ func (c *checks) versionOf(orch string) string {
 	return firstLine(r.Out)
 }
 
-// sameFile compares two paths after resolving symlinks; a path that does not resolve is
-// compared as given, so a dangling PATH entry reads as another binary.
+// sameFile recognizes hard links as well as symlinks, falling back to resolved paths when
+// either stat fails (including dangling PATH entries).
 func sameFile(a, b string) bool {
+	left, leftErr := os.Stat(a)
+	right, rightErr := os.Stat(b)
+	if leftErr == nil && rightErr == nil {
+		return os.SameFile(left, right)
+	}
 	return resolveSymlinks(a) == resolveSymlinks(b)
 }
 
@@ -302,7 +307,8 @@ func routingSummary(r *usage.Routing) (string, error) {
 		}
 		model, err := routing.ModelName(r.Registry, a.Entry)
 		if err != nil {
-			return "", err
+			parts = append(parts, a.Role+": (invalid model)")
+			continue
 		}
 		parts = append(parts, a.Role+"="+model+"@"+a.Entry.Via)
 	}
@@ -394,7 +400,8 @@ var firstFailLine = regexp.MustCompile(`(?m)^(?:--- )?FAIL.*$`)
 // unitTests is PE-18's `unit tests`: the Go module's tests instead of `node --test`.
 func (c *checks) unitTests() {
 	module := filepath.Join(filepath.Dir(c.deps.OrchHome), "go")
-	if !c.deps.OnPath("go") || !c.deps.Exists(filepath.Join(module, "go.mod")) {
+	_, err := c.deps.LookPath("go")
+	if err != nil || !c.deps.Exists(filepath.Join(module, "go.mod")) {
 		c.pushDetail(Warn, "unit tests", "not run (no go toolchain or module at "+module+")")
 		return
 	}

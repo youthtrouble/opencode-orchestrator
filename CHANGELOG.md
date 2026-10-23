@@ -8,6 +8,23 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Upgrade notes
 
+- **Stop the supervisor and lanes before replacing orch, in every affected project.** Inspect
+  and record existing human gates and budget pauses (door/reason/brief/time); preserve human
+  gates unchanged. Only gate an ungated project
+  for the upgrade, using its correct active door; record the gate this upgrade created. Request
+  supervisor stop, stop active lanes and confirm they exited. Old
+  pid-text locks are not kernel ownership: mixed pre-S13/new runners can double-start a lane.
+  Never delete lock files. Gating removes a pause and posts an informational human handoff.
+  For a previously paused project temporarily gated by this upgrade, keep supervision stopped
+  and confirm it exited, clear only the matching upgrade-created gate with `--no-relaunch`,
+  then restore `flip pause` with its recorded active door/reason/optional brief **before**
+  restarting supervision. The clear also drops queued launches: reconcile any pre-existing
+  paused project's `pending_launch` first. Restoration creates a new pause timestamp and
+  supervisor handoff; current budgets/cooldowns decide resumption, not the old timestamp.
+  For previously unpaused projects, restart supervision then clear only matching gates this
+  upgrade created; never clear pre-existing human gates. Use a quiet window
+  without concurrent gate writers or launchers; unreadable or changed state means stop and reconcile, not
+  overwrite or clear. See [Updating](README.md#updating) for the commands and binary-swap recipe.
 - From 0.5.0 in symlink mode: `git pull`, then rebuild and swap the binary before restarting:
   `(cd go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o ~/.local/bin/orch.new ./cmd/orch) && mv ~/.local/bin/orch.new ~/.local/bin/orch`.
   Substitute your `ORCH_BIN_DIR` if different. Unset `ORCH_RUNTIME=js` (for a service,
@@ -19,15 +36,87 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 - Bridge budget-refusal summaries now name `orch <bridge>`; incident fingerprints change, so
   `/retro` groups old and new refusals separately.
 
-### Changes
+### Known issues
 
-- tests: split PE-13 worker briefs (JS 1 MiB, orch 100 KiB) for default Unix socket buffers and assert orch passes the whole brief to opencode; no runtime change.
+- `orch worker stop` (PE-23, closure F1): the kernel-holder check and signal are separate
+  steps, with an unbounded gap under scheduling delay. If the runner exits and its pid or
+  group is reused in between, SIGINT can reach unrelated same-user processes, including
+  members of the signalled group. The pid fallback after a failed group signal is another
+  unchecked step. `stop` sends SIGINT only, not SIGKILL. The owner accepted this risk for
+  v0.6.0 (mailbox `91ca7eaf-8e9f-4351-8d05-92df3159017b`); it is not mechanically eliminated.
+  An identity-safe fix and regression test are tracked for v0.6.1, with a frontier plan
+  required before code; a second start-time check alone cannot eliminate this race.
+- The opencode watchdog can stop a healthy pure-model phase with no events or tools longer
+  than its idle threshold (owner-accepted T4); increase `--idle-min` or use `ORCH_IDLE_MIN=0`.
+  Project/foreign activity can instead mask a stall; it is never subtracted.
+- Ledger lifecycle cleanup is deferred (S13s2 F3, low). More than 64 accumulated writer files
+  makes idle evidence unknown, disabling enforcement conservatively; old mtime is not proof
+  a writer is inactive. This is distinct from the redispatch diagnostic F3 below.
+- Redispatch diagnostic F3 (low): a log failure after expiring the fifth unpublished worker
+  launch can permanently skip its blocked note, even after storage recovers. The worker's
+  five-launch cap remains. sol-5 R17 (low) also remains deferred.
+
+### S13
+
+#### Fixes
+
+- sol-5 R2: kernel ownership for worker lanes and the supervisor (PE-28..30); R3: stale-holder
+  rejection (PE-23), with the accepted identity residual above, not mechanical elimination.
+- sol-5 R4: serialized flip state and fail-closed gates (PE-32..35); R5/R7: supervisor-owned
+  retry state and launch confirmation (PE-36..38, including the closure F2 publication repair).
+- sol-5 R12: transactional acknowledgments (PE-39); R14: exec-time PATH fallback (PE-40).
+- P6 and S12 backlog: project-root nesting (PE-41), cross-worktree manifest diagnostics
+  (PE-43), usage-limit classification (PE-44), doctor discovery, and parity tooling below.
+
+#### Features
+
+- delegation (S13i, PE-42): bridges accept `--artifact-root DIR` or `ORCH_ARTIFACT_ROOT`
+  (flag wins) for project run records independently of the child cwd. `worker --root DIR`
+  explicitly owns lane state, locks, logs and records, independently of child `--cwd`, in both
+  foreground and detached runs; without `--root`, legacy behavior is unchanged. Plugin
+  delegation and worker start retain the session project; incidents name the artifact project.
 - plugin (S13s1): the orchestrator plugin keeps a per-instance activity ledger at
   `.orchestrator/activity/opencode/<pid>-<hex>.json`: the last activity of any session in the
   project (subagents included, from bus events, the context hook and the tool hooks) and the
   number of non-`subagent` tool calls in flight. Writes are coalesced to one per 15 s, `alive_at`
   is refreshed every 60 s, and a failed write is one incident per project per 10 min. It holds
-  timestamps and counts only; the watchdog that reads it lands in S13s2.
+  timestamps and counts only. S13s2 consumes tool evidence as a boolean, never a summed count.
+
+- opencode watchdog (S13s2, PE-66..68): `--idle-min` on `opencode-exec` and opencode workers,
+  over `ORCH_IDLE_MIN`, over 20 minutes; `0` disables. Stop with SIGINT only with quiet output,
+  a fresh quiet project activity ledger, no tool running and no live descendants. Unknown
+  evidence fails open. Idle stops exit 1 with `stop_cause: "idle"` and a timeout incident;
+  cap incidents now carry `cause: "cap"`. Bounded still-working and inactive lines explain
+  quiet runs. Worker redispatch preserves an explicitly supplied `idle-min`.
+  Review fixes preserve repeated forwarded signals and forward-then-cap behaviour across
+  harnesses, revalidate the ledger after probing within the shared read bound, and treat
+  Linux `/proc` ESRCH as an exited process. Accumulated stale writer files still fail open.
+
+#### Behaviour changes
+
+Numbered deltas are described below and in the [PE catalogue](go/README.md#crash-output-and-parity-exceptions).
+PE-27 is the preceding weekly-window change, PE-31 is reserved unused, and PE-69 was conditional
+and not needed. No existing PE was renumbered; PE-23 and PE-37 were amended in place.
+
+- supervisor (S13 closure F2, PE-37): retry confirmed worker launches that never publish a
+  replacement lane after 600 seconds with no lane lock holder, preserving the five-launch cap
+  without counting expiry as an extra attempt; post the blocked note once at the cap.
+- parity tooling (S13m): derive `--only` groups from `TestParity` and list them on an unknown
+  group (exit 2); replace only extracted JS reference tests with one passing doctor probe stub
+  (PE-18), never modifying a supplied `ORCH_JS` tree.
+- worker (S13l, PE-53): clear a stale state-write error on successful recovery; release messages
+  remain the agent's responsibility, not the worker's.
+- watch/flip/remote (S13l, PE-54): display gate-only and unreadable flip state explicitly;
+  `flip status` reports unreadable state with its recovery reason and exit 0.
+- watch (S13l, PE-55): show the first non-empty next-action body line, not `(exact)` from its heading.
+- watch/doctor (S13l, PE-56): show an invalid model per role without losing other routing information.
+- kickoff (S13l, PE-57): validate `--door opencode|claude|auto` before routing or project writes;
+  unknown, empty and bare values exit 2.
+- doctor (S13l, S12c F1/F2): recognize hard-linked executables on PATH and share `LookPath`
+  for toolchain discovery instead of maintaining a second predicate.
+- tests: split PE-13 worker briefs (JS 1 MiB, orch 100 KiB) for default Unix socket buffers and assert orch passes the whole brief to opencode; no runtime change.
+- tests (S13t): worker signal fixtures synchronize on FIFO event gates instead of sleep polling;
+  cleanup releases every gate and waits for the run on any outcome. No runtime change.
 - bridges (S13j, PE-44, PE-45): a provider error event reaches the run's `errors`, so a ChatGPT
   usage limit in opencode (or a top-level codex `error`) is a `limit` incident with its text
   instead of a `crash` with an empty error; a run the bridge stopped at its `--timeout-min` cap
@@ -42,11 +131,6 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   (`effort`, `timeout-min`, `agent`, `sandbox`, `permission-mode`, `allowed-tools`, `max-turns`,
   and `root`/`cwd` for a `--root` lane) as `launch_options` in its state, and a budget-deferred
   redispatch passes them again instead of dropping them (L19).
-- delegation (S13i, PE-42): bridges accept `--artifact-root DIR` or `ORCH_ARTIFACT_ROOT`
-  (flag wins) for project run records independently of the child cwd. `worker --root DIR`
-  explicitly owns lane state, locks, logs and records, independently of child `--cwd`, in both
-  foreground and detached runs; without `--root`, legacy behavior is unchanged. Plugin
-  delegation and worker start retain the session project; incidents name the artifact project.
 - review (S13i, PE-43): a missing manifest names its absolute path and explains checkout-local
   storage: pass an absolute path or run from the checkout; `--root` selects the source tree.
   Malformed and permission errors stay distinct.
@@ -67,7 +151,7 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   `supervisor-state.json`, prune obsolete run/pending keys, and never overwrite a worker-owned
   lane file; legacy `redispatched_at` is read-only.
 - supervisor (S13e, sol-5 R7, L24, PE-37): confirm launches only from successful launcher JSON
-  with a run id and runner pid. For current worker/pending keys, retry failures with
+  with a run id and runner pid. For ordinary worker keys, retry failures with
   60/120/240/480 s waits, stop after five
   failures and post one `blocked` note with output and a manual retry command. Gates and
   deferred pending answers do not count as attempts; existing conductor cooldowns remain.
@@ -114,14 +198,14 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   `toString` and other Object.prototype names are refused with exit 1 (L16, PE-39).
 - internal (S13a): add a POSIX record-lock ownership and transaction primitive with
   inode-alias tracking and cross-process regression tests, including failed pending
-  reservations and release after a working-directory change. No callers migrate in this
-  slice; worker, supervisor, flip and ack concurrency fixes are still pending.
+  reservations and release after a working-directory change. Worker, supervisor, flip and ack
+  callers now use it through the following slices.
 - worker (S13b): a lane is owned by its runner through a kernel record lock held for the whole
   run, so a lane has exactly one runner (sol-5 R2, worker side). A lock file left by a runner that
   died is reclaimed by the next start, foreground included (L8, PE-28); `start --detach` only
-  probes the lock and never removes it (PE-29); `orch worker stop` signals only the kernel's
-  holder when it is the state's pid, so a killed runner's reused pid is never signalled (R3,
-  PE-23). The lane-locked hint no longer says to remove the lock: never delete a lock file by
+  probes the lock and never removes it (PE-29); `orch worker stop` checks that the kernel's
+  holder is the state's pid before signalling (R3, PE-23; check-to-signal residual above).
+  The lane-locked hint no longer says to remove the lock: never delete a lock file by
   hand.
 - supervisor (S13c): `orch supervisor serve` owns the project through a kernel record lock on
   `supervisor.lock` held for its life, so of two serves started at once exactly one runs (sol-5
@@ -134,6 +218,13 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   set to that directory instead of inheriting the parent's, so a supervisor started from another
   checkout no longer makes OpenCode attach to it (PE-58). A supervisor started before this build
   keeps its old environment: restart it from its project directory, or with `--cwd`.
+- docs/readiness (S13n): audit the root README, remove fixed latent-defect claims, record unused
+  PE reservations and require stopped supervisors/lanes for upgrades. Both conductor contracts
+  now say a bare handoff does not stop relaunch: use `flip pause` for a budget stop and `flip gate`
+  to remain stopped until human action. No new runtime behavior or PE.
+
+### Other changes
+
 - Added: the owner's verbatim global UI taste bar in `AGENTS.md` and all eight standalone Claude
   agent prompts, so both front doors carry the same design and evidence requirements.
 - usage: map Codex windows by duration, including weekly-only plans such as `prolite`.
@@ -141,8 +232,8 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   flip, headroom, doctor and remote snapshots alone: amber steers, red blocks. PE-27 documents
   the intentional delta from `9e3a456`; the `codex-by-id` golden is unchanged and compared through
   the guarded `postOracleDeltas` test adjustment. Other oracle goldens and caches are unchanged.
-- version/docs (S12g): embedded release is 0.6.0, runtime documentation is Go-only, and parity
-  `--only` rejects unknown group names instead of passing without tests.
+- version/docs (S12g): embedded release is 0.6.0 and runtime documentation is Go-only.
+  Parity `--only` validation was delivered separately in S13m, above.
 - plugin: `orch_delegate` gives the verifier write access by default, as it does the coder (incident 3ad1e76b).
   A verifier on Claude Code ran with `--permission-mode plan`, which blocks Bash, so it returned a plan instead of
   running the checks; on Codex it got a `read-only` sandbox, which blocks its report and the temp dirs tests
