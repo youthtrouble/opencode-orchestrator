@@ -295,7 +295,7 @@ func (l *Launch) preamble() string {
 
 // bridgeArgs is the bridge command line after the executable (l.105-114): option values are
 // passed as their JS text (a bare key's true as "true"). --effort reaches opencode-exec too,
-// which has no such option, so its value becomes the prompt there, as in the JS.
+// which accepts and ignores it (PE-46; in the JS its value became the prompt).
 func (l *Launch) bridgeArgs() []string {
 	o := l.opts
 	text := func(key string) string { return jsjson.TemplateString(o.JS(key)) }

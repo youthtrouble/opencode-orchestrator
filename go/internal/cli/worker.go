@@ -51,7 +51,7 @@ func Worker(args []string, stdio Stdio) int {
 	case command == "stop":
 		return workerStop(project, opts.JS("lane"), stdio)
 	case command != "start" || !opts.Truthy("brief") || !opts.Truthy("harness"):
-		fmt.Fprintf(stdio.Err, "usage: %s start --brief FILE --harness codex|claude [--lane L] [...] | status | stop --lane L\n", cmdref.Command("worker"))
+		fmt.Fprintf(stdio.Err, "usage: %s start --brief FILE --harness codex|claude|opencode [--lane L] [...] | status | stop --lane L\n", cmdref.Command("worker"))
 		return 2
 	}
 	return workerStart(project, opts, argv, stdio)

@@ -101,3 +101,107 @@ func TestRunOpencodeRejectsANullByteInThePrompt(t *testing.T) {
 		t.Error("opencode was started")
 	}
 }
+
+// PE-44: a usage limit opencode reports as an error event is filed as kind limit with its text,
+// not as a crash with the empty stderr tail.
+func TestRunOpencodeUsageLimitEventIsALimitIncident(t *testing.T) {
+	sb := newBridgeSandbox(t, "opencode")
+	limit := `{"type":"error","timestamp":1,"sessionID":"ses_1","error":{"type":"unknown","message":"ChatGPT usage limit reached"}}` + "\n"
+	sb.fakeCLI(t, "opencode", limit, "", "exit 1")
+	code, stdout, stderr := sb.run(t, "--model", "openai/gpt-6.1-sol", "--prompt", "p")
+	if code != 1 || stderr != "[opencode] error: ChatGPT usage limit reached\n" {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if errs := jsjson.Path(parseResult(t, stdout), "errors").([]any); len(errs) != 1 || errs[0] != "ChatGPT usage limit reached" {
+		t.Errorf("errors %q", errs)
+	}
+	incidents := sb.incidents(t)
+	for _, want := range []string{
+		`"kind":"limit","summary":"opencode bridge failed: ChatGPT usage limit reached"`,
+		`"context":{"model":"openai/gpt-6.1-sol","exit_code":1}`, // PE-47
+	} {
+		if !strings.Contains(incidents, want) {
+			t.Errorf("incident lacks %s:\n%s", want, incidents)
+		}
+	}
+}
+
+// PE-46: --help prints help and runs nothing; --effort takes a value that is not the prompt.
+func TestRunOpencodeHelpAndEffort(t *testing.T) {
+	sb := newBridgeSandbox(t, "opencode")
+	sb.fakeCLI(t, "opencode", "", "", logArgvAndStdin)
+	code, stdout, stderr := sb.run(t, "--prompt", "p", "--help")
+	if code != 0 || !strings.HasPrefix(stdout, "Run one headless opencode turn") || stderr != "" {
+		t.Errorf("--help: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(sb.home, "argv")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("--help started opencode")
+	}
+	if code, _, stderr := sb.run(t, "--effort", "high", "--prompt", "p"); code != 0 {
+		t.Fatalf("--effort: exit %d, stderr %q", code, stderr)
+	}
+	if got := readHomeFile(t, sb, "argv"); got != "run\n--format\njson\n--auto\n--agent\nconductor\np\n" {
+		t.Errorf("argv %q", got)
+	}
+}
+
+// fakeSignalReporter installs the bridge's CLI as one that writes the name of the first of
+// SIGINT or SIGTERM it receives to $HOME/signal and exits, and returns the file it touches once
+// both traps are set.
+func (sb bridgeSandbox) fakeSignalReporter(t *testing.T) (trapped string) {
+	t.Helper()
+	sb.fakeCLI(t, sb.bridge, "", "", `trap 'echo INT > "$HOME/signal"; exit 130' INT
+trap 'echo TERM > "$HOME/signal"; exit 143' TERM
+: > "$HOME/trapped"
+while :; do /bin/sleep 0.05; done`)
+	return filepath.Join(sb.home, "trapped")
+}
+
+// PE-65: opencode is stopped with SIGINT, at the cap and for a forwarded SIGTERM, because
+// SIGTERM leaves its service session running; claude keeps SIGTERM (PE-11). A cap stop is a
+// timeout incident (PE-45). The test waits on the bridge's own exit, never on a sleep.
+func TestBridgeStopSignals(t *testing.T) {
+	cases := []struct {
+		bridge, stop, want string
+	}{
+		{"opencode", "cap", "INT"},
+		{"opencode", "sigterm", "INT"},
+		{"claude", "cap", "TERM"},
+		{"claude", "sigterm", "TERM"},
+	}
+	for _, c := range cases {
+		t.Run(c.bridge+"/"+c.stop, func(t *testing.T) {
+			sb := newBridgeSandbox(t, c.bridge)
+			trapped := sb.fakeSignalReporter(t)
+			args := []string{"--quiet", "--prompt", "p"}
+			if c.stop == "cap" {
+				args = append(args, "--timeout-min", "0.01")
+			}
+			cmd := sb.command(args...)
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill() })
+			waitForFile(t, trapped, 10*time.Second)
+			if c.stop == "sigterm" {
+				if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if code := waitWithin(t, cmd, 10*time.Second); code != 1 {
+				t.Fatalf("exit %d", code)
+			}
+			if got := strings.TrimSpace(readHomeFile(t, sb, "signal")); got != c.want {
+				t.Errorf("%s received %s, want %s", c.bridge, got, c.want)
+			}
+			parseResult(t, stdout.String())
+			incidents := sb.incidents(t)
+			timedOut := strings.Contains(incidents, `"kind":"timeout","summary":"`+c.bridge+` bridge timed out after 0.01 min"`)
+			if timedOut != (c.stop == "cap") || strings.Count(incidents, "\n") != 1 {
+				t.Errorf("want a timeout incident only for the cap:\n%s", incidents)
+			}
+		})
+	}
+}

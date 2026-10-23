@@ -3,8 +3,12 @@
 package parity
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -28,8 +32,9 @@ func (h *harness) testOpencodeExec(t *testing.T) {
 		{name: "flags/all", args: []string{"--agent", "coder", "--resume", "ses_r", "--model", "openai/gpt-6-luna", "--cwd", "sub", "--timeout-min", "5", "--prompt", "multi\nline \u00e9", "extra"}, script: ok, seed: seedProjectFile("sub/.keep", "")},
 		{name: "flags/empty-values", args: []string{"--agent", "", "--resume", "", "--model", "", "--cwd", "", "--prompt", "p"}, script: ok},
 		{name: "flags/unknown-keys-are-flags", args: []string{"--frobnicate", "x", "--prompt", "p"}, script: ok},
-		{name: "flags/help-is-ignored", args: []string{"--help", "--prompt", "p"}, script: ok},
-		{name: "flags/effort-value-becomes-the-prompt", args: []string{"--effort", "high"}, script: ok},
+		{name: "PE-46/help-prints-help", args: []string{"--help", "--prompt", "p"}, script: ok, exception: pe46Help},
+		{name: "PE-46/effort-value-is-not-the-prompt", args: []string{"--effort", "high"}, script: ok, exception: pe46Effort},
+		{name: "flags/effort-with-a-prompt", args: []string{"--effort", "high", "--prompt", "p"}, script: ok},
 		{name: "quiet", args: []string{"--quiet", "--prompt", "p"}, script: map[string]string{"jsonl": `{"part":{"type":"tool","tool":"bash"}}` + "\n" + text("pong"), "exit": "0\n"}},
 		{name: "force", args: []string{"--force", "--prompt", "p"}, script: ok},
 
@@ -55,8 +60,20 @@ func (h *harness) testOpencodeExec(t *testing.T) {
 		{name: "end/empty-stderr", args: p, script: map[string]string{"exit": "1\n"}},
 		{name: "end/killed-by-signal", args: p, script: map[string]string{"jsonl": text("hi"), "signal": "TERM\n"}},
 		{name: "end/no-output", args: p, script: map[string]string{"exit": "0\n"}},
-		{name: "PE-9/timeout-0-logs-nothing", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
+		// PE-65 (SIGINT, not SIGTERM) is not visible here: the fake dies of either; see
+		// TestBridgeStopSignals.
+		{name: "PE-9/PE-45/timeout-0-logs-nothing", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings,
+			exception: pe45Timeout("opencode", "0", "")},
 		{name: "end/limit-in-errors-is-a-limit-incident", args: p, script: map[string]string{"stderr": "Error: rate limit exceeded\n", "exit": "1\n"}},
+		// PE-44: the JS ignored error events and filed a usage limit as a crash with the empty
+		// stderr tail; PE-47: and without the model.
+		{name: "PE-44/PE-47/error-event-is-a-limit-incident", args: []string{"--model", "openai/gpt-6.1-sol", "--prompt", "p"},
+			script: map[string]string{"exit": "1\n", "jsonl": `{"type":"error","timestamp":1,"sessionID":"ses_1","error":{"type":"unknown","message":"ChatGPT usage limit reached"}}` + "\n"},
+			exception: rewriteException("PE-44",
+				`"kind":"limit","summary":"opencode bridge failed: ChatGPT usage limit reached"`, `"kind":"crash","summary":"opencode bridge failed: "`,
+				`"ChatGPT usage limit reached"`, `""`,
+				`"context":{"model":"openai/gpt-6.1-sol",`, `"context":{"model":null,`,
+				"[opencode] error: ChatGPT usage limit reached\n", "")},
 
 		// A trailing value key without a value is the JS value true.
 		{name: "bare/agent", args: []string{"--prompt", "p", "--agent"}, script: ok},
@@ -97,6 +114,52 @@ func (h *harness) testOpencodeExec(t *testing.T) {
 	}
 	t.Run("PE-8/bare-prompt", func(t *testing.T) { h.testOpencodeBarePrompt(t) })
 	t.Run("PE-1/prompt-head-split-surrogate", func(t *testing.T) { h.testOpencodeSplitSurrogate(t) })
+}
+
+// pe46Help is PE-46 for --help: the JS ignored it and ran opencode; orch prints its help and
+// runs nothing. orch's whole outcome is asserted: exit 0, the exact help, no stderr, and only the
+// files the case seeded, unchanged (the JS's files less those its run wrote).
+func pe46Help(t *testing.T, js, orch *outcome) {
+	t.Helper()
+	jsRunWrites := []string{"fakelog/opencode-argv.txt", "fakelog/opencode-cwd.txt", "fakelog/opencode-env.txt", runRecordFile(t, js.files)}
+	if js.exitCode != 0 || !strings.Contains(js.stdout, `"ok":true`) || !strings.HasSuffix(js.files[jsRunWrites[0]], "\np\n") {
+		t.Errorf("js: exit %d, stdout %q, argv log %q", js.exitCode, js.stdout, js.files[jsRunWrites[0]])
+	}
+	if orch.exitCode != 0 || orch.stdout != opencodeExecHelp || orch.stderr != "" {
+		t.Errorf("orch: exit %d, stdout %q, stderr %q", orch.exitCode, orch.stdout, orch.stderr)
+	}
+	seeded := maps.Clone(js.files)
+	for _, name := range jsRunWrites {
+		delete(seeded, name)
+	}
+	if !maps.Equal(orch.files, seeded) {
+		t.Errorf("orch files %q, want the seeded files only %q", slices.Sorted(maps.Keys(orch.files)), slices.Sorted(maps.Keys(seeded)))
+	}
+	*orch = *js
+}
+
+// opencodeExecHelp is what `orch opencode-exec --help` prints (PE-46).
+const opencodeExecHelp = `Run one headless opencode turn (opencode run --format json) on the ChatGPT subscription, structured result back.
+
+  orch opencode-exec [--agent conductor] [--model PROVIDER/MODEL] [--effort LEVEL (ignored)] [--cwd DIR]
+                     [--artifact-root DIR] [--resume SESSION_ID] [--timeout-min 120] [--force] [--quiet]
+                     [--prompt TEXT | --prompt-file FILE | TEXT... | stdin]
+
+Prints one JSON object on stdout: { ok, harness, session_id, agent, cwd, started_at, final_message,
+errors, exit_code, duration_ms, record }. opencode is stopped with SIGINT at the --timeout-min cap and
+on a forwarded SIGTERM. Exit codes: 0 ok, 1 failed, 2 no prompt, 75 budget refused.
+`
+
+// pe46Effort is PE-46 for --effort: the JS read it as a flag and ran opencode on its value as
+// the prompt; orch reads the value, ignores it and, with no other prompt, runs on stdin's (empty).
+var pe46Effort = rewriteException("PE-46",
+	"\nconductor\n\n", "\nconductor\nhigh\n",
+	`"prompt_sha256": "`+sha256Hex("")+`"`, `"prompt_sha256": "`+sha256Hex("high")+`"`,
+	`"prompt_head": ""`, `"prompt_head": "high"`)
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // testOpencodeBarePrompt asserts PE-8 for opencode-exec: with a trailing bare --prompt the JS

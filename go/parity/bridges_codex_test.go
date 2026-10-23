@@ -61,8 +61,16 @@ func (h *harness) testCodexExec(t *testing.T) {
 		{name: "end/killed-by-signal", args: p, script: map[string]string{"jsonl": thread, "signal": "TERM\n"}},
 		{name: "end/stderr-tail", args: p, script: map[string]string{"stderr": "\u00a0first\nsecond\r\nthird\n\nfifth \n\t\n", "exit": "2\n"}},
 		{name: "end/no-output", args: p, script: map[string]string{"exit": "0\n"}},
-		{name: "PE-9/timeout-0", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
-		{name: "PE-9/timeout-negative-warns-in-node", args: []string{"--timeout-min", "-1", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings},
+		{name: "PE-9/PE-45/timeout-0", args: []string{"--timeout-min", "0", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings,
+			exception: pe45Timeout("codex", "0", "codex exited null: ")},
+		{name: "PE-9/PE-45/timeout-negative-warns-in-node", args: []string{"--timeout-min", "-1", "--prompt", "p"}, script: map[string]string{"sleep": "30\n"}, dropFakeLogs: true, normalize: withoutNodeWarnings,
+			exception: pe45Timeout("codex", "-1", "codex exited null: ")},
+		// PE-44: the JS ignored top-level error events, so a usage limit was a crash with the exit.
+		{name: "PE-44/top-level-error-is-a-limit-incident", args: p, script: map[string]string{"jsonl": `{"type":"error","message":"You've hit your usage limit."}` + "\n", "exit": "1\n"},
+			exception: rewriteException("PE-44",
+				`"kind":"limit","summary":"codex bridge failed: You've hit your usage limit."`, `"kind":"crash","summary":"codex bridge failed: codex exited 1: "`,
+				`"You've hit your usage limit."`, `"codex exited 1: "`,
+				"[codex] error: You've hit your usage limit.\n", "")},
 		{name: "end/limit-in-errors-is-a-limit-incident", args: p, script: map[string]string{"jsonl": `{"type":"turn.failed","error":{"message":"Rate limit reached"}}` + "\n", "exit": "1\n"}},
 
 		// A trailing value key without a value is the JS value true.
@@ -96,7 +104,7 @@ func (h *harness) testCodexExec(t *testing.T) {
 		{name: "events/thread-without-an-id-then-with-one", args: []string{"--resume", "r", "--prompt", "p"}, script: map[string]string{"exit": "0\n", "jsonl": `{"type":"thread.started"}` + "\n" + completed}},
 		{name: "events/thread-id-returns-to-its-place", args: p, script: map[string]string{"exit": "0\n", "jsonl": `{"type":"thread.started"}` + "\n" + `{"type":"thread.started","thread_id":"t2"}` + "\n" + completed}},
 		{name: "events/odd-shapes", args: p, script: map[string]string{"exit": "0\n", "jsonl": strings.Join([]string{
-			"not json", "5", `"s"`, "[1]", "{}", `{"type":"turn.started"}`, `{"type":"error","message":"top-level errors are ignored"}`,
+			"not json", "5", `"s"`, "[1]", "{}", `{"type":"turn.started"}`,
 			`  {"type":"thread.started","thread_id":"t1"}  `, `{"type":"item.completed","item":5}`, `{"type":"item.completed"}`,
 			`{"type":"item.completed","item":{"type":"agent_message","text":"first\nline"}}`,
 			`{"type":"item.completed","item":{"type":"agent_message","text":""}}`,

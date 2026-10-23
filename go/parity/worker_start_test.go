@@ -30,6 +30,23 @@ type workerStartCase struct {
 	launchOptions string
 }
 
+// pe46WorkerEffort is PE-46 through `orch worker`: the JS's opencode-exec ran opencode on
+// --effort's value X as the prompt; orch's ignores it and runs on the worker prompt.
+func pe46WorkerEffort(t *testing.T, js, orch *outcome) {
+	t.Helper()
+	const argv = "fakelog/opencode-argv.txt"
+	const workerPrompt = "\nconductor\nYou are a worker in an orchestrated multi-agent project at "
+	if !strings.HasSuffix(js.files[argv], "\nconductor\nX\n") || !strings.Contains(orch.files[argv], workerPrompt) {
+		t.Errorf("PE-46 not observed: argv log js %q, orch %q", js.files[argv], orch.files[argv])
+	}
+	orch.files[argv] = js.files[argv]
+	record := runRecordFile(t, orch.files)
+	orch.files[record] = recordPromptHead.ReplaceAllString(orch.files[record], `${1}"X"`)
+}
+
+// recordPromptHead is a run record's prompt_head with its value.
+var recordPromptHead = regexp.MustCompile(`("prompt_head": )"(?:[^"\\]|\\.)*"`)
+
 // Fresh worker values, rewritten only in their exact place and format.
 var (
 	workerPids    = regexp.MustCompile(`("(?:pid|worker_pid)": ?)\d+`)
@@ -99,6 +116,7 @@ func (h *harness) workerStartInvocation(t *testing.T, c workerStartCase) invocat
 	}
 	inv.crash, inv.errorLine, inv.progress = c.crash, c.errorLine, ""
 	inv.launchOptions = c.launchOptions
+	inv.exception = c.run.exception
 	runFileNames := inv.normalizeWrites
 	inv.normalizeWrites = func(o outcome, before map[string]string) outcome {
 		return withLockHolderPids(withWorkerLockPid(runFileNames(o, before), before))
@@ -210,11 +228,11 @@ func (h *harness) testWorkerStart(t *testing.T) {
 
 		// opencode
 		{name: "opencode/finished-with-agent", launchOptions: `{"agent":"coder"}`, args: append(brief, "--harness", "opencode", "--agent", "coder"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
-		{name: "opencode/effort-becomes-the-prompt", launchOptions: `{"effort":"X"}`, args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK}},
+		{name: "opencode/PE-46/effort-is-not-the-prompt", launchOptions: `{"effort":"X"}`, args: append(brief, "--harness", "opencode", "--effort", "X"), bridge: opencodeBridge, run: bridgeCase{script: opencodeRunOK, exception: pe46WorkerEffort}},
 
 		// validation
-		{name: "usage/no-brief", args: []string{"--harness", "claude"}},
-		{name: "usage/no-harness", args: brief},
+		{name: "usage/no-brief", args: []string{"--harness", "claude"}, run: bridgeCase{exception: pe48UsageLine}},
+		{name: "usage/no-harness", args: brief, run: bridgeCase{exception: pe48UsageLine}},
 		{name: "usage/missing-brief", args: []string{"--brief", "absent.md", "--harness", "claude"}},
 		{name: "usage/brief-not-md", args: []string{"--brief", "b.txt", "--harness", "claude"}, run: bridgeCase{seed: seedProjectFile("b.txt", "x")}},
 		{name: "usage/harness-gemini", args: append(brief, "--harness", "gemini")},
@@ -318,12 +336,13 @@ func (h *harness) testWorkerCrossRuntime(t *testing.T) {
 	}
 }
 
-// testWorkerUnreadPrompt asserts the PE-13 extension: opencode-exec given --effort X takes X as
-// its prompt and never reads stdin, so a 1 MiB prompt meets a closed pipe. orch ignores the
-// EPIPE and finishes the run; the JS dies of the uncaught `Error: write EPIPE`, leaving its
-// lock and its "running" state.
+// testWorkerUnreadPrompt asserts the PE-13 extension: the JS opencode-exec given --effort X
+// takes X as its prompt and never reads stdin, so a prompt larger than a pipe buffer meets a
+// closed pipe, and the JS dies of the uncaught `Error: write EPIPE`, leaving its lock and its
+// "running" state. orch's opencode-exec reads the prompt (PE-46) and finishes the run. The brief
+// stays under Linux's 128 KiB limit on one argument, as opencode gets the prompt as one.
 func (h *harness) testWorkerUnreadPrompt(t *testing.T) {
-	brief := strings.Repeat("x", 1<<20)
+	brief := strings.Repeat("x", 100<<10)
 	opencodeOK := map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n", "exit": "0\n"}
 	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{
 		args:   []string{"--brief", "b.md", "--harness", "opencode", "--effort", "X"},

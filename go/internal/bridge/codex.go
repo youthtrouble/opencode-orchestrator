@@ -267,7 +267,27 @@ func (e *codexEvents) handleEvent(line string) error {
 		}
 		r.errors = append(r.errors, failure)
 		r.ok = false
+	case "error":
+		return e.handleError(ev)
 	}
+	return nil
+}
+
+// handleError collects a top-level {"type":"error","message":...} event, one of codex's
+// `exec --json` events, into errors, so that a usage limit is filed as kind limit with its text
+// (PE-44). It does not decide ok: codex also reports stream retries this way, and the turn may
+// still complete.
+func (e *codexEvents) handleError(ev any) error {
+	message := jsjson.Path(ev, "message")
+	if !jsjson.Truthy(message) {
+		data, err := jsjson.Marshal(ev)
+		if err != nil {
+			return err
+		}
+		message = string(data)
+	}
+	e.result.errors = append(e.result.errors, message)
+	e.log.printf("error: %s", text(message))
 	return nil
 }
 

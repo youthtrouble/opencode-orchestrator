@@ -424,6 +424,31 @@ func TestRunClaudeUsageLimitPath(t *testing.T) {
 	}
 }
 
+// PE-45 over the usage-limit path: a claude that printed its limit message but did not exit is
+// stopped at the cap, and the run is filed as the timeout, with its run record and exit 1, not
+// as a deferred limit (exit 75, no record).
+func TestRunClaudeCapStopAfterALimitMessageIsATimeout(t *testing.T) {
+	sb := newClaudeSandbox(t)
+	limit := `{"type":"result","is_error":true,"result":"You've hit your session limit"}` + "\n"
+	sb.fakeClaude(t, limit, "", `trap 'exit 143' TERM
+while :; do /bin/sleep 0.05; done`)
+	code, stdout, _ := sb.run(t, "--quiet", "--timeout-min", "0.01", "--prompt", "p")
+	if code != 1 {
+		t.Fatalf("exit %d, stdout %s", code, stdout)
+	}
+	result := parseResult(t, stdout)
+	if _, present := result.Get("reason"); present || jsjson.Path(result, "exit_code") != 143.0 {
+		t.Errorf("result %s", stdout)
+	}
+	if _, err := os.Stat(jsjson.Path(result, "record").(string)); err != nil {
+		t.Errorf("no run record: %v", err)
+	}
+	incidents := sb.incidents(t)
+	if !strings.Contains(incidents, `"kind":"timeout","summary":"claude bridge timed out after 0.01 min"`) || strings.Count(incidents, "\n") != 1 {
+		t.Errorf("want one timeout incident:\n%s", incidents)
+	}
+}
+
 // start runs the bridge with a CLI that prints stdout and then sleeps, and returns once orch
 // has logged ready, so the CLI is running and orch's signal handling is in place.
 func (sb bridgeSandbox) start(t *testing.T, stdout, ready string, args ...string) (cmd *exec.Cmd, out *bytes.Buffer, stderr *orchStderr) {

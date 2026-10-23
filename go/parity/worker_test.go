@@ -29,7 +29,12 @@ type workerCase struct {
 	// victims, when set, are the processes the case's stop must interrupt: each runtime's
 	// seed starts its own, and every one must have died of SIGINT once the pair has run.
 	victims *victims
+	// exception asserts a documented difference (invocation.exception).
+	exception func(t *testing.T, js, orch *outcome)
 }
+
+// pe48UsageLine is PE-48: orch's usage line names the opencode harness too.
+var pe48UsageLine = rewriteException("PE-48", "--harness codex|claude|opencode [", "--harness codex|claude [")
 
 // workerStatePid is a stored pid in stop output and state files, and workerLockPid the whole
 // text of a lock, rewritten for the cases whose pid is a victim started per runtime.
@@ -51,6 +56,7 @@ func (h *harness) workerInvocation(c workerCase) invocation {
 		crash:        c.crash,
 		errorLine:    c.errorLine,
 		projectPaths: true,
+		exception:    c.exception,
 	}
 	if c.victims != nil {
 		inv.normalize = normalizeVictimPid
@@ -229,9 +235,9 @@ func (h *harness) testWorker(t *testing.T) {
 		{name: "stop/lane-traversal", args: []string{"stop", "--lane", "../flip"}, seed: seeds(seedProjectFile(".orchestrator/flip.json", `{"lane":"w","status":"running","pid":`+dead+`}`),
 			seedProjectFile(".orchestrator/flip.lock", dead))},
 
-		{name: "usage/no-command", args: nil},
-		{name: "usage/unknown-command", args: []string{"frob", "--lane", "w"}},
-		{name: "usage/start-without-brief", args: []string{"start", "--harness", "claude"}},
+		{name: "usage/no-command", args: nil, exception: pe48UsageLine},
+		{name: "usage/unknown-command", args: []string{"frob", "--lane", "w"}, exception: pe48UsageLine},
+		{name: "usage/start-without-brief", args: []string{"start", "--harness", "claude"}, exception: pe48UsageLine},
 		{name: "usage/cwd-bare", args: []string{"frob", "--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 	}
 	for _, c := range cases {

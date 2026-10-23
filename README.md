@@ -402,7 +402,11 @@ in live testing (probably upstream), so use `ORCH_BIN`. Details and accepted por
 
 - `orch doctor` checks binaries, logins, usage feeds, routing, config, plugin, agents and tests.
 - `orch incident report` groups orchestrator defects (misroutes, bridge crashes, flips, your
-  corrections) recorded locally and redacted. Nothing is uploaded.
+  corrections) recorded locally and redacted. Nothing is uploaded. A bridge run that hit a
+  provider usage limit is kind `limit` with the provider's text; one the bridge stopped at its
+  `--timeout-min` cap is kind `timeout` (`<harness> bridge timed out after <n> min`), not a crash.
+  The opencode bridge stops opencode with SIGINT (cap or a forwarded SIGTERM), because SIGTERM
+  leaves its service session running.
 - `/audit-orchestrator` in opencode re-verifies model ids, limits and CLI flags against official
   sources, updates `models.json` and reruns the tests. `/retro` reviews recent runs.
 - Update: see [Updating](#updating).

@@ -21,6 +21,16 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- bridges (S13j, PE-44, PE-45): a provider error event reaches the run's `errors`, so a ChatGPT
+  usage limit in opencode (or a top-level codex `error`) is a `limit` incident with its text
+  instead of a `crash` with an empty error; a run the bridge stopped at its `--timeout-min` cap
+  is a `timeout` incident (`<harness> bridge timed out after <n> min`) instead of a `crash`.
+- opencode bridge (S13j, PE-46, PE-47): `orch opencode-exec --help` prints help; `--effort X`
+  is accepted and ignored instead of becoming the prompt; a failure incident records the
+  `--model` it ran. `orch worker`'s usage line names `opencode` (PE-48).
+- opencode bridge (S13j, PE-65, D3): opencode is stopped with SIGINT at the cap and when the
+  bridge itself receives SIGTERM, because SIGTERM left its service session running for minutes
+  beside a relaunched conductor. claude and codex keep SIGTERM.
 - worker/supervisor (S13q, PE-62): a worker records its replayable launch options
   (`effort`, `timeout-min`, `agent`, `sandbox`, `permission-mode`, `allowed-tools`, `max-turns`,
   and `root`/`cwd` for a `--root` lane) as `launch_options` in its state, and a budget-deferred

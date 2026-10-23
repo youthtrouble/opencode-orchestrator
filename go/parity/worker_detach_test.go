@@ -87,7 +87,7 @@ func (h *harness) testWorkerDetach(t *testing.T) {
 		// Every "--detach" token is dropped, also --lane's value: the launcher's lane is
 		// "--detach", the runner's --lane takes "--harness" as its value and the runner refuses
 		// the start without a harness, in its log.
-		{name: "detach-as-a-value", run: ok, args: []string{"--brief", "b.md", "--lane", "--detach", "--harness", "claude", "--detach"}, runnerRefuses: true},
+		{name: "detach-as-a-value", run: bridgeCase{fixture: "ok", exception: pe48UsageLine}, args: []string{"--brief", "b.md", "--lane", "--detach", "--harness", "claude", "--detach"}, runnerRefuses: true},
 		// Sol S2/R6: the runner gets the absolute root as its last --cwd, so it works in sub/,
 		// not in sub/sub/, where it would refuse the missing brief after a successful launch.
 		{name: "relative-cwd", launchOptions: `{}`, args: []string{"--brief", "b.md", "--harness", "claude", "--cwd", "sub", "--detach"}, project: "sub",
@@ -124,6 +124,9 @@ func (h *harness) testWorkerDetach(t *testing.T) {
 				js = withInterruptedRun(t, "js", js, jsInterruptedState, jsInterruptedLog, jsInterruptedMail, []string{jsInterruptedIncident}, false)
 				orch = withInterruptedRun(t, "orch", orch, orchInterruptedState, orchInterruptedLog, orchInterruptedMail,
 					[]string{orchBridgeIncident, orchInterruptedIncident}, true)
+			}
+			if c.run.exception != nil {
+				c.run.exception(t, &js, &orch)
 			}
 			compareOutcomes(t, js, orch)
 		})
