@@ -337,23 +337,31 @@ func (h *harness) testWorkerCrossRuntime(t *testing.T) {
 }
 
 // testWorkerUnreadPrompt asserts the PE-13 extension: the JS opencode-exec given --effort X
-// takes X as its prompt and never reads stdin, so a prompt larger than a pipe buffer meets a
-// closed pipe, and the JS dies of the uncaught `Error: write EPIPE`, leaving its lock and its
-// "running" state. orch's opencode-exec reads the prompt (PE-46) and finishes the run. The brief
-// stays under Linux's 128 KiB limit on one argument, as opencode gets the prompt as one.
+// takes X as its prompt and never reads stdin. Its 1 MiB brief exceeds Node's Unix socketpair
+// buffer (assuming Linux's default of about 208 KiB), so the JS dies of the uncaught
+// `Error: write EPIPE`, leaving its lock and "running" state. orch's 100 KiB brief exceeds a
+// 64 KiB pipe buffer but stays under Linux's 128 KiB single-argument limit: opencode-exec
+// reads the prompt (PE-46), passes it to opencode in argv, and finishes the run.
 func (h *harness) testWorkerUnreadPrompt(t *testing.T) {
-	brief := strings.Repeat("x", 100<<10)
+	jsBrief := strings.Repeat("x", 1<<20)
+	orchBrief := strings.Repeat("x", 100<<10)
 	opencodeOK := map[string]string{"jsonl": `{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"pong"}}` + "\n", "exit": "0\n"}
-	js, orch := h.runPair(t, h.workerStartInvocation(t, workerStartCase{
+	c := workerStartCase{
 		args:   []string{"--brief", "b.md", "--harness", "opencode", "--effort", "X"},
 		bridge: opencodeBridge,
 		run:    bridgeCase{script: opencodeOK},
-		brief:  &brief,
-	}))
+		brief:  &jsBrief,
+	}
+	jsInv := h.workerStartInvocation(t, c)
+	c.brief = &orchBrief
+	orchInv := h.workerStartInvocation(t, c)
+	js := h.runSide(t, jsInv, jsInv.js)
+	orch := h.runSide(t, orchInv, orchInv.orch)
 	const lock, state = "project/workers/b.lock", "project/workers/b.json"
 	if _, locked := orch.files[lock]; orch.exitCode != 0 || orch.stderr != "" || locked ||
 		!strings.HasSuffix(orch.stdout, `{"lane":"b","status":"finished","session_id":"ses_1","exit_code":0}`+"\n") ||
-		!strings.Contains(orch.files[state], `"status": "finished"`) {
+		!strings.Contains(orch.files[state], `"status": "finished"`) ||
+		!strings.Contains(orch.files["fakelog/opencode-argv.txt"], orchBrief) {
 		t.Errorf("orch: exit %d, stdout %q, stderr %q, lock left %v, state:\n%s", orch.exitCode, orch.stdout, orch.stderr, locked, orch.files[state])
 	}
 	if _, locked := js.files[lock]; js.exitCode != 1 || !strings.Contains(js.stderr, "Error: write EPIPE") || !locked ||

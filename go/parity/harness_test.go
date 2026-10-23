@@ -224,40 +224,43 @@ func (h *harness) comparePair(t *testing.T, inv invocation) {
 // names its commands as orch does (PE-19) before either is normalized.
 func (h *harness) runPair(t *testing.T, inv invocation) (js, orch outcome) {
 	t.Helper()
-	run := func(argv []string) outcome {
-		sb := h.newSandbox(t)
-		if inv.seed != nil {
-			inv.seed(t, sb)
-		}
-		before := map[string]string{}
-		if inv.normalizeWrites != nil {
-			collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
-			collectExtraFiles(t, sb, inv, before)
-		}
-		runner := h.run
-		if inv.daemon {
-			runner = h.runDaemon
-		}
-		o := runner(t, sb, argv, inv.stdin, inv.env)
-		if strings.Contains(inv.errorLine, "$PROJECT") {
-			canonicalProject, err := filepath.EvalSymlinks(sb.project)
-			if err != nil {
-				t.Fatal(err)
-			}
-			o.stderr = strings.ReplaceAll(o.stderr, canonicalProject, "$PROJECT")
-			o.stderr = strings.ReplaceAll(o.stderr, sb.project, "$PROJECT")
-		}
-		collectExtraFiles(t, sb, inv, o.files)
-		if inv.projectPaths {
-			o = o.withProjectPlaceholder(t, sb)
-		}
-		o = h.withPE19(t, argv, o, inv.jsHelp)
-		if inv.normalizeWrites != nil {
-			o = inv.normalizeWrites(o, before)
-		}
-		return o.normalized(inv.normalize)
+	return h.runSide(t, inv, inv.js), h.runSide(t, inv, inv.orch)
+}
+
+// runSide runs one runtime in a fresh sandbox with the invocation's normalizers.
+func (h *harness) runSide(t *testing.T, inv invocation, argv []string) outcome {
+	t.Helper()
+	sb := h.newSandbox(t)
+	if inv.seed != nil {
+		inv.seed(t, sb)
 	}
-	return run(inv.js), run(inv.orch)
+	before := map[string]string{}
+	if inv.normalizeWrites != nil {
+		collectFiles(t, filepath.Join(sb.project, ".orchestrator"), "project", before)
+		collectExtraFiles(t, sb, inv, before)
+	}
+	runner := h.run
+	if inv.daemon {
+		runner = h.runDaemon
+	}
+	o := runner(t, sb, argv, inv.stdin, inv.env)
+	if strings.Contains(inv.errorLine, "$PROJECT") {
+		canonicalProject, err := filepath.EvalSymlinks(sb.project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		o.stderr = strings.ReplaceAll(o.stderr, canonicalProject, "$PROJECT")
+		o.stderr = strings.ReplaceAll(o.stderr, sb.project, "$PROJECT")
+	}
+	collectExtraFiles(t, sb, inv, o.files)
+	if inv.projectPaths {
+		o = o.withProjectPlaceholder(t, sb)
+	}
+	o = h.withPE19(t, argv, o, inv.jsHelp)
+	if inv.normalizeWrites != nil {
+		o = inv.normalizeWrites(o, before)
+	}
+	return o.normalized(inv.normalize)
 }
 
 // withPE19 applies PE-19 to the outcome of argv: a JS outcome names its commands as orch does
