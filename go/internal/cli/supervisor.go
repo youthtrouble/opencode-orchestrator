@@ -19,8 +19,8 @@ var supervisorValueKeys = []string{"cwd", "event", "by"}
 
 // Supervisor implements `orch supervisor status|stop|ack` (bin/supervisor.mjs), byte-identical
 // to the JS except for the parity exceptions in go/README.md (hand-edited non-object shapes,
-// PE-16; a serve that outlives a missing opencode, PE-17). As in the JS, an unknown command
-// prints nothing and exits 0.
+// PE-16; a serve that outlives a missing opencode, PE-17). An unknown command is the usage
+// error, as no command is (PE-49; the JS prints nothing and exits 0).
 func Supervisor(args []string, stdio Stdio) int {
 	opts, positional := cliargs.ParseArgs(decodeArgv(args), supervisorValueKeys, nil)
 	root, err := projectRoot(opts) // before any command, as the JS resolves it at the top
@@ -47,17 +47,17 @@ func Supervisor(args []string, stdio Stdio) int {
 			return crash(stdio, err)
 		}
 		fmt.Fprintln(stdio.Out, line)
+		return 0
 	case "ack":
 		return supervisorAck(project, opts, stdio)
 	case "start":
 		return supervisorStart(project, stdio)
 	case "serve":
 		return supervisorServe(project, stdio)
-	case "":
+	default:
 		fmt.Fprintln(stdio.Err, "commands: start | serve | status | stop | ack --event ID")
 		return 2
 	}
-	return 0
 }
 
 func supervisorAck(project supervisor.Project, opts cliargs.Opts, stdio Stdio) int {

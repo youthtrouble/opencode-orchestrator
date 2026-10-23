@@ -340,7 +340,9 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 	caches := newFlipCaches(t)
 	cases := []serveCase{
 		{name: "no-workers"},
-		{name: "no-workers-realistic-state", seed: seedSupervisorState(realisticSupervisorState)},
+		// The seeded lanes keep falsy worker files, which both runtimes skip: a lane whose file
+		// is gone loses its entry in orch (PE-52, hand-edited/PE-52-vanished-lane).
+		{name: "realistic-state-falsy-workers", seed: seeds(seedSupervisorState(realisticSupervisorState), seedWorkerState("a", `0`), seedWorkerState("1", `0`))},
 		{name: "stale-lock", seed: seedProjectFile(".orchestrator/supervisor.lock", "999999999\n")},
 		{name: "stopped-state-restart", seed: seedSupervisorState(`{"status":"stopped","stopped_at":"2026-10-18T09:00:00.123Z","storage_error":"EACCES","storage_failures":4}`)},
 		{name: "lane/finished-command-0", seed: seeds(finishedLane("a"), command(0))},
@@ -351,7 +353,6 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "lane/unknown-status", seed: seeds(seedWorkerState("e", `{"status": "weird", "run_id": "re"}`), command(0))},
 		{name: "lane/stale-lock", seed: seeds(seedWorkerState("f", `{"status": "finished", "run_id": "rf", "pid": 999999999}`), seedHeldLock(workerLockPath("f")), command(0))},
 		{name: "lane/process-exited", seed: seeds(seedWorkerState("g", `{"status": "running", "run_id": "rg", "pid": 999999999}`), command(0))},
-		{name: "lane/primitive-file", seed: seeds(seedWorkerState("h", `5`), command(0))},
 		{name: "lane/primitive-lanes", seed: seeds(finishedLane("a"), seedSupervisorState(`{"lanes": 5}`), command(0))},
 		{name: "event/acked", seed: seeds(finishedLane("a"), command(0), seedAcks(`{"run-a:finished": {"by": "x", "at": "2026-01-01T00:00:00.000Z"}}`))},
 		{name: "event/retry-past", seed: seeds(finishedLane("a"), command(0), seedSupervisorState(`{"events": {"run-a:finished": {"status": "delivery_failed", "reason": "finished", "lane": "a", "created_at": "2026-10-19T10:00:00.000Z", "retry_after": 1}}}`))},
@@ -410,7 +411,6 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 		{name: "running/not-quiet-check-due", seed: seeds(runningLane("standard", progressAgo(5)), command(0), seedSupervisorState(`{"lanes": {"a": {"run": "run-a", "next_check": 1}}}`))},
 		{name: "running/not-quiet-check-not-due", seed: seeds(runningLane("standard", progressAgo(5)), command(0))},
 		{name: "running/quiet-already-delivered", seed: seeds(runningLane("broad", progressAgo(60)), command(0), seedSupervisorState(`{"events": {"run-a:check:1": {"status": "queued", "reason": "check", "lane": "a", "created_at": "2999-01-01T00:00:00.000Z"}}}`))},
-		{name: "config/null-deferred-lane", seed: seeds(seedSupervisorConfig(`null`), seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`))},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -461,6 +461,10 @@ func (h *harness) testSupervisorServe(t *testing.T) {
 	t.Run("PE-16-null-acks", func(t *testing.T) {
 		t.Parallel()
 		h.testServeNullAcks(t)
+	})
+	t.Run("hand-edited", func(t *testing.T) {
+		t.Parallel()
+		h.testServeHandEditedState(t)
 	})
 	t.Run("PE-17-no-opencode", func(t *testing.T) {
 		t.Parallel()
@@ -680,6 +684,42 @@ func (h *harness) testServeNullAcks(t *testing.T) {
 	}
 	if js.exitCode != 0 || orch.exitCode != 0 {
 		t.Errorf("exit js %d, orch %d", js.exitCode, orch.exitCode)
+	}
+}
+
+// testServeHandEditedState asserts PE-50..52: a tick over hand-edited or vanished state throws
+// in the JS, which records only that storage_error (or keeps a stale lane entry), pinned
+// here; orch completes the tick as described.
+func (h *harness) testServeHandEditedState(t *testing.T) {
+	const state = "project/supervisor-state.json"
+	for _, c := range []struct {
+		name      string
+		seed      seed
+		jsPinned  string // in the JS state
+		orchWants string // in orch's state
+		orchLacks string // never in orch's state
+	}{
+		{"PE-50-null-config-deferred-lane", seeds(seedSupervisorConfig(`null`), seedProjectDir(".orchestrator/logs"), seedWorkerState("d", `{"status": "deferred", "run_id": "rd", "resume_after": "2999-01-01T00:00:00.000Z"}`)),
+			`"storage_error": "TypeError: Cannot read properties of null (reading 'auto_redispatch_deferred')"`, `"config_error": "supervisor.json is not an object; read as {}"`, "storage_error"},
+		{"PE-51-primitive-worker-file", seeds(seedWorkerState("h", `5`), finishedLane("a"), seedWake("["+commandChannel(0)+"]")),
+			`"storage_error": "TypeError: Cannot create property 'lane' on number '5'"`, `"error": "worker file is not an object; lane skipped"`, "storage_error"},
+		{"PE-52-null-event", seedSupervisorState(`{"events": {"x": null}}`),
+			`"storage_error": "TypeError: Cannot read properties of null (reading 'created_at')"`, `"events": {}`, "storage_error"},
+		{"PE-52-vanished-lane", seedSupervisorState(`{"lanes": {"gone": {"run": "r"}}}`),
+			`"gone": {`, `"lanes": {}`, `"gone"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			js, orch := h.runPair(t, h.serveInvocation(serveCase{seed: c.seed}))
+			if !strings.Contains(js.files[state], c.jsPinned) {
+				t.Errorf("js state %s, want the pinned %s", js.files[state], c.jsPinned)
+			}
+			if !strings.Contains(orch.files[state], c.orchWants) || strings.Contains(orch.files[state], c.orchLacks) {
+				t.Errorf("orch state %s, want %s and no %s", orch.files[state], c.orchWants, c.orchLacks)
+			}
+			if js.exitCode != 0 || orch.exitCode != 0 {
+				t.Errorf("exit js %d, orch %d", js.exitCode, orch.exitCode)
+			}
+		})
 	}
 }
 

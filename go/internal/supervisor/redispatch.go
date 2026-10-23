@@ -18,16 +18,13 @@ const redispatchGraceMs = 60_000
 const noteBodyUnits = 500
 
 // redispatchDue is the JS condition for re-dispatching a budget-deferred lane: deferred,
-// not opted out (`config.auto_redispatch_deferred !== false`; a null config throws there), a
+// not opted out (`config.auto_redispatch_deferred !== false`), a
 // resume_after whose Date.parse plus a minute has passed (the clock is read again), and not
 // re-dispatched before. The conductor lane is never re-dispatched here (PE-60): evaluateFlip
 // owns every conductor launch, behind its gate, pause and launch-time gate recheck.
 func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker *jsjson.Object, state *jsjson.Object, t *tick) (bool, error) {
 	if obs.Phase != "deferred" {
 		return false, nil
-	}
-	if config == nil {
-		return false, jsjson.CannotReadOfNull("auto_redispatch_deferred")
 	}
 	if jsjson.Path(config, "auto_redispatch_deferred") == false {
 		return false, nil

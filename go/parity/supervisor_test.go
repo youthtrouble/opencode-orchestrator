@@ -86,7 +86,6 @@ func (h *harness) testSupervisor(t *testing.T) {
 	ack := func(extra ...string) []string { return append([]string{"ack"}, extra...) }
 	cases := []supervisorCase{
 		{name: "usage/no-command"},
-		{name: "usage/unknown-command", args: []string{"foo"}},
 		{name: "usage/cwd-bare", args: []string{"--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 		{name: "usage/cwd-bare-with-command", args: []string{"status", "--cwd"}, crash: crashC1, errorLine: cwdBoolean},
 		{name: "usage/cwd-relative", args: []string{"status", "--cwd", "sub"}, seed: seedProjectFile("sub/.orchestrator/supervisor-state.json", `{"status":"sub"}`)},
@@ -136,6 +135,7 @@ func (h *harness) testSupervisor(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) { h.compareOutsideProject(t, h.supervisorInvocation(c), "--cwd") })
 	}
+	t.Run("usage/PE-49-unknown-command", h.testSupervisorUnknownCommand)
 	t.Run("ack/PE-21-acks-directory", h.testSupervisorAckAcksDirectory)
 	t.Run("ack/PE-16-string-events", h.testSupervisorAckStringEvents)
 	t.Run("ack/PE-16-array-acks", h.testSupervisorAckArrayAcks)
@@ -197,6 +197,19 @@ func (h *harness) testSupervisorAckAcksDirectory(t *testing.T) {
 	}
 	js.stderr, orch.stderr = "", ""
 	compareOutcomes(t, js, orch)
+}
+
+// testSupervisorUnknownCommand asserts PE-49: the JS prints nothing and exits 0 for an unknown
+// command (pinned); orch prints the usage line and exits 2. Neither writes anything.
+func (h *harness) testSupervisorUnknownCommand(t *testing.T) {
+	js, orch := h.runPair(t, h.supervisorInvocation(supervisorCase{args: []string{"foo"}}))
+	if js.exitCode != 0 || js.stdout != "" || js.stderr != "" {
+		t.Errorf("js: exit %d, stdout %q, stderr %q; want the pinned silent exit 0", js.exitCode, js.stdout, js.stderr)
+	}
+	if orch.exitCode != 2 || orch.stdout != "" || orch.stderr != "commands: start | serve | status | stop | ack --event ID\n" {
+		t.Errorf("orch: exit %d, stdout %q, stderr %q; want the usage line, exit 2", orch.exitCode, orch.stdout, orch.stderr)
+	}
+	compareOutcomes(t, outcome{exitCode: 2, stderr: orch.stderr, files: js.files}, orch)
 }
 
 // testSupervisorAckStringEvents asserts PE-16(4): with events "ab", the JS acknowledges

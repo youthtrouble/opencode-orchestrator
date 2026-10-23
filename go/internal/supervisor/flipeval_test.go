@@ -157,21 +157,6 @@ func TestFlipActiveDoor(t *testing.T) {
 	}
 }
 
-func TestFlipActiveDoorReadsANullConfigOnlyWhenNeeded(t *testing.T) {
-	f := newFixture(t)
-	f.write("flip.json", `{}`)
-	state, err := f.evaluate(`{}`, `null`)
-	wantError(t, err, "Cannot read properties of null (reading 'home')")
-	wantJSON(t, compact(t, state), `{"last_flip_check":1800000000}`)
-
-	f = newFixture(t)
-	f.write("flip.json", `{"to": "claude"}`)
-	f.decides("")
-	if _, err := f.evaluate(`{}`, `null`); err != nil {
-		t.Fatalf("flip.to set: config.home is not read, got %v", err)
-	}
-}
-
 func TestFlipAwaitingHumanIsLoggedOnceAndRearmedWhenCleared(t *testing.T) {
 	f := newFixture(t)
 	f.mkdir("logs")

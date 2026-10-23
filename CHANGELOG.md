@@ -48,6 +48,11 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   a deferred conductor respects gates and pauses), and retries, pending launches included, belong
   to the conductor slot, so they survive `flip run` clearing the pause or pending launch.
 
+- supervisor (S13k, L15/L17/L18/L22/L23, PE-49..52): an unknown `orch supervisor` command is a
+  usage error (exit 2); a non-object `supervisor.json` reads as `{}` with a `config_error` note in
+  the state; a primitive worker file skips only its lane, noted in its lane entry; lane entries of
+  vanished workers are removed and `null` events dropped, so hand-edited state no longer stops
+  every tick.
 - flip (S13d, sol-5 R4, PE-32): serialize all flip state writers on the separate
   `flip.json.lock`. Corrupt or unreadable state gates decisions, blocks supervisor relaunch,
   and refuses writes with the file untouched; reply gate clearing reports failure and remote

@@ -101,7 +101,7 @@ func (s *Supervisor) mailboxPath() string {
 }
 
 // activeDoor is the door of a live, unfinished conductor lane, else `flip?.to || (config.home
-// || "opencode")` (config.home throws for a null config only when it is read).
+// || "opencode")`.
 func (s *Supervisor) activeDoor(c conductorView, config any) (any, error) {
 	status := jsjson.Path(c.lane, "status")
 	if jsjson.Truthy(c.lane) && !isOneOf(status, "finished", "failed", "interrupted", "deferred") && s.Alive(jsjson.Path(c.lane, "pid")) {
@@ -109,9 +109,6 @@ func (s *Supervisor) activeDoor(c conductorView, config any) (any, error) {
 	}
 	if to := jsjson.Path(c.flip, "to"); jsjson.Truthy(to) {
 		return to, nil
-	}
-	if config == nil {
-		return nil, jsjson.CannotReadOfNull("home")
 	}
 	if home := jsjson.Path(config, "home"); jsjson.Truthy(home) {
 		return home, nil

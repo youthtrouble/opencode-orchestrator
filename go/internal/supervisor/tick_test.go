@@ -421,17 +421,6 @@ func TestRedispatchOfADeferredLane(t *testing.T) {
 			t.Fatalf("tick did not continue: %s", compact(t, state))
 		}
 	})
-	t.Run("a null config throws at the deferred lane only", func(t *testing.T) {
-		f := newFixture(t)
-		f.write("supervisor.json", `null`)
-		f.worker("a", `"status": "paused"`)
-		f.worker("b1", deferred)
-		state, err := f.tick(`{}`)
-		wantError(t, err, "Cannot read properties of null (reading 'auto_redispatch_deferred')")
-		if jsjson.Path(state, "lanes", "b1", "phase") != "deferred" {
-			t.Errorf("lane entry not set before the throw: %s", compact(t, state))
-		}
-	})
 }
 
 func compactFile(t *testing.T, text string) string {
@@ -470,19 +459,6 @@ func TestTickThrowSites(t *testing.T) {
 			t.Errorf("state = %s", compact(t, state))
 		}
 	})
-	t.Run("a primitive worker file aborts the tick", func(t *testing.T) {
-		f := newFixture(t)
-		f.write("workers/a.json", `7`)
-		f.worker("b", `"status": "finished"`)
-		state, err := f.tick(`{"events": "ab"}`)
-		wantError(t, err, "Cannot create property 'lane' on number '7'")
-		if nodefs.ErrorCode(err) != "TypeError: Cannot create property 'lane' on number '7'" {
-			t.Errorf("storage_error = %s", nodefs.ErrorCode(err))
-		}
-		if got := compact(t, state); got != `{"events":{"0":"a","1":"b"},"lanes":{}}` {
-			t.Errorf("state = %s", got)
-		}
-	})
 	t.Run("a primitive lanes throws at the assignment", func(t *testing.T) {
 		f := newFixture(t)
 		f.worker("b", `"status": "running"`)
@@ -496,16 +472,6 @@ func TestTickThrowSites(t *testing.T) {
 		_, err := f.tick(`{"lanes": {"b": {"run": "run-b", "next_check": "abc"}}}`)
 		if nodefs.ErrorCode(err) != "RangeError: Invalid time value" {
 			t.Errorf("error = %v", err)
-		}
-	})
-	t.Run("a null config throws at the wake of an event", func(t *testing.T) {
-		f := newFixture(t)
-		f.write("supervisor.json", `null`)
-		f.worker("b", `"status": "finished"`)
-		state, err := f.tick(`{}`)
-		wantError(t, err, "Cannot read properties of null (reading 'wake')")
-		if jsjson.Path(state, "events", "run-b:finished", "status") != "cli_invoked" {
-			t.Errorf("state = %s", compact(t, state))
 		}
 	})
 	t.Run("a null channel", func(t *testing.T) {
@@ -522,14 +488,6 @@ func TestTickThrowSites(t *testing.T) {
 		_, err := f.tick(`{}`)
 		if got := nodefs.ErrorCode(err); !strings.HasPrefix(got, "TypeError: ") {
 			t.Errorf("storage_error = %q, want a TypeError", got)
-		}
-	})
-	t.Run("a null event entry throws in pruneEvents", func(t *testing.T) {
-		f := newFixture(t)
-		state, err := f.tick(`{"events": {"x": null}}`)
-		wantError(t, err, "Cannot read properties of null (reading 'created_at')")
-		if got := compact(t, state); got != `{"events":{"x":null}}` {
-			t.Errorf("state = %s", got)
 		}
 	})
 	t.Run("a workers path that is a file: scandir ENOTDIR", func(t *testing.T) {
@@ -568,15 +526,6 @@ func TestTickShapes(t *testing.T) {
 		state := f.mustTick(`{}`)
 		if jsjson.Path(state, "lanes", "b", "breadth") != "standard" || jsjson.Path(state, "lanes", "b", "next_check") != float64(t0+300) {
 			t.Errorf("lane = %s", compact(t, jsjson.Path(state, "lanes", "b")))
-		}
-	})
-	t.Run("a falsy worker file is skipped; lanes of vanished workers stay", func(t *testing.T) {
-		f := newFixture(t)
-		f.write("workers/a.json", `0`)
-		f.write("workers/c.json", `not json`)
-		state := f.mustTick(`{"lanes": {"gone": {"run": "r"}}}`)
-		if got := compact(t, jsjson.Path(state, "lanes")); got != `{"gone":{"run":"r"}}` {
-			t.Errorf("lanes = %s", got)
 		}
 	})
 	t.Run("a hand-edited next_check is passed through", func(t *testing.T) {
@@ -622,6 +571,7 @@ func TestTickLaneNamedProtoUsesThePrototypeSetter(t *testing.T) {
 	f := newFixture(t)
 	f.mkdir("logs")
 	f.write("workers/__proto__.json", `{"run_id": "r", "status": "finished"}`)
+	f.write("workers/a.json", `0`) // a lane with a file keeps its entry (PE-52)
 	state := f.mustTick(`{"lanes": {"a": 1}}`)
 	wantJSON(t, compact(t, jsjson.Path(state, "lanes")), `{"a":1}`)
 
@@ -658,4 +608,66 @@ func TestTickKeepsANonStringRunIDAsItsJSValue(t *testing.T) {
 			t.Errorf("recorded %s: next_check %v, want %v", c.recorded, next, c.wantNext)
 		}
 	}
+}
+
+// The tick survives hand-edited or vanished state (S13k): each case threw or kept stale
+// entries in the frozen JS.
+func TestTickSurvivesHandEditedState(t *testing.T) {
+	for _, config := range []string{`null`, `5`, `"x"`, `true`} {
+		t.Run("PE-50: a non-object config "+config+" reads as {} with a note", func(t *testing.T) {
+			f := newFixture(t)
+			f.mkdir("logs")
+			f.write("supervisor.json", config)
+			f.write("flip.json", `{}`) // the flip evaluation reads config.home
+			f.worker("b", `"status": "finished"`)
+			f.worker("d", `"status": "deferred", "resume_after": "2020-01-01T00:00:00.000Z"`)
+			state := f.mustTick(`{}`)
+			if got := jsjson.Path(state, "config_error"); got != configNotObject {
+				t.Errorf("config_error = %v", got)
+			}
+			if jsjson.Path(state, "events", "run-b:finished", "status") != "queued" || jsjson.Path(state, "checked_at") != iso(0) {
+				t.Errorf("state = %s", compact(t, state))
+			}
+			if len(f.runs) != 2 || !strings.Contains(strings.Join(f.runs[0].Args, " "), "--lane d") ||
+				strings.Join(f.runs[1].Args, " ") != "flip decide --active opencode --cwd "+f.root {
+				t.Errorf("runs = %+v, want the deferred lane re-dispatched, then decide from the default home", f.runs)
+			}
+		})
+	}
+	t.Run("PE-50: an object config clears the note", func(t *testing.T) {
+		f := newFixture(t)
+		state := f.mustTick(`{"config_error": "old"}`)
+		if _, present := state.Get("config_error"); present {
+			t.Errorf("state = %s", compact(t, state))
+		}
+	})
+	t.Run("PE-51: a primitive worker file skips its lane only, recorded in the lane entry", func(t *testing.T) {
+		f := newFixture(t)
+		f.mkdir("logs")
+		f.write("workers/a.json", `7`)
+		f.worker("b", `"status": "finished"`)
+		state := f.mustTick(`{}`)
+		if got := compact(t, jsjson.Path(state, "lanes", "a")); got != `{"error":"`+workerNotObject+`","checked_at":"`+iso(0)+`"}` {
+			t.Errorf("lane a = %s", got)
+		}
+		if jsjson.Path(state, "lanes", "b", "phase") != "finished" || jsjson.Path(state, "events", "run-b:finished", "status") != "queued" {
+			t.Errorf("state = %s", compact(t, state))
+		}
+	})
+	t.Run("PE-52: a null event is dropped while pruning", func(t *testing.T) {
+		f := newFixture(t)
+		state := f.mustTick(`{"events": {"x": null, "y": {"created_at": "` + iso(0) + `"}}}`)
+		if got := compact(t, jsjson.Path(state, "events")); got != `{"y":{"created_at":"`+iso(0)+`"}}` {
+			t.Errorf("events = %s", got)
+		}
+	})
+	t.Run("PE-52: lane entries of vanished workers are removed; falsy files keep theirs", func(t *testing.T) {
+		f := newFixture(t)
+		f.write("workers/a.json", `0`)
+		f.write("workers/c.json", `not json`)
+		state := f.mustTick(`{"lanes": {"gone": {"run": "r"}, "a": {"run": "ra"}, "c": {"run": "rc"}}}`)
+		if got := compact(t, jsjson.Path(state, "lanes")); got != `{"a":{"run":"ra"},"c":{"run":"rc"}}` {
+			t.Errorf("lanes = %s", got)
+		}
+	})
 }

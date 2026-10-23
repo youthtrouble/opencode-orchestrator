@@ -31,7 +31,7 @@ func TestSupervisorDispatch(t *testing.T) {
 		stdout, stderr string
 	}{
 		{"no command is the usage line", nil, false, 2, "", "commands: start | serve | status | stop | ack --event ID\n"},
-		{"an unknown command prints nothing", []string{"foo"}, false, 0, "", ""},
+		{"PE-49: an unknown command is the usage line", []string{"foo"}, false, 2, "", "commands: start | serve | status | stop | ack --event ID\n"},
 		{"status of a fresh project", []string{"status"}, true, 0, "{\n  \"status\": \"not_started\"\n}\n", ""},
 		{"ack without an event", []string{"ack"}, true, 1, "", "unknown event id\n"},
 		{"status outside a project", []string{"status"}, false, 2, "", notAProject},
