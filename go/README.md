@@ -1,8 +1,8 @@
 # orch: Go runtime of the orchestrator
 
-`orch` is the only runtime in **0.6.0 (unreleased)**: one Go binary, installed by `install.sh`
-(see [Install](#install)), that runs every plugin tool and hook. The JS runtime, libraries and
-their tests are removed. The last JS release is
+`orch` is the only runtime since [v0.6.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.6.0)
+(2026-10-23): one Go binary, installed by `install.sh` (see [Install](#install)), that runs every
+plugin tool and hook. The JS runtime, libraries and their tests are removed. The last JS release is
 [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0) (2026-10-19);
 the parity oracle is the later pre-S12 commit `9e3a456`, pinned in `go/parity/js-ref`.
 
@@ -320,10 +320,10 @@ need `ORCH_BIN=<path>`. Uninstall moves a recorded `orch` into its archive; see
 [orchestrator/README.md](../orchestrator/README.md#install-update-uninstall-and-recovery) for
 uninstall, upgrading from 0.4.x and recovery.
 
-Without a checkout, the last published release (not this unreleased checkout):
+Without a checkout, the last published release:
 
 ```sh
-go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
+go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.6.0
 ```
 
 The module lives in `go/`, so its tags are named `go/vX.Y.Z`, but `go install` takes the bare
@@ -391,21 +391,27 @@ The former JS-vs-Go plugin differential is deleted; the command parity harness r
 
 ## Release checklist (maintainer, human-gated)
 
-Tagging and publishing are a human gate: no agent runs these steps.
+Tagging and publishing are a human gate: an agent runs these steps only under the owner's
+explicit authorization for that release (0.6.0 was published that way).
 
-For 0.6.0, complete the human cutover and live smoke before release; deferred release-blocking
-findings must be closed by cross-vendor review. Keep `## 0.6.0 — unreleased` until publishing.
-The steps below use `X.Y.Z = 0.6.0` (0.5.0 was released this way on 2026-10-19).
+Before releasing, close every release-blocking finding by cross-vendor review and complete any
+human cutover and live smoke the release needs. While `X.Y.Z` is in development its
+`../CHANGELOG.md` heading is `## X.Y.Z — unreleased`; it is dated only at publication. 0.5.0
+(2026-10-19) and 0.6.0 (2026-10-23) were released with these steps.
 
 1. Bump `internal/version/VERSION` to `X.Y.Z`.
-2. Date the release heading in `../CHANGELOG.md` (`## X.Y.Z — <YYYY-MM-DD>`).
+2. Date the release heading (`## X.Y.Z — <YYYY-MM-DD>`, the owner's local date of the tag push),
+   either in the release commit (0.5.0) or in a docs commit right after publishing (0.6.0),
+   together with the current-release lines and `go install …@vX.Y.Z` examples in both READMEs.
 3. On a clean tree, run `./scripts/build-all.sh`: it writes the four `dist/orch_X.Y.Z_*` assets
    (darwin and linux, arm64 and amd64) and `dist/checksums.txt`.
 4. Tag the commit `vX.Y.Z` (the installer's download path) and `go/vX.Y.Z` (the Go module tag,
    since the module lives in `go/`).
-5. Publish a GitHub release for `vX.Y.Z` with the four `orch_X.Y.Z_*` assets and `checksums.txt`.
-   The installer fetches
+5. Publish a GitHub release for `vX.Y.Z` with the four `orch_X.Y.Z_*` assets and `checksums.txt`,
+   and the `X.Y.Z` CHANGELOG section (without its heading) as the notes. The installer fetches
    `https://github.com/youthtrouble/opencode-orchestrator/releases/download/vX.Y.Z/<asset>`.
+   With `gh release create`, pass `--verify-tag`: without it, a tag missing on origin is created
+   from the default branch.
 6. In a throwaway HOME with no `go` on `PATH`, check that `./install.sh` downloads `orch`, verifies
    its checksum and places it; then check that
    `go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@vX.Y.Z` works (the bare

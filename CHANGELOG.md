@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 — unreleased
+## 0.6.0 — 2026-10-23
 
 One runtime: `orch`. This release removes the JS runtime and switches the plugin, generated
 commands, prompts and installer health check to the Go binary. The parity harness retains the

@@ -6,10 +6,10 @@ it, and a cheap model runs the real checks. It spends two subscriptions you alre
 Claude plan (through Claude Code) and a ChatGPT plan (through Codex), and watches both usage
 windows so work keeps moving when one of them runs low.
 
-Current release: [v0.5.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.5.0)
-(2026-10-19). MIT licensed.
+Current release: [v0.6.0](https://github.com/youthtrouble/opencode-orchestrator/releases/tag/v0.6.0)
+(2026-10-23). MIT licensed.
 
-This checkout targets **0.6.0 (unreleased)**: `orch` is the only runtime; the JS runtime is removed.
+Since 0.6.0, `orch` is the only runtime; the JS runtime is removed.
 
 ## Why it exists
 
@@ -411,14 +411,14 @@ the incident log live in `~/.local/state/opencode/orchestrator/`.
 [go/README.md](go/README.md#crash-output-and-parity-exceptions) (among them owner-only state files,
 bounded child output and process groups). `./install.sh` builds it (or downloads the release
 asset and checks its sha256) into `~/.local/bin`; `--skip-binary` requires an existing usable
-`orch`. Without a checkout, the last published release is still 0.5.0 (not this checkout):
+`orch`. Without a checkout, install the last published release:
 
 ```sh
-go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.5.0
+go install github.com/youthtrouble/opencode-orchestrator/go/cmd/orch@v0.6.0
 ```
 
 That puts `orch` in `$(go env GOBIN)` or `~/go/bin`; put it on `PATH` or point the plugin at it with
-`ORCH_BIN`. To use 0.6.0 before it is released, build from this checkout (see [Updating](#updating)).
+`ORCH_BIN`. To run changes newer than the release, build from this checkout (see [Updating](#updating)).
 
 ### Plugin runtime
 
@@ -597,7 +597,7 @@ reads are under 0.1% for 10 projects. Notification emails are capped at 20 a day
 
 **Set it up.** You need a Cloudflare account with your domain on it, Node 26 (`npm ci` in `remote/worker` installs
 the pinned `wrangler`), and an `orch` that has `orch remote`
-(a release after v0.5.0, or built from `main`). One deployment serves one Mac: a second Mac on it can take the
+(v0.6.0 or later, or built from `main`). One deployment serves one Mac: a second Mac on it can take the
 first Mac's answers, reject them as an unknown project, and so lose them
 ([Before you start](remote/README.md#before-you-start)). Then, in order, following [remote/README.md](remote/README.md):
 
