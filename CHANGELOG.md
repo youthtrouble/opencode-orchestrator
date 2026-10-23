@@ -115,6 +115,8 @@ and not needed. No existing PE was renumbered; PE-23 and PE-37 were amended in p
 - doctor (S13l, S12c F1/F2): recognize hard-linked executables on PATH and share `LookPath`
   for toolchain discovery instead of maintaining a second predicate.
 - tests: split PE-13 worker briefs (JS 1 MiB, orch 100 KiB) for default Unix socket buffers and assert orch passes the whole brief to opencode; no runtime change.
+- tests (S13t): worker signal fixtures synchronize on FIFO event gates instead of sleep polling;
+  cleanup releases every gate and waits for the run on any outcome. No runtime change.
 - bridges (S13j, PE-44, PE-45): a provider error event reaches the run's `errors`, so a ChatGPT
   usage limit in opencode (or a top-level codex `error`) is a `limit` incident with its text
   instead of a `crash` with an empty error; a run the bridge stopped at its `--timeout-min` cap

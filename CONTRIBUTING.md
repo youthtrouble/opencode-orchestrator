@@ -27,9 +27,8 @@ GORACE=atexit_sleep_ms=0 go test -race -count=50 -timeout=12m ./internal/ownlock
 ```
 
 This keeps race instrumentation enabled but removes the race runtime's per-helper exit delay.
-Use pipe handshakes or injected contention barriers for new concurrency tests, not sleeps or
-polling as synchronization. Existing worker signal-fixture polling is a documented acceptance
-limitation, not proof that every test meets that rule. Doctor parity repetition uses only
+Use pipe handshakes or injected contention barriers for concurrency tests, not sleeps or
+polling as synchronization. Doctor parity repetition uses only
 `./parity/run.sh --only doctor` with fakes, never the live `orch doctor`.
 
 Match local formatting. Prettier can format Markdown/JavaScript (including the installer's embedded
