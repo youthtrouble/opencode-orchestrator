@@ -1273,16 +1273,22 @@ The other documented differences, each asserted by its own parity case:
   stops the child too, where the JS orphans it. No current caller needs the terminal; kickoff's
   interactive conductor and its inherited self-exec keep orch's group. Asserted by
   `internal/procs`, `internal/usage` and `internal/bridge` unit tests.
-- PE-23: `orch worker stop` signals only the runner that holds the lane: the kernel must report
+- PE-23: before `orch worker stop` signals, the kernel must report
   a record lock on `<lane>.lock` (`F_GETLK`) whose holder is the state's `pid` (PE-14 still
   applies to that pid). A running worker holds the lock for its whole run, and the kernel drops
   it when the runner exits, SIGKILL and host crashes included, so a finished state, a killed
   runner whose lock file and `running` state remain, a lock file naming the pid as text only, or
   a lock held by another process prints `{"lane":…,"stopped":false,"reason":"no live worker"}`,
-  and a reused pid is never signalled. A lock that cannot be probed holds no pid. The JS signals
-  any live pid in the state. Extends PE-14. Residual: the microseconds between the probe and the
-  `kill`, in which the runner can exit and its pid be reused (pidfd is Linux-only; macOS has no
-  equivalent). The runner owns the lane, not its bridge's process group (contract C6): a runner
+  rather than signalling the stale pid. A lock that cannot be probed holds no pid. The JS signals
+  any live pid in the state. Extends PE-14. **Known issue (v0.6.0, closure F1):** the check and
+  signal are separate steps, with an unbounded gap under scheduling delay; if the runner exits
+  and its pid or group is reused in between, SIGINT can reach unrelated same-user processes,
+  including members of the signalled group. The pid fallback after a failed group signal is
+  another unchecked step; `stop` sends SIGINT only, not SIGKILL. The owner accepted this residual
+  for v0.6.0 (mailbox `91ca7eaf-8e9f-4351-8d05-92df3159017b`); it is not mechanically eliminated.
+  An identity-safe fix with regression coverage is tracked for v0.6.1; a second start-time check
+  alone is not atomic, and there is no assumed portable kill handle.
+  The runner owns the lane, not its bridge's process group (contract C6): a runner
   killed with SIGKILL frees the lane even if its bridge's group lives on, and `stop` then leaves
   that group alone. Asserted by `internal/worker` unit tests (a helper process holding the lock:
   its group is interrupted; killed holder, text-only lock and another holder: nothing is

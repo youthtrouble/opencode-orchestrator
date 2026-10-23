@@ -331,16 +331,19 @@ the default and posts the gate handoff; a bare `--reason` is a usage error, not 
 **Workers.** `orch worker start` runs one brief on one harness. State lives in
 `.orchestrator/workers/<lane>.json`, the lock in `<lane>.lock`, the log in
 `.orchestrator/logs/<lane>-<run>.log`. The runner holds a kernel record lock on `<lane>.lock`
-for its whole run, so a lane has one runner; `orch worker stop` signals only that holder. A lock
-file left by a runner that died is reclaimed by the next start, `--detach` included: never delete
+for its whole run, so a lane has one runner; `orch worker stop` checks that holder before signalling.
+A lock file left by a runner that died is reclaimed by the next start, `--detach` included: never delete
 one by hand, since deleting a held lock lets a second runner in. `--detach` launches a kept-awake runner. The bridge timeout
 for a worker is 120 minutes unless `--timeout-min` says otherwise. A failed run posts `blocked`
 and a budget refusal (exit 75 / budget red) posts `deferred` to the mailbox; a finished run posts
 nothing itself (the agent posts its own `release`). `stop --lane L` sends SIGINT to the lane's
 process group: the worker publishes `interrupted`, then records the bridge's failed result, so the
-lane ends `failed`. `orch worker stop` signals only a worker that still holds the lane's lock
-([PE-23](../go/README.md#crash-output-and-parity-exceptions)). From the conductor, `worker_start`
-accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `breadth`.
+lane ends `failed`. `orch worker stop` checks the lane's lock before signalling, not atomically
+with it: scheduling delay makes the check-to-signal gap unbounded, so runner exit and pid/group
+reuse can send SIGINT to unrelated same-user processes (group members included). The pid fallback
+is another unchecked signal step. This SIGINT-only residual is owner-accepted for v0.6.0, not
+mechanically eliminated ([PE-23](../go/README.md#crash-output-and-parity-exceptions)). From the
+conductor, `worker_start` accepts `brief`, `harness`, optional `lane`, `model`, `effort`, `resume`, `breadth`.
 Workers are instructed to publish a report and a mailbox release; check the actual state and
 messages rather than assuming every successful run did.
 

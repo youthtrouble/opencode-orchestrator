@@ -23,14 +23,16 @@ func (e *KillError) Error() string { return "kill " + e.Code }
 // true, "1" or [1] (kill(-1): every process the user may signal) and a negative pid (process
 // |pid|); orch reports those as no live worker.
 //
-// PE-23: only the runner that holds the lane is signalled: the kernel must report a record
+// PE-23: before signalling, the kernel must report a record
 // lock on the lane's lock (ownlock.Probe), held by the state's pid. A running worker holds that
 // lock for its whole run; the kernel drops it when the runner exits, SIGKILL included, so a
-// finished or killed runner's pid, which the system may since have given to an unrelated
-// process, is never signalled, whatever the lock file's text says. The JS signals any live pid
-// in the state. The residual window is the microseconds between the probe (F_GETLK) and the
-// kill: the runner can exit and its pid be reused in between (pidfd is Linux-only and macOS
-// has no equivalent).
+// runner already gone at the probe is not signalled, whatever the lock file's text says.
+// The JS signals any live pid in the state. The probe (F_GETLK) and kill are separate steps:
+// scheduling delay leaves their gap unbounded. A runner that exits in between can leave a
+// reused pid or group receiving SIGINT, including unrelated same-user processes in that
+// group. The kill(pid) fallback after a failed group kill is a second unchecked step.
+// Stop sends SIGINT only, not SIGKILL. This residual is accepted by the owner for v0.6.0
+// (closure F1), not mechanically eliminated. Linux pidfd is not a portable signal handle.
 //
 // C6: the runner holds the lane, not its bridge's process group. A runner killed with SIGKILL
 // frees the lane even if its bridge's group lives on; stop then reports no live worker and

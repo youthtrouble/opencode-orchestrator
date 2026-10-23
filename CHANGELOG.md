@@ -19,6 +19,17 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 - Bridge budget-refusal summaries now name `orch <bridge>`; incident fingerprints change, so
   `/retro` groups old and new refusals separately.
 
+### Known issues
+
+- `orch worker stop` (PE-23, closure F1): the kernel-holder check and signal are separate
+  steps, with an unbounded gap under scheduling delay. If the runner exits and its pid or
+  group is reused in between, SIGINT can reach unrelated same-user processes, including
+  members of the signalled group. The pid fallback after a failed group signal is another
+  unchecked step. `stop` sends SIGINT only, not SIGKILL. The owner accepted this risk for
+  v0.6.0 (mailbox `91ca7eaf-8e9f-4351-8d05-92df3159017b`); it is not mechanically eliminated.
+  An identity-safe fix and regression test are tracked for v0.6.1, with a frontier plan
+  required before code; a second start-time check alone cannot eliminate this race.
+
 ### Changes
 
 - supervisor (S13 closure F2, PE-37): retry confirmed worker launches that never publish a
@@ -135,9 +146,9 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 - worker (S13b): a lane is owned by its runner through a kernel record lock held for the whole
   run, so a lane has exactly one runner (sol-5 R2, worker side). A lock file left by a runner that
   died is reclaimed by the next start, foreground included (L8, PE-28); `start --detach` only
-  probes the lock and never removes it (PE-29); `orch worker stop` signals only the kernel's
-  holder when it is the state's pid, so a killed runner's reused pid is never signalled (R3,
-  PE-23). The lane-locked hint no longer says to remove the lock: never delete a lock file by
+  probes the lock and never removes it (PE-29); `orch worker stop` checks that the kernel's
+  holder is the state's pid before signalling (R3, PE-23; check-to-signal residual above).
+  The lane-locked hint no longer says to remove the lock: never delete a lock file by
   hand.
 - supervisor (S13c): `orch supervisor serve` owns the project through a kernel record lock on
   `supervisor.lock` held for its life, so of two serves started at once exactly one runs (sol-5
