@@ -38,6 +38,7 @@ func hookInput(event, cwd string) string {
 // testSession compares `orch session` with bin/session.mjs. Every beat writes a fresh
 // updated_at, which is normalised only where it has its exact ISO-ms format.
 func (h *harness) testSession(t *testing.T) {
+	h.testNestedProjectRoot(t, "session")
 	project := seedProjectDir(".orchestrator")
 	previous := `{"door":"claude","session_id":"old","state":"done","now":"n\ud800","slice":"s","progress":{"done":2,"total":5},"updated_at":"2026-10-18T10:00:00.000Z"}`
 	// show prints records as stored, so a hand-edited lone surrogate escape is the one known

@@ -84,6 +84,7 @@ func seedFlip(content string) seed { return seedProjectFile(".orchestrator/flip.
 // testFlip compares `orch flip decide|run|pause|gate|status` and its usage errors with
 // bin/flip.mjs.
 func (h *harness) testFlip(t *testing.T) {
+	h.testNestedProjectRoot(t, "flip")
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	const orchestratorIsFile = "Error: EEXIST: file already exists, mkdir '$PROJECT/.orchestrator'"
 	const flipIsDir = "Error: EISDIR: illegal operation on a directory, rename '$PROJECT/.orchestrator/flip.json.tmp' -> '$PROJECT/.orchestrator/flip.json'"

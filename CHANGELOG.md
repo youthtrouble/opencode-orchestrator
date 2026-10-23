@@ -21,6 +21,11 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- project roots (S13h, PE-41): commands run from `.orchestrator/` or below it target the
+  project above the first exact `.orchestrator` component, including explicit cwd/root,
+  mailbox environment and session hook paths. This prevents nested state and stale nested
+  gates; no other ancestor search, migration or deletion is performed.
+
 - process execution (S13g, sol-5 R14, PE-40): try later PATH candidates when execution fails
   with ENOENT, ENOTDIR or EACCES, including executable scripts with missing interpreters.
   Preserve EACCES precedence, error spelling and pipe ownership; never retry a started child.

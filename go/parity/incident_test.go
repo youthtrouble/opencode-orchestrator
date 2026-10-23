@@ -106,6 +106,7 @@ func (h *harness) incidentInvocation(c incidentCase) invocation {
 // testIncident compares `orch incident` with bin/incident.mjs. Entries differ in "version"
 // (PE-4), which is normalized.
 func (h *harness) testIncident(t *testing.T) {
+	h.testNestedProjectRoot(t, "incident")
 	seeded := seedFile(incidentsFile, seededIncidents)
 	malformed := seedFile(incidentsFile, malformedIncidents)
 	share := []string{"incidents-share.json", "out/bundle.json"}

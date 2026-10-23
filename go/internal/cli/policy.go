@@ -63,11 +63,11 @@ func policyRoot(args []string) (string, error) {
 	i := slices.Index(args, "--cwd")
 	switch {
 	case i < 0:
-		return nodefs.Resolve(".")
+		return paths.ProjectRoot(".")
 	case i+1 == len(args):
 		return "", errPathArgUndefined
 	}
-	return nodefs.Resolve(args[i+1])
+	return paths.ProjectRoot(args[i+1])
 }
 
 // setPolicy applies the pairs to the override file and prints the new effective policy.

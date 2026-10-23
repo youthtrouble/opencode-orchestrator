@@ -80,6 +80,7 @@ const realisticSupervisorState = `{
 // testSupervisor compares `orch supervisor` with bin/supervisor.mjs: status, stop and ack and
 // the usage errors synchronously, serve and start as daemons (supervisor_serve_test.go).
 func (h *harness) testSupervisor(t *testing.T) {
+	h.testNestedProjectRoot(t, "supervisor")
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	const stopIsDir = "Error: EISDIR: illegal operation on a directory, open '$PROJECT/.orchestrator/supervisor.stop'"
 	events := seedSupervisorState(`{"events":{"e1":{"status":"queued"},"e2":{"status":"queued"},"zero":0},"lanes":{}}`)

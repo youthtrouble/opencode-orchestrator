@@ -27,6 +27,7 @@ func seedPolicy(content string) seed {
 // testPolicy compares `orch policy` with bin/policy.mjs. The project's .orchestrator/ (and so
 // policy.json) is collected by the harness.
 func (h *harness) testPolicy(t *testing.T) {
+	h.testNestedProjectRoot(t, "policy")
 	const cwdUndefined = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received undefined`
 	cases := []policyCase{
 		{name: "show/no-file", args: []string{"show"}},

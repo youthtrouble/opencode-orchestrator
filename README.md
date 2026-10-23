@@ -135,6 +135,10 @@ Replying to the question a gate is waiting on clears it too. Details are in
 `orch` is the orchestrator's command-line tool, installed to `~/.local/bin` (put that directory on
 your `PATH`). Run these from inside your project.
 
+Running from `.orchestrator/` or any directory below it targets the project above the first
+exact `.orchestrator` path component, including with `--cwd`, `--root` or mailbox's
+`ORCHESTRATOR_PROJECT`. Other subdirectories are not searched upward for a project.
+
 | You want to | Command |
 |---|---|
 | Start a run (picks the door by budget) | `orch kickoff --brief .orchestrator/briefs/<name>.md [--headless] [--unattended]` |

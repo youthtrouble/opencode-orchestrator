@@ -70,6 +70,7 @@ type kickoffCase struct {
 // crashes before the launch. The supervisor lock is held by this test, so neither
 // `supervisor start` starts a serve. The launching cases follow (testKickoffLaunches).
 func (h *harness) testKickoff(t *testing.T) {
+	h.testNestedProjectRoot(t, "kickoff")
 	const cwdBoolean = `TypeError [ERR_INVALID_ARG_TYPE]: The "paths[0]" argument must be of type string. Received type boolean (true)`
 	c := newFlipCaches(t)
 	brief := seedProjectFile("a.md", "# a\n")

@@ -20,6 +20,7 @@ const claudeFixtures = "../testdata/claude/stream-json"
 // testBridges compares each `orch <bridge>-exec` with bin/<bridge>-exec.mjs, with the scripted
 // fake standing in for the CLI (see parity/fakes).
 func (h *harness) testBridges(t *testing.T) {
+	h.testNestedProjectRoot(t, "bridges")
 	t.Run("claude", h.testClaudeExec)
 	t.Run("codex", h.testCodexExec)
 	t.Run("opencode", h.testOpencodeExec)

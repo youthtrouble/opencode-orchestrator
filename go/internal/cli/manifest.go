@@ -10,6 +10,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsstr"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/manifest"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 )
 
 // jsonSyntaxError is a manifest file JSON.parse rejects. V8's wording is not reproduced.
@@ -23,7 +24,7 @@ func (e *jsonSyntaxError) Error() string { return e.err.Error() }
 // Where the JS dies of an uncaught exception, Manifest prints only the error line and exits 1.
 func Manifest(args []string, stdio Stdio) int {
 	parsed := cliargs.ParseManifest(decodeArgv(args))
-	root, err := nodefs.Resolve(parsed.Values["root"]) // "" resolves to the working directory
+	root, err := paths.ProjectRoot(parsed.Values["root"])
 	if err != nil {
 		return crash(stdio, err)
 	}

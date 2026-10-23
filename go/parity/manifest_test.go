@@ -138,6 +138,7 @@ func (h *harness) manifestInvocation(c manifestCase) invocation {
 
 // testManifest compares `orch manifest` with bin/manifest.mjs.
 func (h *harness) testManifest(t *testing.T) {
+	h.testNestedProjectRoot(t, "manifest")
 	create := func(out string, rest ...string) []string {
 		return append([]string{"create", "--task", "T-1", "--author", "claude-opus", "--out", out}, rest...)
 	}

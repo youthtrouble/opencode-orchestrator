@@ -13,7 +13,7 @@ import (
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/jsjson"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/keepawake"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/mailbox"
-	"github.com/youthtrouble/opencode-orchestrator/go/internal/nodefs"
+	"github.com/youthtrouble/opencode-orchestrator/go/internal/paths"
 	"github.com/youthtrouble/opencode-orchestrator/go/internal/worker"
 )
 
@@ -127,14 +127,14 @@ func workerCrash(stdio Stdio, err error) int {
 	return crash(stdio, err)
 }
 
-// projectRoot is `path.resolve(opts.cwd || process.cwd())`, the project root of worker and
-// flip: resolving "" gives the working directory too, and a bare --cwd is Node's TypeError.
+// projectRoot shares root resolution across command families, preserving the TypeError
+// for a bare --cwd before resolving the project's state directory (PE-41).
 func projectRoot(opts cliargs.Opts) (string, error) {
 	if opts.IsFlag("cwd") {
 		return "", errResolveArgBoolean
 	}
 	cwd, _ := opts.Value("cwd")
-	return nodefs.Resolve(cwd)
+	return paths.ProjectRoot(cwd)
 }
 
 func workerStatus(project worker.Project, lane any, stdio Stdio) int {

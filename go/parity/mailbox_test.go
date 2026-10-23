@@ -166,6 +166,7 @@ func (h *harness) mailboxInvocation(c mailboxCase) invocation {
 
 // testMailbox compares `orch mailbox` with bin/mailbox.mjs.
 func (h *harness) testMailbox(t *testing.T) {
+	h.testNestedProjectRoot(t, "mailbox")
 	t.Run("harness/crash-comparator", TestCrashComparator)
 	t.Run("harness/fresh-only-normalization", TestMailboxNormalizationPreservesSeedAndContent)
 	seeded := seedMailbox(mailboxMessages, mailboxAcks)

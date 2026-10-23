@@ -34,7 +34,7 @@ func RunClaude(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err.Error())
 		return exitPrompt
 	}
-	cwd, err := resolvePath(opts.Or("cwd", "."))
+	cwd, err := resolveProjectRoot(opts.Or("cwd", "."))
 	if err != nil {
 		return crash(stderr, err)
 	}

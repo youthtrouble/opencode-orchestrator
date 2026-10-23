@@ -1551,6 +1551,19 @@ The other documented differences, each asserted by its own parity case:
   including missing-interpreter fallback at all three entry points, error precedence,
   non-retry after exit 7, intact pipes and before/after fd counts on darwin and Linux.
 
+- PE-41 (S13h, incident 9a191c0fe00d): all project-root selection uses
+  `paths.ProjectRoot`: resolve absolutely and clean lexically, then truncate at the first
+  exact `.orchestrator` component. Running from `<project>/.orchestrator/briefs` therefore
+  reads/writes `<project>/.orchestrator`, not nested state. Explicit `--cwd`, `--root`,
+  mailbox's `ORCHESTRATOR_PROJECT`, session hook cwd, incident request project and routing's
+  project policy use the same rule. No symlink resolution, other ancestor search, migration
+  or deletion is performed; ordinary prompt/schema/manifest input and output file paths
+  retain their cwd-relative semantics. Bridge children receive the resolved project cwd,
+  with the existing child `PWD` rule unchanged. Every affected parity group (usage, mailbox,
+  manifest, incident, policy, bridges, worker, flip, supervisor, watch, kickoff, session)
+  pins the frozen JS's nested-state behaviour and asserts Go's corrected result, including
+  ignoring a stale nested flip gate. The latent nesting defect is no longer mirrored.
+
 Latent JS defects the bridges mirror on purpose: codex-exec ignores codex's top-level `error`
 events; opencode-exec ignores `--help`, turns `--effort X` into the prompt `X`, and records `context.model: null` in every failure
 incident. Those `orch worker` mirrors: the usage line lists `codex|claude` only; `--effort` is passed to opencode-exec,

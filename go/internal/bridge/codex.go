@@ -41,7 +41,7 @@ type codexRequest struct {
 // a bare --cwd is the path.resolve TypeError, and a bare --model the TypeError of the gate's
 // `model.includes`, both before the gate runs.
 func newCodexRequest(opts options) (codexRequest, error) {
-	cwd, err := resolvePath(opts.Or("cwd", "."))
+	cwd, err := resolveProjectRoot(opts.Or("cwd", "."))
 	if err != nil {
 		return codexRequest{}, err
 	}

@@ -24,6 +24,7 @@ const usageTestdata = "../testdata/usage"
 // they replace. The Claude feed is always token-less here (the security fake has no
 // keychain entry), so the real usage endpoint is never contacted.
 func (h *harness) testUsage(t *testing.T) {
+	h.testNestedProjectRoot(t, "usage")
 	caches := readCacheFixtures(t)
 	for _, name := range caches.Keys() {
 		if name == "$comment" {

@@ -72,6 +72,16 @@ func resolvePath(v any) (string, error) {
 	return abs, nil
 }
 
+// resolveProjectRoot keeps option type errors identical to resolvePath, while preventing
+// bridge runs from treating .orchestrator itself as a project (PE-41).
+func resolveProjectRoot(v any) (string, error) {
+	abs, err := resolvePath(v)
+	if err != nil {
+		return "", err
+	}
+	return paths.ProjectRoot(abs)
+}
+
 // timeoutDelay is the delay Node gives setTimeout for
 // `Number(opts["timeout-min"] || defaultMinutes) * 60000` milliseconds (procs.TimerDelay).
 func timeoutDelay(timeoutMin any, defaultMinutes float64) time.Duration {
