@@ -1,11 +1,14 @@
 package bridge
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -216,8 +219,9 @@ func (l *idleTestLog) Write(p []byte) (int, error) {
 }
 func (l *idleTestLog) text() string { l.mu.Lock(); defer l.mu.Unlock(); return l.Buffer.String() }
 
-// The fake reads a pipe with a shell builtin, so it is quiet and has no live descendants.
-// All clock changes and checks have channel handshakes; timeouts only bound test failures.
+// The fake is the test binary as fakeOpencode, so it is quiet and (but for real-grandchild) has
+// no live descendants. All clock changes and checks have channel handshakes; timeouts only bound
+// test failures.
 func TestRunOpencodeIdleWatchdog(t *testing.T) {
 	for _, scenario := range []string{"idle", "advancing", "visibility-tool", "quiet-tool-195s", "live-descendant", "real-grandchild", "absent", "stale", "probe-error", "ledger-probe-race", "line-race", "stderr-race", "close-race", "cap-race", "ignores-int"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -250,31 +254,14 @@ func TestRunOpencodeIdleWatchdog(t *testing.T) {
 				}
 				defer grandRelease.Close()
 			}
-			script := `#!/bin/bash
-exec 3< "$HOME/control"
-trap 'echo INT > "$HOME/signal"; exit 130' INT
-printf '%s\n' '{"part":{"type":"text","text":"ready"}}'
-while read -r command <&3; do
-  if [ "$command" = exit ]; then exit 0; fi
-done
-`
-			if scenario == "ignores-int" {
-				script = strings.Replace(script, "trap 'echo INT > \"$HOME/signal\"; exit 130' INT", "trap '' INT", 1)
-			}
-			if scenario == "real-grandchild" {
-				script = strings.Replace(script, `printf '%s\n'`, `exec 4< "$HOME/grandcontrol"
-exec 5<> "$HOME/grandready"
-/bin/bash -c '/bin/bash -c "echo ready >&5; read -r release <&4" & wait' &
-descendant=$!
-read -r ready <&5
-printf '%s\n'`, 1)
-				script = strings.Replace(script, `if [ "$command" = exit ]; then exit 0; fi`, `if [ "$command" = exit ]; then exit 0; fi
-  if [ "$command" = waitchild ]; then wait "$descendant"; printf '%s\n' '{"part":{"type":"text","text":"released"}}'; fi`, 1)
-			}
-			write(t, filepath.Join(sb.bin, "opencode"), script)
-			if err := os.Chmod(filepath.Join(sb.bin, "opencode"), 0700); err != nil {
+			executable, err := os.Executable()
+			if err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Symlink(executable, filepath.Join(sb.bin, "opencode")); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(fakeOpencodeEnv, scenario)
 			start := time.Date(2026, 10, 23, 0, 0, 0, 0, time.UTC)
 			clock := &testIdleClock{at: start, ticks: make(chan time.Time), created: make(chan time.Duration, 1), checked: make(chan struct{}, 1)}
 			runtime := defaultIdleRuntime()
@@ -430,7 +417,7 @@ printf '%s\n'`, 1)
 				if code != 1 || jsjson.Path(result, "stop_cause") != nil {
 					t.Errorf("cap/idle result: %d %s", code, stdout.String())
 				}
-				if got := readHomeFile(t, sb, "signal"); got != "INT\n" {
+				if got := readSignalFile(t, sb, log, stdout.String()); got != "INT\n" {
 					t.Errorf("stop signal %q", got)
 				}
 				if incidents := sb.incidents(t); strings.Count(incidents, "\n") != 1 || !strings.Contains(incidents, `"cause":"cap"`) {
@@ -442,7 +429,7 @@ printf '%s\n'`, 1)
 				t.Errorf("exit %d result %s", code, stdout.String())
 			}
 			if scenario != "ignores-int" {
-				if got := strings.TrimSpace(readHomeFile(t, sb, "signal")); got != "INT" {
+				if got := strings.TrimSpace(readSignalFile(t, sb, log, stdout.String())); got != "INT" {
 					t.Errorf("signal %q", got)
 				}
 			}
@@ -457,6 +444,123 @@ printf '%s\n'`, 1)
 			}
 		})
 	}
+}
+
+// readSignalFile reads the file the fake writes on SIGINT; when it is missing the failure carries
+// the bridge log, incidents and stdout, which tell an unacknowledged signal from an unsent one.
+func readSignalFile(t *testing.T, sb bridgeSandbox, log *idleTestLog, stdout string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(sb.home, "signal"))
+	if err != nil {
+		t.Fatalf("%v\nlog:\n%s\nincidents:\n%s\nstdout:\n%s", err, log.text(), sb.incidents(t), stdout)
+	}
+	return string(data)
+}
+
+// fakeOpencodeEnv names the TestRunOpencodeIdleWatchdog scenario the test binary plays when it
+// is started as `opencode`.
+const fakeOpencodeEnv = "ORCH_BRIDGE_TEST_FAKE_OPENCODE"
+
+// fakeOpencodeFailed is the fake's own failure exit, distinct from 0 (`exit`) and 130 (SIGINT).
+const fakeOpencodeFailed = 3
+
+// fakeOpencode is the quiet opencode of TestRunOpencodeIdleWatchdog. It catches SIGINT before it
+// prints `ready`, and the Go runtime queues a caught signal whatever the main goroutine is doing,
+// so a SIGINT at any instant after `ready` is acknowledged: it writes "INT\n" to $HOME/signal and
+// exits 130. A shell fake cannot promise that: a trapped signal that lands just before the shell
+// blocks in read(2) waits for a read that never returns. Lines on $HOME/control: `exit` exits 0;
+// `waitchild` (real-grandchild) waits for the bash descendants, then prints `released`.
+func fakeOpencode(scenario string) int {
+	interrupts := make(chan os.Signal, 1)
+	if scenario == "ignores-int" {
+		signal.Ignore(syscall.SIGINT)
+	} else {
+		signal.Notify(interrupts, syscall.SIGINT)
+	}
+	home := os.Getenv("HOME")
+	control, err := os.Open(filepath.Join(home, "control"))
+	if err != nil {
+		return fakeOpencodeFailure(err)
+	}
+	var descendants *exec.Cmd
+	if scenario == "real-grandchild" {
+		if descendants, err = startFakeOpencodeDescendants(home); err != nil {
+			return fakeOpencodeFailure(err)
+		}
+	}
+	commands := make(chan string)
+	var readErr error
+	go func() {
+		scanner := bufio.NewScanner(control)
+		for scanner.Scan() {
+			commands <- scanner.Text()
+		}
+		readErr = scanner.Err()
+		close(commands)
+	}()
+	if err := printFakeOpencodeText("ready"); err != nil {
+		return fakeOpencodeFailure(err)
+	}
+	released := make(chan error, 1)
+	for {
+		select {
+		case <-interrupts:
+			if err := os.WriteFile(filepath.Join(home, "signal"), []byte("INT\n"), 0o600); err != nil {
+				return fakeOpencodeFailure(err)
+			}
+			return 130
+		case command, open := <-commands:
+			switch {
+			case !open && readErr != nil:
+				return fakeOpencodeFailure(readErr)
+			case !open || command == "exit":
+				return 0
+			case command == "waitchild" && descendants != nil:
+				go func() { released <- descendants.Wait() }()
+			}
+		case err := <-released:
+			if err == nil {
+				err = printFakeOpencodeText("released")
+			}
+			if err != nil {
+				return fakeOpencodeFailure(err)
+			}
+		}
+	}
+}
+
+// startFakeOpencodeDescendants starts real bash descendants in the fake's process group, so the
+// real procs.LiveDescendants probe sees them, and returns once the innermost one is ready. It
+// exits when the test writes a line to $HOME/grandcontrol.
+func startFakeOpencodeDescendants(home string) (*exec.Cmd, error) {
+	release, err := os.Open(filepath.Join(home, "grandcontrol"))
+	if err != nil {
+		return nil, err
+	}
+	ready, err := os.OpenFile(filepath.Join(home, "grandready"), os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	descendants := exec.Command("/bin/bash", "-c", `/bin/bash -c "echo ready >&4; read -r release <&3" & wait`)
+	descendants.Stdout, descendants.Stderr = os.Stdout, os.Stderr
+	descendants.ExtraFiles = []*os.File{release, ready}
+	if err := descendants.Start(); err != nil {
+		return nil, err
+	}
+	if _, err := bufio.NewReader(ready).ReadString('\n'); err != nil {
+		return nil, err
+	}
+	return descendants, nil
+}
+
+func printFakeOpencodeText(text string) error {
+	_, err := fmt.Printf("{\"part\":{\"type\":\"text\",\"text\":%q}}\n", text)
+	return err
+}
+
+func fakeOpencodeFailure(err error) int {
+	fmt.Fprintln(os.Stderr, "fake opencode:", err)
+	return fakeOpencodeFailed
 }
 
 func TestStopCauseFirstWins(t *testing.T) {
