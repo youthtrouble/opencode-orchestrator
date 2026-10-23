@@ -726,33 +726,44 @@ func TestSignalDuringTheRunReachesTheBridgeGroup(t *testing.T) {
 		t.Run(sig.String(), func(t *testing.T) {
 			p := testProject(t, "brief")
 			f := newFakeRun(t, map[string]string{"FAKE_WAIT": "1", "FAKE_STDOUT": `{"ok":false,"errors":["stopped"]}`, "FAKE_EXIT": "1"})
-			var code int
-			var err error
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				code, err = startForeground(t, p, f, "--brief", "b.md", "--harness", "claude")
-			}()
-			signals := <-f.notified
-			waitForFile(t, filepath.Join(f.log, "ready"))
-			signals <- sig
+			s := newSignalFixture(t, f)
+			r := startSignalRun(t, p, s, f.runtime(t))
+			if got := s.event(t); got != "child-started" {
+				t.Fatalf("fixture event %q, want child-started", got)
+			}
+			s.release(t, "ready-go")
+			if got := s.event(t); got != "ready" {
+				t.Fatalf("fixture event %q, want ready", got)
+			}
+			select {
+			case signals := <-r.notified:
+				signals <- sig
+			case <-time.After(10 * time.Second):
+				t.Fatal("worker did not install Notify")
+			}
 			name := map[syscall.Signal]string{syscall.SIGTERM: "TERM", syscall.SIGINT: "INT"}[sig]
-			waitFor(t, func() bool {
-				logged, _ := os.ReadFile(filepath.Join(f.log, "signals"))
-				return strings.Contains(string(logged), "child "+name) && strings.Contains(string(logged), "bridge "+name)
-			}, "the bridge and its child to log "+name)
+			acks := map[string]bool{"bridge " + name: false, "child " + name: false}
+			for !acks["bridge "+name] || !acks["child "+name] {
+				event := s.event(t)
+				if event == "child-done" {
+					continue // The foreground child has been reaped; not a signal ACK.
+				}
+				if seen, ok := acks[event]; !ok || seen {
+					t.Fatalf("unexpected or duplicate signal ACK %q", event)
+				}
+				acks[event] = true
+			}
 			if got := stateFile(t, p, "b"); !strings.Contains(got, `"status": "interrupted"`) {
 				t.Errorf("state after the signal:\n%s", got)
 			}
-			writeFile(t, filepath.Join(f.log, "release"), "")
-			<-done
-			if err != nil || code != 1 {
-				t.Fatalf("Foreground = %d, %v", code, err)
+			s.release(t, "bridge-go")
+			awaitSignalRun(t, r.done)
+			if r.err != nil || r.code != 1 {
+				t.Fatalf("Foreground = %d, %v", r.code, r.err)
 			}
 			if got := stateFile(t, p, "b"); !strings.Contains(got, `"status": "failed"`) || !strings.Contains(got, `"exit_code": 1,`) {
 				t.Errorf("the close branch did not overwrite the status, or the bridge was killed:\n%s", got)
 			}
-			close(signals)
 		})
 	}
 }
@@ -764,17 +775,15 @@ func TestSignalDuringTheRunReachesTheBridgeGroup(t *testing.T) {
 func TestSignalBeforeTheBridgeStartsReachesItOnceItRuns(t *testing.T) {
 	p := testProject(t, "brief")
 	f := newFakeRun(t, map[string]string{"FAKE_HOLD": "1", "FAKE_STDOUT": okResult})
+	s := newSignalFixture(t, f)
 	rt := f.runtime(t)
 	rt.Notify = func(c chan<- os.Signal) { c <- syscall.SIGTERM }
 	var statuses []string
 	rt.Now = statusRecordingClock(t, p.StatePath("b"), &statuses)
-	launch, err := p.PrepareStart(opts("--brief", "b.md", "--harness", "claude"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	code, err := launch.Foreground(rt)
-	if err != nil || code != 1 {
-		t.Fatalf("Foreground = %d, %v; want 1", code, err)
+	r := startSignalRun(t, p, s, rt)
+	awaitSignalRun(t, r.done)
+	if r.err != nil || r.code != 1 {
+		t.Fatalf("Foreground = %d, %v; want 1", r.code, r.err)
 	}
 	statuses = append(statuses, statusIn(t, readText(t, p.StatePath("b"))))
 	if want := []string{"starting", "running", "interrupted", "failed"}; !slices.Equal(statuses, want) {
@@ -784,6 +793,76 @@ func TestSignalBeforeTheBridgeStartsReachesItOnceItRuns(t *testing.T) {
 		t.Errorf("the bridge was not ended by the forwarded signal:\n%s", got)
 	}
 	requireNoLock(t, p, "b")
+}
+
+// A hold released before spawn still exits: cleanup does not depend on shell readiness.
+func TestSignalHoldReleaseBeforeBridgeStarts(t *testing.T) {
+	p := testProject(t, "brief")
+	f := newFakeRun(t, map[string]string{"FAKE_HOLD": "1", "FAKE_STDOUT": okResult})
+	s := newSignalFixture(t, f)
+	// A lost early signal must fail its guard, then clean up even if the shell has not
+	// reached read yet. The queued release must not require another signal or a reader.
+	s.release(t, "bridge-go")
+	r := startSignalRun(t, p, s, f.runtime(t))
+	awaitSignalRun(t, r.done)
+	if r.err != nil || r.code != 0 {
+		t.Fatalf("released hold = %d, %v; want 0", r.code, r.err)
+	}
+	requireNoLock(t, p, "b")
+}
+
+// Each subtest returns at an unfinished handshake, exercising the same teardown as Fatal.
+// Only test-owned FIFO gates are released: no rescue signal can hide a broken signal test.
+func TestSignalFixtureCleanup(t *testing.T) {
+	for _, stage := range []string{"before ready", "before release", "child exits before ready"} {
+		t.Run(stage, func(t *testing.T) {
+			p := testProject(t, "brief")
+			mode := "1"
+			if stage == "child exits before ready" {
+				mode = "child-exit"
+			}
+			f := newFakeRun(t, map[string]string{"FAKE_WAIT": mode, "FAKE_STDOUT": okResult})
+			var r *signalRun
+			t.Run("abort", func(t *testing.T) {
+				s := newSignalFixture(t, f)
+				r = startSignalRun(t, p, s, f.runtime(t))
+				if got := s.event(t); got != "child-started" {
+					t.Fatalf("fixture event %q, want child-started", got)
+				}
+				if stage == "before ready" {
+					return
+				}
+				s.release(t, "ready-go")
+				want := "ready"
+				if stage == "child exits before ready" {
+					want = "child-exit"
+				}
+				if got := s.event(t); got != want {
+					t.Fatalf("fixture event %q, want %q", got, want)
+				}
+			})
+			if r == nil {
+				t.FailNow() // Preserve a setup failure in abort without a secondary panic.
+			}
+			select {
+			case <-r.done:
+			default:
+				t.Fatal("run outlived fixture cleanup")
+			}
+			// These diagnostics are written by our fixtures, not PID discovery from live
+			// state. Read only after Foreground and all subprocess writers have ended.
+			for _, name := range []string{"bridge-pid", "child-pid"} {
+				pid, err := strconv.Atoi(strings.TrimSpace(f.logged(t, name)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if gone, err := proctest.Gone(pid); err != nil || !gone {
+					t.Errorf("fixture %s %d still exists (%v)", name, pid, err)
+				}
+			}
+			requireNoLock(t, p, "b")
+		})
+	}
 }
 
 // statusRecordingClock is fixedClock that also records, on every call, the status in the state
@@ -807,22 +886,6 @@ func statusIn(t *testing.T, state string) string {
 	t.Helper()
 	status, _ := jsjson.Path(parse(t, state), "status").(string)
 	return status
-}
-
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	waitFor(t, func() bool { _, err := os.Stat(path); return err == nil }, path)
-}
-
-func waitFor(t *testing.T, ready func() bool, what string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !ready() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 // From the bridge's start on the lock is removed however the run ends.

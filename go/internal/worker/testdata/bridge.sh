@@ -1,14 +1,15 @@
 #!/bin/sh
 # Stand-in for `orch <harness>-exec` in the worker's unit tests: the tests run the worker with
 # this script as its own executable, so $1 is the bridge subcommand. It acts on FAKE_*:
-#   FAKE_LOG       directory receiving argv (one argument per line), stdin and signals
+#   FAKE_LOG       directory receiving argv (one argument per line), stdin and diagnostics
 #   FAKE_NO_STDIN  set: never read stdin (the worker's prompt meets a closed pipe)
 #   FAKE_WAIT      set: run a foreground child until a signal reaches the process group; the
-#                  child and this script each log the signal they got to $FAKE_LOG/signals,
-#                  the child touches $FAKE_LOG/ready once its traps are set, and this script
-#                  then waits for $FAKE_LOG/release before it goes on (each wait gives up
-#                  after about 10 s, so a failed test leaves no process behind)
-#   FAKE_HOLD      set: wait about 10 s with no trap set, so a SIGINT or SIGTERM that reaches
+#                  child and bridge ACK on events; ready follows both installed handlers.
+#                  ready-go, child-go and bridge-go are blocking FIFO gates owned by the
+#                  test, whose cleanup releases all gates and waits for the foreground tree.
+#                  Value child-exit makes the child exit before ready for cleanup coverage.
+#                  At most five events for one signal; keep signalFixtureMaxEvents in sync.
+#   FAKE_HOLD      set: block on bridge-go with no trap, so a SIGINT or SIGTERM that reaches
 #                  it at any point from its exec on kills it
 #   FAKE_GATE      set: print "gate" on stderr, hold the FIFO $FAKE_LOG/go open, write
 #                  "started" to the FIFO $FAKE_LOG/started, then wait for a line on go (the
@@ -27,17 +28,28 @@ if [ -n "$FAKE_GATE" ]; then
   exec 3<&-
 fi
 if [ -n "$FAKE_WAIT" ]; then
-  trap 'echo "bridge TERM" >> "$log/signals"' TERM
-  trap 'echo "bridge INT" >> "$log/signals"' INT
+  echo "$$" > "$log/bridge-pid"
+  exec 4> "$log/events"
+  trap 'echo "bridge TERM" >&4' TERM
+  trap 'echo "bridge INT" >&4' INT
   sh -c '
-    trap "echo \"child TERM\" >> \"$1/signals\"; exit 0" TERM
-    trap "echo \"child INT\" >> \"$1/signals\"; exit 0" INT
-    : > "$1/ready"
-    i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done' child "$log"
-  i=0; while [ ! -f "$log/release" ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+    echo "$$" > "$1/child-pid"
+    trap "echo \"child TERM\" >&4; exit 0" TERM
+    trap "echo \"child INT\" >&4; exit 0" INT
+    echo child-started >&4
+    read -r _ < "$1/ready-go"
+    if [ "$FAKE_WAIT" = child-exit ]; then
+      echo child-exit >&4
+      exit 0
+    fi
+    echo ready >&4
+    read -r _ < "$1/child-go"' child "$log"
+  echo child-done >&4
+  read -r _ < "$log/bridge-go"
+  exec 4>&-
 fi
 if [ -n "$FAKE_HOLD" ]; then
-  i=0; while [ $i -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  read -r _ < "$log/bridge-go"
 fi
 printf '%s' "$FAKE_STDERR" >&2
 printf '%s' "$FAKE_STDOUT"

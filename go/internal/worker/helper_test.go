@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -164,7 +165,7 @@ func (h *helper) expectLine(t *testing.T, want string) {
 	select {
 	case got := <-h.lines:
 		if got != want {
-			t.Fatalf("helper %d printed %q, want %q; stderr: %s", h.pid(), got, want, h.stderr.String())
+			t.Fatalf("helper %d printed %q, want %q", h.pid(), got, want)
 		}
 	case <-h.done:
 		t.Fatalf("helper %d exited before %q; stderr: %s", h.pid(), want, h.stderr.String())
@@ -216,10 +217,26 @@ func gatedBridge(t *testing.T, f *fakeRun) {
 // FIFO and holds the go FIFO open.
 func awaitBridgeStart(t *testing.T, f *fakeRun) {
 	t.Helper()
+	file, err := os.OpenFile(filepath.Join(f.log, "started"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	started := make(chan error, 1)
+	readerDone := make(chan struct{})
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+		select {
+		case <-readerDone:
+		case <-time.After(10 * time.Second):
+			t.Error("started FIFO reader did not stop")
+		}
+	})
 	go func() {
-		data, err := os.ReadFile(filepath.Join(f.log, "started"))
-		if err == nil && string(data) != "started\n" {
+		defer close(readerDone)
+		data, err := bufio.NewReader(file).ReadString('\n')
+		if err == nil && data != "started\n" {
 			err = fmt.Errorf("started FIFO read %q", data)
 		}
 		started <- err
@@ -256,4 +273,139 @@ func bridgeScript(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return self
+}
+
+// signalFixture keeps both ends of each FIFO open before the shell starts. A release is
+// retained even if cleanup runs before the shell opens its gate. There are no open goroutines
+// to cancel; the sole event reader is explicitly stopped and joined after the run is reaped.
+type signalFixture struct {
+	files  map[string]*os.File
+	once   map[string]*sync.Once
+	events chan string
+}
+
+// bridge.sh emits at most child-started, ready, one child ACK, one bridge ACK and
+// child-done for the single injected signal. child-exit replaces ready and the ACKs.
+// Keep this bound in sync with the shell protocol: cleanup must drain its stop marker
+// even when the test consumes no events. The stop marker itself is never enqueued.
+const signalFixtureMaxEvents = 5
+
+func newSignalFixture(t *testing.T, f *fakeRun) *signalFixture {
+	t.Helper()
+	s := &signalFixture{files: make(map[string]*os.File), once: make(map[string]*sync.Once), events: make(chan string, signalFixtureMaxEvents)}
+	for _, name := range []string{"events", "ready-go", "child-go", "bridge-go"} {
+		path := filepath.Join(f.log, name)
+		if err := syscall.Mkfifo(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.files[name] = file
+		s.once[name] = new(sync.Once)
+		// Register each endpoint as it is acquired, including partial setup failures.
+		t.Cleanup(func() {
+			if err := file.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	readerDone := make(chan struct{})
+	var readerErr error
+	go func() {
+		defer close(readerDone)
+		scanner := bufio.NewScanner(s.files["events"])
+		for scanner.Scan() {
+			if scanner.Text() == "stop" {
+				return
+			}
+			s.events <- scanner.Text()
+		}
+		readerErr = scanner.Err()
+	}()
+	t.Cleanup(func() {
+		if _, err := s.files["events"].WriteString("stop\n"); err != nil {
+			t.Error(err)
+		}
+		select {
+		case <-readerDone:
+			if readerErr != nil {
+				t.Error(readerErr)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("fixture event reader did not stop")
+		}
+	})
+	return s
+}
+
+func (s *signalFixture) release(t *testing.T, name string) {
+	t.Helper()
+	s.once[name].Do(func() {
+		if _, err := s.files[name].WriteString("go\n"); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func (s *signalFixture) event(t *testing.T) string {
+	t.Helper()
+	select {
+	case event := <-s.events:
+		return event
+	case <-time.After(10 * time.Second):
+		t.Fatal("fixture did not send an event")
+		return ""
+	}
+}
+
+type signalRun struct {
+	done     chan struct{}
+	notified chan chan<- os.Signal
+	code     int
+	err      error
+}
+
+// startSignalRun registers teardown before launching Foreground. Cleanup uses only gates,
+// never a second signal that could hide a lost first signal in the early-Notify regression.
+func startSignalRun(t *testing.T, p Project, s *signalFixture, rt Runtime) *signalRun {
+	t.Helper()
+	launch, err := p.PrepareStart(opts("--brief", "b.md", "--harness", "claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &signalRun{done: make(chan struct{}), notified: make(chan chan<- os.Signal, 1)}
+	var signals chan<- os.Signal
+	notify := rt.Notify
+	rt.Notify = func(c chan<- os.Signal) {
+		notify(c)
+		signals = c
+		r.notified <- c
+	}
+	t.Cleanup(func() {
+		for _, gate := range []string{"ready-go", "child-go", "bridge-go"} {
+			s.release(t, gate)
+		}
+		awaitSignalRun(t, r.done)
+		// Notify is synchronous and has returned before Foreground can finish. Tests are
+		// the only other senders and have stopped sending before their cleanup runs.
+		if signals != nil {
+			close(signals)
+		}
+	})
+	go func() {
+		defer close(r.done)
+		r.code, r.err = launch.Foreground(rt)
+	}()
+	return r
+}
+
+func awaitSignalRun(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fixture run did not exit within 10 seconds")
+	}
 }
