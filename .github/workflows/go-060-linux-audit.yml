@@ -1,0 +1,101 @@
+# TEMPORARY scratch workflow for the 0.6.0 Linux audit. Never merge it: delete this file on
+# slice/go-060-linux-audit (or drop the commit) before anything from this branch reaches main.
+#
+# One campaign collects every Linux-only failure: the full uncached suite, then the signal,
+# process and worker packages five times each. Every run executes even after an earlier one
+# fails, its log and exit code are uploaded, and the last step fails the job if any run failed.
+name: Go 0.6.0 Linux audit (temporary)
+
+on:
+  push:
+    branches: [slice/go-060-linux-audit]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CGO_ENABLED: '0'
+      AUDIT_LOGS: ${{ github.workspace }}/audit-logs
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26' # some Go tests compare against node, as in go.yml
+      - name: Record the toolchain
+        run: |
+          mkdir -p "$AUDIT_LOGS"
+          { uname -a; nproc; go version; node --version; git -C .. rev-parse HEAD; } | tee "$AUDIT_LOGS/toolchain.txt"
+
+      - name: Full suite, uncached (count=1)
+        id: full
+        timeout-minutes: 20
+        run: |
+          set +e
+          go test -json -count=1 ./... > "$AUDIT_LOGS/full.json" 2> "$AUDIT_LOGS/full.stderr"
+          code=$?
+          echo "$code" > "$AUDIT_LOGS/full.exit"
+          exit "$code"
+
+      - name: Signal, process and worker packages (count=5)
+        id: repeat
+        if: always()
+        timeout-minutes: 25
+        run: |
+          set +e
+          go test -json -count=5 ./internal/bridge ./internal/procs ./internal/proctest ./internal/worker \
+            > "$AUDIT_LOGS/repeat5.json" 2> "$AUDIT_LOGS/repeat5.stderr"
+          code=$?
+          echo "$code" > "$AUDIT_LOGS/repeat5.exit"
+          exit "$code"
+
+      - name: Summarise failures
+        if: always()
+        run: |
+          for run in full repeat5; do
+            json="$AUDIT_LOGS/$run.json"
+            [ -f "$json" ] || continue
+            jq -r 'select(.Action == "fail") | "\(.Package) \(.Test // "(package)")"' "$json" \
+              | sort | uniq -c > "$AUDIT_LOGS/$run.failures.txt"
+          done
+          {
+            echo "## Linux audit"
+            for run in full repeat5; do
+              echo "### $run: exit $(cat "$AUDIT_LOGS/$run.exit" 2>/dev/null || echo 'not recorded')"
+              echo '```'
+              cat "$AUDIT_LOGS/$run.failures.txt" 2>/dev/null || echo "no JSON log"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-060-linux-audit-logs
+          path: audit-logs/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Fail if any run failed or did not record an exit code
+        if: always()
+        run: |
+          status=0
+          for run in full repeat5; do
+            code=$(cat "$AUDIT_LOGS/$run.exit" 2>/dev/null || echo missing)
+            echo "$run: $code"
+            [ "$code" = 0 ] || status=1
+          done
+          exit "$status"
