@@ -142,7 +142,7 @@ func TestStartReapedLeavesNoZombie(t *testing.T) {
 	if reported := waitForPid(t, report); reported != pid {
 		t.Fatalf("child reported %d, want %d", reported, pid)
 	}
-	waitGone(t, pid)
+	waitReaped(t, pid)
 	assertGone(t, pid)
 }
 

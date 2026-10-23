@@ -44,9 +44,96 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(0)
 	case "run":
 		os.Exit(runHelper())
+	case "signal-child":
+		os.Exit(runSignalChild())
 	default:
 		fmt.Fprintln(os.Stderr, "unknown helper")
 		os.Exit(1)
+	}
+}
+
+// signalChildFailed distinguishes fixture failures from a gate release or acknowledged signal.
+const signalChildFailed = 3
+
+// runSignalChild catches signals before announcing itself. A shell trap can remain pending
+// behind read(2) when the signal arrives just before the read; Go queues it independently.
+func runSignalChild() int {
+	// The test injects only one signal. Two slots leave room to spare without dropping it.
+	signals := make(chan os.Signal, 2)
+	ossignal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	defer ossignal.Stop(signals)
+	fail := func(err error) int {
+		fmt.Fprintln(os.Stderr, "signal child:", err)
+		return signalChildFailed
+	}
+	log := os.Getenv("FAKE_LOG")
+	if err := os.WriteFile(filepath.Join(log, "child-pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		return fail(err)
+	}
+	events, err := os.OpenFile(filepath.Join(log, "events"), os.O_WRONLY, 0)
+	if err != nil {
+		return fail(err)
+	}
+	defer events.Close()
+	writeEvent := func(event string) error {
+		_, err := events.WriteString(event + "\n")
+		return err
+	}
+	if err := writeEvent("child-started"); err != nil {
+		return fail(err)
+	}
+	received, err := waitSignalChildGate(log, "ready-go", signals)
+	if err != nil {
+		return fail(err)
+	}
+	if received == nil {
+		if os.Getenv("FAKE_WAIT") == "child-exit" {
+			if err := writeEvent("child-exit"); err != nil {
+				return fail(err)
+			}
+			return 0
+		}
+		if err := writeEvent("ready"); err != nil {
+			return fail(err)
+		}
+		received, err = waitSignalChildGate(log, "child-go", signals)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if received != nil {
+		ack := "child INT"
+		if received == syscall.SIGTERM {
+			ack = "child TERM"
+		}
+		if err := writeEvent(ack); err != nil {
+			return fail(err)
+		}
+	}
+	return 0
+}
+
+// The fixture holds both ends open, so opening a gate cannot block. Read one line, not EOF:
+// the fixture keeps its writer open until teardown. A signal can interrupt either gate wait.
+func waitSignalChildGate(log, name string, signals <-chan os.Signal) (os.Signal, error) {
+	gate, err := os.Open(filepath.Join(log, name))
+	if err != nil {
+		return nil, err
+	}
+	defer gate.Close()
+	read := make(chan error, 1)
+	go func() {
+		_, err := bufio.NewReader(gate).ReadString('\n')
+		read <- err
+	}()
+	select {
+	case received := <-signals:
+		return received, nil
+	case err := <-read:
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", name, err)
+		}
+		return nil, nil
 	}
 }
 
@@ -292,6 +379,11 @@ const signalFixtureMaxEvents = 5
 
 func newSignalFixture(t *testing.T, f *fakeRun) *signalFixture {
 	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_SIGNAL_CHILD", executable)
 	s := &signalFixture{files: make(map[string]*os.File), once: make(map[string]*sync.Once), events: make(chan string, signalFixtureMaxEvents)}
 	for _, name := range []string{"events", "ready-go", "child-go", "bridge-go"} {
 		path := filepath.Join(f.log, name)
