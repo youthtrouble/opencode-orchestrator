@@ -49,8 +49,14 @@ func TestRunOpencodeNormalPath(t *testing.T) {
 // event could go on to its final command, which the one forwarded signal never reaches.
 func TestRunOpencodeForwardsSIGTERM(t *testing.T) {
 	sb := newBridgeSandbox(t, "opencode")
-	write(t, filepath.Join(sb.home, "event"), `{"part":{"type":"text","text":"hi"}}`+"\n")
-	cmd, stdout, stderr := sb.startEnding(t, `exec /usr/bin/tail -f "$HOME/event"`, "", "[opencode] message: hi\n", "--prompt", "p")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(executable, filepath.Join(sb.home, "opencode-signal")); err != nil {
+		t.Fatal(err)
+	}
+	cmd, stdout, stderr := sb.startEnding(t, `exec "$HOME/opencode-signal"`, "", "[opencode] message: hi\n", "--prompt", "p")
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +73,16 @@ func TestRunOpencodeForwardsSIGTERM(t *testing.T) {
 	if _, err := os.Stat(jsjson.Path(result, "record").(string)); err != nil {
 		t.Errorf("no run record: %v", err)
 	}
+}
+
+// fakeOpencodeSignal retains the runtime's default SIGINT exit and empty stderr. Like the
+// other signal fakes, it exits within 30 s even if failed-test cleanup kills only orch.
+func fakeOpencodeSignal() int {
+	if _, err := os.Stdout.WriteString(`{"part":{"type":"text","text":"hi"}}` + "\n"); err != nil {
+		return 1
+	}
+	time.Sleep(30 * time.Second)
+	return 0
 }
 
 // opencode-exec.mjs has no post-run refresh, so orch starts none (PE-12 is claude and codex
