@@ -20,6 +20,24 @@ const claudeFixtures = "../testdata/claude/stream-json"
 // testBridges compares each `orch <bridge>-exec` with bin/<bridge>-exec.mjs, with the scripted
 // fake standing in for the CLI (see parity/fakes).
 func (h *harness) testBridges(t *testing.T) {
+	t.Run("PE-66-invalid-idle-no-writes", func(t *testing.T) {
+		for _, raw := range []string{"", "-1", "1e3", "NaN", "10081", "true"} {
+			t.Run(raw, func(t *testing.T) {
+				inv := h.bridgeInvocation(t, opencodeBridge, bridgeCase{args: []string{"--prompt", "p", "--idle-min", raw}})
+				sb := h.newSandbox(t)
+				inv.seed(t, sb)
+				o := h.run(t, sb, inv.orch, inv.stdin, inv.env)
+				if o.exitCode != 2 || o.stdout != "" || !strings.Contains(o.stderr, "--idle-min must be minutes") {
+					t.Fatalf("exit %d stdout %s stderr %s", o.exitCode, o.stdout, o.stderr)
+				}
+				for path := range o.files {
+					if strings.HasPrefix(path, "project/runs/") || path == "state/incidents.jsonl" || strings.HasPrefix(path, "fakelog/opencode-") {
+						t.Errorf("invalid option wrote %s", path)
+					}
+				}
+			})
+		}
+	})
 	h.testNestedProjectRoot(t, "bridges")
 	t.Run("PE-42-artifact-root", func(t *testing.T) {
 		for _, b := range []bridge{claudeBridge, codexBridge, opencodeBridge} {
@@ -170,9 +188,15 @@ var incidentFingerprint = regexp.MustCompile(`"fp":"[0-9a-f]{12}"`)
 // pe45Timeout is PE-45 for a run the bridge stopped at its --timeout-min cap of minutes: orch
 // files kind timeout with its own summary where the JS filed a crash summarizing errs.
 func pe45Timeout(harness, minutes, errs string) func(t *testing.T, js, orch *outcome) {
-	return rewriteException("PE-45",
-		`"kind":"timeout","summary":"`+harness+` bridge timed out after `+minutes+` min"`,
-		`"kind":"crash","summary":"`+harness+` bridge failed: `+errs+`"`)
+	return func(t *testing.T, js, orch *outcome) {
+		rewriteException("PE-67-cap-cause", `,"cause":"cap"`, "")(t, js, orch)
+		if harness == "opencode" {
+			rewriteException("PE-67-orphan-warning", `\nopencode did not exit on SIGINT within 10 s; its service session may still be running`, "")(t, js, orch)
+		}
+		rewriteException("PE-45",
+			`"kind":"timeout","summary":"`+harness+` bridge timed out after `+minutes+` min"`,
+			`"kind":"crash","summary":"`+harness+` bridge failed: `+errs+`"`)(t, js, orch)
+	}
 }
 
 // Fresh values, rewritten only in their exact place and format.

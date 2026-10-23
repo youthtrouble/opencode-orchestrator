@@ -32,6 +32,16 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
 
 ### Changes
 
+- opencode watchdog (S13s2, PE-66..68): `--idle-min` on `opencode-exec` and opencode workers,
+  over `ORCH_IDLE_MIN`, over 20 minutes; `0` disables. Stop with SIGINT only with quiet output,
+  a fresh quiet project activity ledger, no tool running and no live descendants. Unknown
+  evidence fails open. Idle stops exit 1 with `stop_cause: "idle"` and a timeout incident;
+  cap incidents now carry `cause: "cap"`. Bounded still-working and inactive lines explain
+  quiet runs. Worker redispatch preserves an explicitly supplied `idle-min`.
+  Review fixes preserve repeated forwarded signals and forward-then-cap behaviour across
+  harnesses, revalidate the ledger after probing within the shared read bound, and treat
+  Linux `/proc` ESRCH as an exited process. Accumulated stale writer files still fail open.
+
 - supervisor (S13 closure F2, PE-37): retry confirmed worker launches that never publish a
   replacement lane after 600 seconds with no lane lock holder, preserving the five-launch cap
   without counting expiry as an extra attempt; post the blocked note once at the cap.

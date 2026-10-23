@@ -143,6 +143,7 @@ type finishedRun struct {
 	// model is the incident's context.model for a result without a model key (opencode,
 	// PE-47), or nil.
 	model any
+	idle  *idleWatch
 }
 
 // report writes the run record, runs afterRecord, writes the "done" line, an incident for a
@@ -185,6 +186,9 @@ func (r finishedRun) recordFailure(result *jsjson.Object, cwd string) {
 	kind := "crash"
 	summary := harness + " bridge failed: " + jsstr.Slice(jsjson.Join(errs, "; "), 0, 160) // PE-1
 	switch {
+	case jsjson.Path(result, "stop_cause") == "idle":
+		kind = "timeout"
+		summary = "opencode bridge stopped idle after " + text(r.idle.minutes) + " min"
 	case r.timedOut:
 		kind = "timeout"
 		summary = harness + " bridge timed out after " + text(r.timeoutMinutes) + " min"
@@ -194,11 +198,24 @@ func (r finishedRun) recordFailure(result *jsjson.Object, cwd string) {
 	context := jsjson.NewObject()
 	context.Set("model", or(jsjson.Path(result, "model"), r.model))
 	context.Set("exit_code", jsjson.Path(result, "exit_code"))
+	detail := jsjson.Join(errs, "\n")
+	if jsjson.Path(result, "stop_cause") == "idle" {
+		context.Set("cause", "idle")
+		context.Set("idle_min", r.idle.minutes)
+		context.Set("last_activity_at", jsjson.ISOString(r.idle.stopped.at))
+		context.Set("ledger_writers", float64(r.idle.stopped.writers))
+		context.Set("descendants", float64(0))
+	} else if r.timedOut {
+		context.Set("cause", "cap")
+	}
+	if harness == "opencode" && kind == "timeout" && jsjson.Path(result, "exit_code") == nil {
+		detail += "\nopencode did not exit on SIGINT within 10 s; its service session may still be running"
+	}
 	recordIncident(incident.Draft{
 		Component: "bridge",
 		Kind:      kind,
 		Summary:   summary,
-		Detail:    jsjson.Join(errs, "\n"),
+		Detail:    detail,
 		Context:   context,
 		Project:   cwd,
 	})

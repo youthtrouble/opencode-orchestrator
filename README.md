@@ -221,6 +221,22 @@ hand. Background processes are kept awake with `caffeinate` (macOS) or
 `systemd-inhibit` (Linux); a closed laptop lid still sleeps unless you run in clamshell mode with
 power and an external display.
 
+**Quiet opencode runs.** `orch opencode-exec` and `orch worker start --harness opencode`
+accept `--idle-min N` (flag over `ORCH_IDLE_MIN`, default 20; decimal minutes from 0 to 10080).
+`ORCH_IDLE_MIN=0` disables the watchdog. It sends SIGINT only when stdout and stderr and a
+fresh plugin activity ledger have all been quiet for N minutes, no trusted writer reports a
+tool running, and a process probe finds no live descendants. Missing, stale or unknown evidence
+never stops the run. A stopped run exits 1, records `stop_cause: "idle"` and a `timeout` incident
+with `cause: "idle"`; a conductor is then relaunched by the supervisor's existing retry policy.
+While the main stream is quiet, project activity can produce a line at most every five minutes:
+`[opencode] still working: last session activity <s>s ago[, tool running]`.
+Other sessions' activity can keep a stalled run alive; it is never subtracted. A pure model phase
+with no events or tools longer than N remains a possible false stop; disable or increase N if needed.
+Repeated user/supervisor stop signals still reach the child and do not suppress the bridge's
+absolute cap. Ledger files are revalidated after the process probe. More than 64 accumulated
+writer files disables idle enforcement conservatively, even if some writers have died; an old
+file modification time is not proof that its activity evidence can safely be discarded.
+
 ## Use it on a project
 
 ### 1. Install once

@@ -56,6 +56,20 @@ type Launch struct {
 // must pass CheckLane. A refusal is a *UsageError; a bare --brief is the TypeError
 // path.resolve throws.
 func (p Project) PrepareStart(opts cliargs.Opts) (*Launch, error) {
+	if _, present := opts["idle-min"]; present {
+		if harness, _ := opts.Value("harness"); harness != "opencode" {
+			return nil, &UsageError{"--idle-min is only supported with --harness opencode"}
+		}
+		if _, err := cliargs.IdleMinutes(opts.JS("idle-min"), "--idle-min"); err != nil {
+			return nil, &UsageError{err.Error()}
+		}
+	} else if harness, _ := opts.Value("harness"); harness == "opencode" {
+		if raw, present := os.LookupEnv("ORCH_IDLE_MIN"); present {
+			if _, err := cliargs.IdleMinutes(raw, "ORCH_IDLE_MIN"); err != nil {
+				return nil, &UsageError{err.Error()}
+			}
+		}
+	}
 	if opts.IsFlag("brief") {
 		return nil, errBriefArgBoolean
 	}
@@ -239,7 +253,7 @@ func (l *Launch) initialState(rt Runtime) *jsjson.Object {
 
 // replayedOptions are the bridge options a redispatch passes again (PE-62). force, run-id,
 // log-path and detach belong to one run and are never replayed.
-var replayedOptions = []string{"effort", "timeout-min", "agent", "sandbox", "permission-mode", "allowed-tools", "max-turns"}
+var replayedOptions = []string{"effort", "timeout-min", "agent", "sandbox", "permission-mode", "allowed-tools", "max-turns", "idle-min"}
 
 // launchOptions is what a redispatch must pass again to start this lane the same way: each
 // given replayedOptions value, then, for a lane whose child cwd is not its project root,
@@ -306,6 +320,9 @@ func (l *Launch) bridgeArgs() []string {
 	args := []string{l.harness + "-exec", "--cwd", cwd, "--timeout-min", jsjson.TemplateString(o.Or("timeout-min", "120"))}
 	if cwd != l.project.Root {
 		args = append(args, "--artifact-root", l.project.Root)
+	}
+	if _, present := o["idle-min"]; present {
+		args = append(args, "--idle-min", text("idle-min"))
 	}
 	for _, key := range []string{"model", "effort", "resume"} {
 		if o.Truthy(key) {

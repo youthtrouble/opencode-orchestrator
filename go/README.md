@@ -1664,6 +1664,43 @@ The other documented differences, each asserted by its own parity case:
   SIGINT (`orch worker stop`) interrupted it at once, 3 times out of 3. claude-exec and
   codex-exec keep SIGTERM. Not visible in parity (the fake dies of either);
   `TestBridgeStopSignals` traps INT and TERM separately.
+- PE-66 (S13s2): `opencode-exec --idle-min N` overrides `ORCH_IDLE_MIN`, then default 20.
+  Only decimal strings from 0 to 10080 are accepted; 0 disables all watcher reads and probes.
+  Invalid values exit 2 before budget gating, spawn or writes. Parity pins invalid values in
+  `bridges/PE-66-invalid-idle-no-writes`; native tests cover precedence and disabled side effects.
+- PE-67 (S13s2): the idle watchdog checks every min(60 seconds, N/4). It stops only after N
+  minutes without a stdout line or stderr byte, with trusted quiet project activity and no
+  tool running, and a known empty live-descendant probe. A ledger writer must have refreshed
+  `alive_at` within 180 seconds and have non-null activity. Reads are bounded to the newest
+  64 regular JSON files of at most 64 KiB each; overflow or unreadable files fail open.
+  Tool evidence is boolean across writers, never summed. Linux reads `/proc`; macOS runs
+  absolute `/bin/ps` with a five-second deadline and 4 MiB cap. Other platforms wait.
+  Missing ledger or probe evidence logs one inactive line after N. When output is quiet for
+  five minutes and project activity advances, a still-working line appears at most once per
+  five minutes, optionally saying `tool running`, without changing the worker's last tool.
+  The stop verdict and ledger are rechecked under the output lock after the process probe.
+  Both snapshots share at most 64 file opens/reads: unchanged atomic records are reused while
+  their descriptors remain open (preventing inode reuse); replacements require a new read.
+  Exhaustion fails open. First bridge stop cause wins and only one bridge-originated stop
+  signal is sent. Explicit user/supervisor signals are still forwarded, including repeated
+  signals and signals after a cap; they neither claim a bridge cause nor suppress its cap.
+  Idle results append `stop_cause: "idle"`, `idle_min` after `errors`,
+  append an explanatory error and exit 1, even if the child exits 0. The incident is `timeout`
+  with `cause`, `idle_min`, `last_activity_at`, `ledger_writers` and `descendants: 0`. A null
+  exit code adds a possible service-orphan warning; cap incidents gain `cause: "cap"`.
+  Native fake-clock tests cover the idle result, 195-second quiet-tool regression, advancing
+  activity, unknown evidence, output/close races, SIGINT and ignored-INT escalation.
+  Foreign project/session activity is conservative only; no subtraction is attempted.
+  Residual risk T4: a pure model phase longer than N without events or a tool can be stopped.
+  `ORCH_IDLE_MIN=0` disables enforcement; the absolute cap remains the backstop.
+  Limitation: more than 64 accumulated ledger files, even stale ones, makes evidence unknown.
+  Abruptly killed instances need not remove their files. Mtime alone cannot prove inactivity,
+  so no old-looking writer is discarded to bypass the bound. Identity-safe bounded ledger
+  cleanup needs a separate follow-up; the reader never signals writers or deletes their files.
+- PE-68 (S13s2): worker `--idle-min` is opencode-only, validated before any worker writes,
+  passed to the bridge only when supplied and saved in `launch_options` for redispatch.
+  Default bridge argv is unchanged. Parity pins `worker/start/opencode/PE-68/idle-disabled`
+  and the amended worker usage line; native tests cover harness rejection and replay.
 
 - PE-53: a successful worker state publish removes `last_state_write_error`, including from
   the recovery write on disk. A failed retry records its current error. The existing
