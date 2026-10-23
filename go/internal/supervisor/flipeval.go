@@ -174,7 +174,7 @@ func (s *Supervisor) launchNeverStarted(state *jsjson.Object, t *tick, c conduct
 func (s *Supervisor) launchPending(state *jsjson.Object, t *tick, c conductorView) error {
 	pending := jsjson.Path(c.flip, "pending_launch")
 	key := pendingRunKey(pending)
-	if !redispatchEligible(state, key, nil, t.now) {
+	if !recordEligible(state, key, t.now) {
 		return nil
 	}
 	// The log shows pl.from as it is (undefined included); the argument is pl.from || activeDoor.
@@ -222,9 +222,10 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	}
 	status := jsjson.Path(c.lane, "status")
 	key := conductorRunKey(c.lane)
-	eligible := redispatchEligible(state, key, c.lane, t.now)
-	finishedEarly := jsjson.Truthy(c.lane) && status == "finished" && !handedOff && eligible
-	laneNeedsRestart := jsjson.Truthy(c.lane) && (isOneOf(status, "failed", "deferred", "interrupted") || finishedEarly) && eligible
+	// A legacy stamp marks only the restart as done; the attempt record gates every relaunch.
+	restartDone := legacyRedispatched(c.lane)
+	finishedEarly := jsjson.Truthy(c.lane) && status == "finished" && !handedOff && !restartDone
+	laneNeedsRestart := jsjson.Truthy(c.lane) && (isOneOf(status, "failed", "deferred", "interrupted") || finishedEarly) && !restartDone
 
 	action := jsjson.Path(decision, "action")
 	var target any
@@ -237,7 +238,7 @@ func (s *Supervisor) decideAndRelaunch(state *jsjson.Object, t *tick, c conducto
 	case action == "stay" && (paused || laneNeedsRestart):
 		target, targetIsActive = c.activeDoor, true
 	}
-	if !eligible || !jsjson.Truthy(target) || !elapsed(t.now, jsjson.Path(state, "last_relaunch_at"), relaunchCooldown) {
+	if !recordEligible(state, key, t.now) || !jsjson.Truthy(target) || !elapsed(t.now, jsjson.Path(state, "last_relaunch_at"), relaunchCooldown) {
 		return nil
 	}
 

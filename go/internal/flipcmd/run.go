@@ -41,6 +41,7 @@ const pendingNote = "lane locked by the current conductor; supervisor will launc
 // supervisor: flip.json gains pending_launch, which keeps the kickoff's brief for the
 // supervisor's retry, and the answer is pending, exit 0. Otherwise
 // the answer carries the launcher's output and the exit is 0 when the launcher exited 0, else 1.
+// A launch whose last stdout line is a detach answer also carries its run_id and runner_pid.
 // Errors include ErrToRequired, StateError, and transaction/filesystem failures; the exit
 // code is then unused. The transaction is released before posting or launching.
 func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, error) {
@@ -111,10 +112,29 @@ func (p Project) Run(opts cliargs.Opts, launch Launcher) (*jsjson.Object, int, e
 	answer.Set("to", to)
 	answer.Set("from", from)
 	answer.Set("launcher", jsstr.Slice(out, 0, launcherUnits))
-	if launched {
-		return answer, 0, nil
+	if !launched {
+		return answer, 1, nil
 	}
-	return answer, 1, nil
+	// PE-63: the supervisor confirms a launch from these fields, never from the cut quote.
+	if detach, ok := launchedRun(stdout); ok {
+		answer.Set("run_id", jsjson.Path(detach, "run_id"))
+		answer.Set("runner_pid", jsjson.Path(detach, "runner_pid"))
+	}
+	return answer, 0, nil
+}
+
+// launchedRun is the launcher's last stdout line when it is a detach answer: an object with a
+// string run_id and a numeric runner_pid.
+func launchedRun(stdout string) (*jsjson.Object, bool) {
+	lines := strings.Split(strings.Trim(stdout, jsstr.WhiteSpace), "\n")
+	value, err := jsjson.Unmarshal([]byte(strings.Trim(lines[len(lines)-1], jsstr.WhiteSpace)))
+	if err != nil {
+		return nil, false
+	}
+	detach, isObject := value.(*jsjson.Object)
+	_, hasRun := jsjson.Path(detach, "run_id").(string)
+	_, hasPID := jsjson.Path(detach, "runner_pid").(float64)
+	return detach, isObject && hasRun && hasPID
 }
 
 // savedBrief is the brief a kickoff saved: the one its pause names (`flip pause --brief`),

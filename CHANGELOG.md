@@ -31,6 +31,12 @@ pre-S12 JS at immutable commit `9e3a456` (`go/parity/js-ref`), not the last rele
   deferred pending answers do not count as attempts; existing conductor cooldowns remain.
 - supervisor (S13e, L21, PE-38): failed redispatch/blocked-note posts log one diagnostic and
   continue; attempt records survive diagnostic errors for the next successful state write.
+- supervisor/flip (S13r, PE-63, PE-64): `flip run`'s launch answer carries top-level `run_id`
+  and `runner_pid`, which the supervisor now reads instead of the 400-unit `launcher` quote, so a
+  long project root no longer turns a real conductor launch into a failed attempt. A legacy
+  `redispatched_at` blocks only restarts and lane redispatch again, not a decided flip, hand-back
+  or paused relaunch. A failed lane redispatch posts `<lane> re-dispatch failed (attempt <n> of 5)`
+  instead of the success subject.
 
 - flip (S13d, sol-5 R4, PE-32): serialize all flip state writers on the separate
   `flip.json.lock`. Corrupt or unreadable state gates decisions, blocks supervisor relaunch,

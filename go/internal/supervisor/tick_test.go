@@ -343,7 +343,7 @@ func TestRedispatchOfADeferredLane(t *testing.T) {
 	t.Run("one minute after resume_after: launch, then supervisor record, then the note", func(t *testing.T) {
 		f := newFixture(t)
 		f.worker("b1", deferred)
-		f.runResult = SyncResult{Stdout: "  launched\n"}
+		f.runResult = SyncResult{Status: status(0), Stdout: "  " + laneLaunched + "\n"}
 		state := f.mustTick(`{}`)
 		if len(f.runs) != 1 {
 			t.Fatalf("runs = %+v", f.runs)
@@ -357,7 +357,7 @@ func TestRedispatchOfADeferredLane(t *testing.T) {
 			t.Errorf("worker = %s\nwant %s", got, wantWorker)
 		}
 		messages := f.messages()
-		if len(messages) != 1 || !strings.Contains(messages[0], `"kind":"note","subject":"b1 re-dispatched after budget reset","body":"launched","refs":[],"thread":null}`) {
+		if len(messages) != 1 || !strings.Contains(messages[0], `"kind":"note","subject":"b1 re-dispatched after budget reset","body":"{\"run_id\":\"replacement\",\"runner_pid\":123}","refs":[],"thread":null}`) {
 			t.Errorf("mailbox = %q", messages)
 		}
 		if jsjson.Path(state, "events").(*jsjson.Object).Len() != 0 || jsjson.Path(state, "lanes", "b1", "phase") != "deferred" {

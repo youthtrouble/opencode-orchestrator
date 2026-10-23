@@ -39,7 +39,7 @@ func (s *Supervisor) redispatchDue(obs supervise.Observation, config any, worker
 	if !parsed || resumeMs+redispatchGraceMs > s.Now().UnixMilli() {
 		return false, nil
 	}
-	return redispatchEligible(state, jsjson.TemplateString(runValue(worker, obs)), worker, t.now), nil
+	return !legacyRedispatched(worker) && recordEligible(state, jsjson.TemplateString(runValue(worker, obs)), t.now), nil
 }
 
 // redispatch runs the launcher before recording its outcome in supervisor state. The
@@ -50,30 +50,38 @@ func (s *Supervisor) redispatch(lane string, worker *jsjson.Object, key string, 
 		return err
 	}
 	result := s.RunSync(SyncSpec{Name: s.Self, Args: args, Dir: s.Root})
-	stopped := recordRedispatch(state, key, t, launcherRunID(result))
+	runID := launcherRunID(result)
+	stopped := recordRedispatch(state, key, t, runID)
 	if stopped {
 		recipient := "coordinator"
 		if lane == "conductor" {
 			recipient = "human"
 		}
 		s.noteRelaunchStopped(t, lane, recipient, result, args)
-	} else {
-		s.postRedispatchNote(t, mailbox.Draft{
-			From: "supervisor", To: "coordinator", Kind: "note",
-			Subject: lane + " re-dispatched after budget reset", Body: outputText(result, noteBodyUnits),
-		})
+		return nil
 	}
+	subject := lane + " re-dispatched after budget reset"
+	if runID == nil {
+		subject = fmt.Sprintf("%s re-dispatch failed (attempt %v of %d)", lane, jsjson.Path(state, "redispatch", key, "attempts"), maxRedispatchAttempts)
+	}
+	s.postRedispatchNote(t, mailbox.Draft{
+		From: "supervisor", To: "coordinator", Kind: "note",
+		Subject: subject, Body: outputText(result, noteBodyUnits),
+	})
 	return nil
 }
 
 const maxRedispatchAttempts = 5
 
-// redispatchEligible is shared by deferred lanes, decided conductor relaunches and
-// pending launches. Legacy stamps are read-only compatibility with older supervisors.
-func redispatchEligible(state *jsjson.Object, key string, worker any, now int64) bool {
-	if jsjson.Truthy(jsjson.Path(worker, "redispatched_at")) {
-		return false
-	}
+// legacyRedispatched reads the stamp older supervisors wrote into a lane file. It means the
+// lane's restart or redispatch is done, so it gates only those (read-only compatibility).
+func legacyRedispatched(worker any) bool {
+	return jsjson.Truthy(jsjson.Path(worker, "redispatched_at"))
+}
+
+// recordEligible is the attempt-record gate shared by deferred lanes, decided conductor
+// relaunches and pending launches: not confirmed, under the attempt cap and past backoff.
+func recordEligible(state *jsjson.Object, key string, now int64) bool {
 	record := jsjson.Path(state, "redispatch", key)
 	if jsjson.Path(record, "confirmed_run_id") != nil {
 		return false
@@ -129,8 +137,9 @@ func launchedRunID(value any) any {
 	return runID
 }
 
-// flipLaunchOutcome separates a refused/deferred run from a launch attempt. The
-// nested launcher is a JSON string, not an object, in flip run's output contract.
+// flipLaunchOutcome separates a refused/deferred run from a launch attempt. A launch is
+// confirmed by the answer's own run_id and runner_pid (PE-63); its launcher quote is display
+// text cut at 400 units and is not read.
 func flipLaunchOutcome(result SyncResult) (runID any, attempted bool) {
 	answer := lastJSONLine(result.Stdout)
 	if jsjson.Path(answer, "flipped") == false &&
@@ -140,15 +149,7 @@ func flipLaunchOutcome(result SyncResult) (runID any, attempted bool) {
 	if result.Status == nil || *result.Status != 0 || result.Err != nil || jsjson.Path(answer, "flipped") != true {
 		return nil, true
 	}
-	launcher, ok := jsjson.Path(answer, "launcher").(string)
-	if !ok {
-		return nil, true
-	}
-	parsed, err := jsjson.Unmarshal([]byte(launcher))
-	if err != nil {
-		return nil, true
-	}
-	return launchedRunID(parsed), true
+	return launchedRunID(answer), true
 }
 
 const conductorNoneKey = "conductor:none"

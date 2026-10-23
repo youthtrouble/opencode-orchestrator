@@ -358,7 +358,10 @@ once a minute evaluates the conductor:
 Relaunch bookkeeping belongs to `.orchestrator/supervisor-state.json`, in `redispatch` keyed
 by the old lane's run id (or `<pid>:<lane>`) or `pending:<at>`. The supervisor never rewrites a
 worker's lane file. A launch confirms only after exit 0 and JSON containing a run id and runner
-pid (inside `launcher` for a flip); a legacy `redispatched_at` still means done. Failed attempts
+pid (for a flip, the `run_id` and `runner_pid` fields of `orch flip run`'s answer, not its cut
+`launcher` quote); a legacy `redispatched_at` still means the lane's restart or redispatch is done,
+but never blocks a decided flip, hand-back or paused-project relaunch. A failed lane redispatch
+note says `re-dispatch failed (attempt <n> of 5)`. Failed attempts
 retry after 60, 120, 240 and 480 seconds, with a 30-minute backoff ceiling. After five failures
 for a key, retries stop and one `blocked` note includes the last output and a manual retry
 command. Conductor and pending-launch notes go to `human`; worker-lane notes go to

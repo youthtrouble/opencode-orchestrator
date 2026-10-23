@@ -272,6 +272,7 @@ func (h *harness) testFlipLaunches(t *testing.T) {
 					t.Errorf("%s: exit %d, stdout %q, stderr %q; want a launch", side, o.exitCode, o.stdout, o.stderr)
 				}
 			}
+			pinLaunchedRun(t, js, &orch)
 			compareOutcomes(t, js, orch)
 		})
 	}
@@ -309,6 +310,7 @@ func (h *harness) testFlipLaunchesASavedBrief(t *testing.T, state seed, prompt s
 			t.Errorf("%s: exit %d, stdout %q, argv %q, continue brief %v; want the conductor launched on %q (continue brief %v)", side, o.exitCode, o.stdout, o.files["fakelog/claude-argv.txt"], wrote, prompt, continued)
 		}
 	}
+	pinLaunchedRun(t, js, &orch)
 	compareOutcomes(t, js, orch)
 }
 
@@ -355,6 +357,26 @@ func flipLauncherLine(t *testing.T, stdout string) string {
 		t.Errorf("the launcher's line may have been cut: %q", answer.Launcher)
 	}
 	return answer.Launcher // a cut line fails to parse, which fails the case
+}
+
+// launchedRunFields is how a launch answer ends since PE-63, after the normalizers have
+// masked the run id and the pid.
+const launchedRunFields = `,"run_id":"<run-id>","runner_pid":<pid>}` + "\n"
+
+// pinLaunchedRun asserts PE-63 for a successful launch: orch's answer copies the detach
+// line's run_id and runner_pid after launcher, the frozen JS answer (old behaviour) has
+// neither. It then drops them from orch's answer so the rest is compared.
+func pinLaunchedRun(t *testing.T, js outcome, orch *outcome) {
+	t.Helper()
+	detach := `\"run_id\":\"<run-id>\"`
+	if !strings.HasSuffix(orch.stdout, launchedRunFields) || !strings.Contains(orch.stdout, detach) || !strings.Contains(orch.stdout, `\"runner_pid\":<pid>`) {
+		t.Errorf("orch: answer %q, want the launcher's run_id and runner_pid after launcher (PE-63)", orch.stdout)
+		return
+	}
+	if strings.Contains(js.stdout, launchedRunFields) {
+		t.Errorf("js: answer %q already carries the PE-63 fields", js.stdout)
+	}
+	orch.stdout = strings.TrimSuffix(orch.stdout, launchedRunFields) + "}\n"
 }
 
 // testFlipLauncherCrash asserts PE-2 (extended) in run's answer when the launcher dies before

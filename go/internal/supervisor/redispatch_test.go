@@ -1,7 +1,9 @@
 package supervisor
 
 import (
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -9,7 +11,7 @@ import (
 )
 
 const laneLaunched = `{"run_id":"replacement","runner_pid":123}`
-const conductorLaunched = `{"flipped":true,"launcher":"{\"run_id\":\"replacement\",\"runner_pid\":123}"}`
+const conductorLaunched = `{"flipped":true,"launcher":"{\"run_id\":\"replacement\",\"runner_pid\":123}","run_id":"replacement","runner_pid":123}`
 
 func deferredFixture(t *testing.T) *fixture {
 	f := newFixture(t)
@@ -317,28 +319,6 @@ func TestRedispatchPendingSuccessConfirmsAndPrunesOnlyObsoleteKeys(t *testing.T)
 	}
 }
 
-func TestRedispatchConductorRequiresTheNestedLauncherContract(t *testing.T) {
-	for _, out := range []SyncResult{
-		{Status: status(0), Stdout: `{"flipped":true,"launcher":"{\"run_id\":\"r\"}"}`},
-		{Status: status(0), Stdout: `{"flipped":true,"launcher":{"run_id":"r","runner_pid":123}}`},
-		{Status: status(0), Stdout: `{"flipped":true,"launcher":"bad json"}`},
-		{Status: status(1), Stdout: conductorLaunched},
-		{Status: status(0), Stdout: `{"flipped":false}`},
-	} {
-		f := relaunchFixture(t, deadConductor, `{}`, `{"action":"stay"}`)
-		f.respond = func(spec SyncSpec) SyncResult {
-			if spec.Args[1] == "decide" {
-				return SyncResult{Status: status(0), Stdout: `{"action":"stay"}`}
-			}
-			return out
-		}
-		state := f.mustEvaluate(`{}`)
-		if jsjson.Path(state, "redispatch", "9:conductor", "attempts") != float64(1) || jsjson.Path(state, "redispatch", "9:conductor", "confirmed_run_id") != nil {
-			t.Fatalf("accepted %+v: %s", out, compact(t, state))
-		}
-	}
-}
-
 func TestRedispatchAbsentConductorStopsAfterFiveFailures(t *testing.T) {
 	for _, decision := range []string{`{"action":"stay"}`, `{"action":"flip","to":"claude"}`} {
 		t.Run(decision, func(t *testing.T) {
@@ -405,5 +385,115 @@ func TestRedispatchPrimitiveConductorRetainsSlotKey(t *testing.T) {
 		if jsjson.Path(state, "redispatch", "conductor:none", "attempts") != float64(attempt) || f.read("workers/conductor.json") != "5" {
 			t.Fatalf("primitive slot lost or rewritten: %s", compact(t, state))
 		}
+	}
+}
+
+// E-L1: a legacy redispatched_at means only "restart done". It never blocks a decided
+// flip or a pause-resume relaunch.
+func TestRedispatchLegacyStampBlocksOnlyRestarts(t *testing.T) {
+	stamped := func(status string) string {
+		return strings.Replace(strings.Replace(deadConductor, `"finished"`, `"`+status+`"`, 1), `}`, `, "redispatched_at": "x"}`, 1)
+	}
+	for _, c := range []struct {
+		name, lane, flip, decision string
+		wantArgs                   []string // the launch's --to and --from; nil when nothing launches
+	}{
+		{"flip to the other door", stamped("finished"), `{}`, `{"action":"flip","to":"claude"}`, []string{"--to", "claude", "--from", "opencode"}},
+		{"paused stay", stamped("finished"), `{"paused":true}`, `{"action":"stay"}`, []string{"--to", "opencode", "--from", "opencode"}},
+		{"failed stay", stamped("failed"), `{}`, `{"action":"stay"}`, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := relaunchFixture(t, c.lane, c.flip, c.decision)
+			f.mustEvaluate(`{}`)
+			launches := f.launches()
+			if c.wantArgs == nil {
+				if len(launches) != 0 {
+					t.Fatalf("launched %+v", launches)
+				}
+				return
+			}
+			if len(launches) != 1 || !reflect.DeepEqual(launches[0].Args[3:7], c.wantArgs) {
+				t.Fatalf("launches %+v, want one with %q", launches, c.wantArgs)
+			}
+		})
+	}
+	t.Run("deferred lane", func(t *testing.T) {
+		f := newFixture(t)
+		f.mkdir("logs")
+		f.worker("b1", `"status":"deferred","brief":"b.md","harness":"claude","resume_after":"`+iso(-60)+`","redispatched_at":"x"`)
+		f.mustTick(`{}`)
+		if len(f.runs) != 0 {
+			t.Fatalf("redispatched a stamped lane: %+v", f.runs)
+		}
+	})
+}
+
+// E-L2: the supervisor reads run_id and runner_pid from the answer's top level, so a
+// launcher quote cut at 400 units still confirms the launch.
+func TestRedispatchConductorReadsTopLevelLaunchFields(t *testing.T) {
+	cut := `{"flipped":true,"to":"claude","from":"opencode","launcher":"{\"run_id\":\"replacement\",\"lane\":\"conductor\",\"cwd\":\"/very/lo","run_id":"replacement","runner_pid":123}`
+	for _, c := range []struct {
+		name, stdout string
+		want         any
+		exit         int
+	}{
+		{"cut launcher, top-level fields", cut, "replacement", 0},
+		{"exit 1", cut, nil, 1},
+		{"nested launcher only", `{"flipped":true,"launcher":"{\"run_id\":\"r\",\"runner_pid\":123}"}`, nil, 0},
+		{"no runner_pid", `{"flipped":true,"launcher":"x","run_id":"r"}`, nil, 0},
+		{"string runner_pid", `{"flipped":true,"launcher":"x","run_id":"r","runner_pid":"123"}`, nil, 0},
+		{"numeric run_id", `{"flipped":true,"launcher":"x","run_id":1,"runner_pid":123}`, nil, 0},
+		{"not flipped", `{"flipped":false,"launcher":"x","run_id":"r","runner_pid":123}`, nil, 0},
+	} {
+		for _, path := range []string{"decided", "pending"} {
+			t.Run(c.name+"/"+path, func(t *testing.T) {
+				f := relaunchFixture(t, deadConductor, `{}`, `{"action":"stay"}`)
+				key := "9:conductor"
+				if path == "pending" {
+					f.write("flip.json", `{"pending_launch":{"at":"a","to":"claude"}}`)
+					key = "pending:a"
+				}
+				f.respond = func(spec SyncSpec) SyncResult {
+					if spec.Args[1] == "decide" {
+						return SyncResult{Status: status(0), Stdout: `{"action":"stay"}`}
+					}
+					return SyncResult{Status: status(c.exit), Stdout: c.stdout}
+				}
+				state := f.mustEvaluate(`{}`)
+				if got := jsjson.Path(state, "redispatch", key, "confirmed_run_id"); got != c.want || jsjson.Path(state, "redispatch", key, "attempts") != float64(1) {
+					t.Fatalf("record %s, want confirmed_run_id %v", compact(t, state), c.want)
+				}
+			})
+		}
+	}
+}
+
+// E-N1: a failed lane attempt is not announced as a re-dispatch; the fifth failure posts
+// only the blocked note.
+func TestRedispatchLaneNoteSubjects(t *testing.T) {
+	f := deferredFixture(t)
+	f.runResult = SyncResult{Status: status(1), Stderr: "failed"}
+	state := `{}`
+	for i, at := range []float64{0, 60, 180, 420, 900} {
+		f.at(at)
+		state = compact(t, f.mustTick(state))
+		msgs := f.messages()
+		if i < 4 {
+			want := fmt.Sprintf(`"kind":"note","subject":"b1 re-dispatch failed (attempt %d of 5)","body":"failed"`, i+1)
+			if len(msgs) != i+1 || !strings.Contains(msgs[i], want) {
+				t.Fatalf("attempt %d notes %v, want %s", i+1, msgs, want)
+			}
+			continue
+		}
+		if len(msgs) != 5 || !strings.Contains(msgs[4], `"kind":"blocked","subject":"b1 relaunch stopped after 5 failed attempts"`) {
+			t.Fatalf("fifth failure notes %v", msgs)
+		}
+	}
+
+	f = deferredFixture(t)
+	f.runResult = SyncResult{Status: status(0), Stdout: laneLaunched}
+	f.mustTick(`{}`)
+	if msgs := f.messages(); len(msgs) != 1 || !strings.Contains(msgs[0], `"kind":"note","subject":"b1 re-dispatched after budget reset"`) {
+		t.Fatalf("success notes %v", msgs)
 	}
 }
