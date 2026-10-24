@@ -201,6 +201,14 @@ dead code, no duplicated sources of truth, no silent catch. Errors are typed and
 Tests protect behaviour, not implementation. Formatting is the project's formatter, always run.
 Comments explain constraints and trade-offs, not syntax. Commits are small and scoped to one slice.
 
+## Design-led delivery (owner's default for any product with a UI)
+For product and UI work, follow the `design-led-delivery` skill (`claude/skills/design-led-delivery/SKILL.md`):
+research in parallel; a product-manager brief and a product-designer direction before building; bounded
+builder slices with explicit file ownership and a freeze; one integration branch and one shared real build;
+scored design reviews (0-100, hard fails, frame-by-frame motion) on rendered screens; fast fix rounds onto the
+owner's device; aim above the last score each round (pass ≥90, truth 5/5). The global `product-designer` and
+`product-manager` agents own those roles in every project.
+
 ## Taste bar for every UI
 
 0. Aim for a novel, ownable idea that only this product could have; equal the best apps in the category (Flighty, Things 3, Transit), not "inspired by" them.
