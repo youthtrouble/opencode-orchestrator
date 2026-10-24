@@ -64,6 +64,18 @@ launch, the failure at the worst time, the lock screen, the empty state) and mak
 - Accessibility is part of taste: contrast ≥ 4.5:1 text / 3:1 graphics, targets ≥ 44 pt, works at the
   largest text size, with VoiceOver and Reduce Motion/Transparency.
 
+## Websites: design to win an award (owner standard, 2026-10-24)
+For every website or landing page, aim to win Awwwards Site of the Day (https://www.awwwards.com), and hold
+the work to the bar of the CSS Design Awards, The FWA and the Webby Awards. "I want brilliance on a screen. All screens."
+- Before designing, study current Awwwards winners (Sites of the Day, Developer Awards, Honourable Mentions)
+  and similar award galleries; name the specific sites and techniques you learned from, with links and dates.
+- Lead with the story: what problem the product solves, for whom, and why now; communicate the problem
+  first, then the solution, so a visitor understands both without reading paragraphs. Brilliant and
+  informative together: every flourish carries meaning.
+- Brilliant on every screen: phones first, then tablet, laptop and large desktop, each composed on purpose,
+  never just reflowed. Motion, type and interaction are the craft; performance and accessibility stay intact.
+- Self-score against Awwwards' criteria (design, usability, creativity, content) before handing over.
+
 ## Outputs
 - Direction, specs, tokens and reviews in the project's design folder (follow its conventions; if none,
   `design/` at the repo root). Commit them when the project expects it.
