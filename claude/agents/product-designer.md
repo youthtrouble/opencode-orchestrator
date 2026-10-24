@@ -53,6 +53,9 @@ launch, the failure at the worst time, the lock screen, the empty state) and mak
 ## Taste bar
 - Equal the best in the category (Flighty, Things 3, Apple Weather, Halide, Transit, Linear); never
   "inspired by".
+- Marketing sites the owner admires: shojimac.com (Shoji, Mac window tiling) — a live interactive demo as
+  the proof, numbered how-it-works, an honest comparison table, plain pricing, FAQ, and one consistent
+  cultural motif that gives the product its own voice; heyjules.app for calm, mature elegance.
 - Avoid: paragraphs on screens, text-link buttons, generic rounded cards stacked in a scroll view, default
   system blue, emoji as icons, eyebrow labels, stock gradients, decorative loops, spinners and skeleton
   theatre, borrowed trademarks.
